@@ -116,6 +116,7 @@ type QQClient struct {
 	OfflineFileEvent                  EventHandle[*OfflineFileEvent]
 	GroupDisbandEvent                 EventHandle[*GroupDisbandEvent]
 	DeleteFriendEvent                 EventHandle[*DeleteFriendEvent]
+	GroupUploadNotifyEvent            EventHandle[*GroupUploadNotifyEvent]
 
 	// message state
 	msgSvcCache            *utils.Cache[unit]
@@ -612,6 +613,7 @@ type WebSocketMessage struct {
 	Title          string       `json:"title"`
 	Times          int32        `json:"times"`
 	Echo           string       `json:"echo,omitempty"`
+	File           GroupFile    `json:"file"`
 }
 
 func (d *DynamicInt64) UnmarshalJSON(b []byte) error {
@@ -1155,6 +1157,86 @@ func (c *QQClient) handleMetaEvent(wsmsg WebSocketMessage) {
 	}
 }
 
+func (c *QQClient) handleGroupEssence(wsmsg WebSocketMessage) (bool, error) {
+	if wsmsg.SubType == "add" {
+		//c.GroupEssenceMsgAddEvent.dispatch(c, &GroupEssenceMsgAddEvent{
+		//	GroupCode: wsmsg.GroupID.ToInt64(),
+		//	Sender:    wsmsg.UserID.ToInt64(),
+		//	MessageId: int32(wsmsg.MessageID),
+		//})
+	} else if wsmsg.SubType == "delete" {
+		//c.GroupEssenceMsgDelEvent.dispatch()
+	}
+	return false, nil
+}
+
+func (c *QQClient) handleGroupUploadNotice(wsmsg WebSocketMessage) (bool, error) {
+	file := GroupFile{
+		GroupCode: wsmsg.GroupID.ToInt64(),
+		FileId:    wsmsg.File.AltFildId,
+		FileName:  wsmsg.File.AltFileName,
+		FileSize:  wsmsg.File.AltFileSize,
+		BusId:     wsmsg.File.BusId,
+	}
+	if file.FileId != "" {
+		file.FileUrl = c.GetFileUrl(file.GroupCode, file.FileId)
+	}
+	c.GroupUploadNotifyEvent.dispatch(c, &GroupUploadNotifyEvent{
+		GroupCode: wsmsg.GroupID.ToInt64(),
+		Sender:    wsmsg.UserID.ToInt64(),
+		File:      file,
+	})
+	return false, nil
+}
+
+func (c *QQClient) GetMsg(msgId int32) (interface{}, error) {
+	var resp WebSocketMessage
+	data, err := c.SendApi("get_msg", map[string]any{"message_id": msgId})
+	if err != nil {
+		return nil, err
+	}
+	t, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(t, &resp); err != nil {
+		return nil, err
+	}
+	if resp.MessageType == "group" {
+		wMsg := c.createGroupMessage(resp)
+		gMsg := c.ChatMsgHandler(resp, wMsg).(*message.GroupMessage)
+		return gMsg, nil
+	} else {
+		wMsg := c.createPrivateMessage(resp)
+		pMsg := c.ChatMsgHandler(resp, wMsg).(*message.PrivateMessage)
+		return pMsg, nil
+	}
+}
+
+func (c *QQClient) GetFileUrl(groupCode int64, fileId string) string {
+	data, err := c.SendApi("get_group_file_url", map[string]any{
+		"group_id": groupCode,
+		"file_id":  fileId,
+	})
+	if err != nil {
+		logger.Errorf("获取群文件链接失败: %v", err)
+		return ""
+	}
+	t, err := json.Marshal(data)
+	if err != nil {
+		logger.Errorf("解析群文件链接失败: %v", err)
+	}
+	type Resp struct {
+		Url string `json:"url"`
+	}
+	var resp Resp
+	err = json.Unmarshal(t, &resp)
+	if err != nil {
+		logger.Errorf("解析群文件链接失败: %v", err)
+	}
+	return resp.Url
+}
+
 func (c *QQClient) handleNoticeEvent(wsmsg WebSocketMessage) {
 	wsNoticeHeaders := map[string]func(wsmsg WebSocketMessage) (bool, error){
 		"group_admin":    c.handleGroupAdminNotice,
@@ -1165,6 +1247,8 @@ func (c *QQClient) handleNoticeEvent(wsmsg WebSocketMessage) {
 		"group_ban":      c.handleGroupBanNotice,
 		"notify":         c.handleNotifyNotice,
 		"group_recall":   c.handleGroupRecallNotice,
+		"essence":        c.handleGroupEssence,
+		"group_upload":   c.handleGroupUploadNotice,
 	}
 	needSync := false
 	var err error
@@ -1191,13 +1275,21 @@ func (c *QQClient) handleMessage(wsmsg WebSocketMessage) {
 	switch wsmsg.MessageType {
 	case "group":
 		wsMsg := c.createGroupMessage(wsmsg)
-		c.ChatMsgHandler(wsmsg, wsMsg)
+		gMsg := c.ChatMsgHandler(wsmsg, wsMsg).(*message.GroupMessage)
+		c.waitDataAndDispatch(gMsg)
 	case "private":
 		wsMsg := c.createPrivateMessage(wsmsg)
 		if wsmsg.PostType == "message_sent" {
 			wsMsg.Target = int64(wsmsg.TargetID)
 		}
-		c.ChatMsgHandler(wsmsg, wsMsg)
+		pMsg := c.ChatMsgHandler(wsmsg, wsMsg).(*message.PrivateMessage)
+		selfIDStr := strconv.FormatInt(int64(wsmsg.SelfID), 10)
+		if selfIDStr == strconv.FormatInt(int64(wsmsg.Sender.UserID), 10) {
+			c.SelfPrivateMessageEvent.dispatch(c, pMsg)
+		} else {
+			c.PrivateMessageEvent.dispatch(c, pMsg)
+		}
+		c.OutputReceivingMessage(pMsg)
 	default:
 		switch wsmsg.PostType {
 		case "meta_event":
@@ -1367,6 +1459,7 @@ func parseImageElement(contentMap map[string]interface{}, elements *[]message.IM
 			if isGroupMsg {
 				element := &message.GroupImageElement{
 					Size: int32(size),
+					Name: image["file"].(string),
 					Url:  image["url"].(string),
 				}
 				*elements = append(*elements, element)
@@ -1533,7 +1626,7 @@ func parseFileElement(contentMap map[string]interface{}, elements *[]message.IMe
 			*elements = append(*elements, &message.GroupFileElement{
 				Name: file["file"].(string),
 				Size: fileSize,
-				Path: file["file_id"].(string),
+				Id:   file["file_id"].(string),
 			})
 		} else {
 			*elements = append(*elements, &message.FriendFileElement{
@@ -1628,7 +1721,7 @@ func handleMixMsg(contentArray []interface{}, miraiMsg any, isGroupMsg bool) []m
 	return elements
 }
 
-func (c *QQClient) ChatMsgHandler(wsmsg WebSocketMessage, miraiMsg any) {
+func (c *QQClient) ChatMsgHandler(wsmsg WebSocketMessage, miraiMsg any) any {
 	isGroupMsg := wsmsg.MessageType != "private"
 	var elements []message.IMessageElement
 	defer func() {
@@ -1643,23 +1736,17 @@ func (c *QQClient) ChatMsgHandler(wsmsg WebSocketMessage, miraiMsg any) {
 		elements = handleMixMsg(wsmsg.MessageContent.([]interface{}), miraiMsg, isGroupMsg)
 	default:
 		logger.Warnf("未知 消息内容 类型: %v", wsmsg.MessageContent)
-		return
+		return nil
 	}
 
 	if isGroupMsg {
 		gMsg := miraiMsg.(*message.GroupMessage)
 		gMsg.Elements = elements
-		c.waitDataAndDispatch(gMsg)
+		return gMsg
 	} else {
 		pMsg := miraiMsg.(*message.PrivateMessage)
 		pMsg.Elements = elements
-		selfIDStr := strconv.FormatInt(int64(wsmsg.SelfID), 10)
-		if selfIDStr == strconv.FormatInt(int64(wsmsg.Sender.UserID), 10) {
-			c.SelfPrivateMessageEvent.dispatch(c, pMsg)
-		} else {
-			c.PrivateMessageEvent.dispatch(c, pMsg)
-		}
-		c.OutputReceivingMessage(pMsg)
+		return pMsg
 	}
 }
 
@@ -1740,7 +1827,7 @@ func (c *QQClient) DownloadFile(url, base64, name string, headers []string) (str
 	if len(headers) > 0 {
 		params["headers"] = headers
 	}
-	
+
 	rsp, err := c.SendApi("download_file", params)
 	if err != nil {
 		return "", fmt.Errorf("API请求失败: %w", err)
@@ -1878,34 +1965,48 @@ func (c *QQClient) SyncGroupMembers(groupID DynamicInt64) {
 	}
 }
 
+var (
+	registerOnce sync.Once
+	wsUpgrader   = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+)
+
 func (c *QQClient) StartWebSocketServer() {
 	wsMode := config.GlobalConfig.GetString("websocket.mode")
 	if wsMode == "" {
 		wsMode = "ws-server"
 	}
+
 	if wsMode == "ws-server" {
-		http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			ws, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				//log.Println(err)
-				logger.Error(err)
-				return
-			}
-			// 打印客户端的 headers
-			for name, values := range r.Header {
-				for _, value := range values {
-					logger.WithField(name, value).Debug()
+		registerOnce.Do(func() {
+			http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+				ws, err := wsUpgrader.Upgrade(w, r, nil)
+				if err != nil {
+					logger.Error(err)
+					return
 				}
+
+				// 打印客户端headers
+				for name, values := range r.Header {
+					for _, value := range values {
+						logger.WithField(name, value).Debug()
+					}
+				}
+
+				c.wsInit(ws, wsMode)
+			})
+
+			wsAddr := config.GlobalConfig.GetString("websocket.ws-server")
+			if wsAddr == "" {
+				wsAddr = "0.0.0.0:15630"
 			}
-			c.wsInit(ws, wsMode)
+
+			logger.WithField("force", true).Printf("WebSocket server started on ws://%s/ws", wsAddr)
+			go func() {
+				logger.Fatal(http.ListenAndServe(wsAddr, nil))
+			}()
 		})
-		// 启动监听
-		wsAddr := config.GlobalConfig.GetString("websocket.ws-server")
-		if wsAddr == "" {
-			wsAddr = "0.0.0.0:15630"
-		}
-		logger.WithField("force", true).Printf("WebSocket server started on ws://%s/ws", wsAddr)
-		logger.Fatal(http.ListenAndServe(wsAddr, nil))
 	} else {
 		c.disconnectChan = make(chan bool)
 		go c.reverseConn(wsMode)
@@ -1984,25 +2085,31 @@ func (c *QQClient) RefreshList() {
 	}
 	logger.Infof("已加载 %d 个群组", len(c.GroupList))
 	//logger.Info("start reload group members list")
-	err = c.ReloadGroupMembers()
+	memberCount, err := c.ReloadGroupMembers()
 	if err != nil {
 		logger.WithError(err).Error("unable to load group members list")
 	} else {
-		logger.Info("加载 群员信息 完成")
+		if memberCount > 0 {
+			logger.Infof("已加载 %d 个群成员", memberCount)
+		} else {
+			logger.Info("群成员加载失败")
+		}
 	}
 }
 
-func (c *QQClient) ReloadGroupMembers() error {
+func (c *QQClient) ReloadGroupMembers() (int, error) {
 	var err error
+	memberCount := 0
 	for _, group := range c.GroupList {
 		group.Members = nil
 		group.Members, err = c.GetGroupMembers(group)
+		memberCount += len(group.Members)
 		logger.Debugf("群[%d]加载成员[%d]个\n", group.Code, len(group.Members))
 		if err != nil {
-			return err
+			return memberCount, err
 		}
 	}
-	return nil
+	return memberCount, nil
 }
 
 func (c *QQClient) SendGroupMessage(groupCode int64, m *message.SendingMessage, newstr string) SendResp {

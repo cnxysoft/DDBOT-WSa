@@ -2,8 +2,8 @@ package concern
 
 import (
 	"fmt"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"strings"
 	"sync"
 )

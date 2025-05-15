@@ -1,16 +1,16 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
-    <working_directory value="$PROJECT_DIR$/cmd/debug" />
+    <working_directory value="$PROJECT_DIR$/debug" />
     <envs>
       <env name="GOOS" value="windows" />
       <env name="GOARCH" value="amd64" />
     </envs>
     <kind value="DIRECTORY" />
-    <package value="github.com/Sora233/DDBOT" />
+    <package value="github.com/cnxysoft/DDBOT-WSa" />
     <directory value="$PROJECT_DIR$/cmd" />
     <filePath value="$PROJECT_DIR$" />
-    <output_directory value="$PROJECT_DIR$/cmd/debug" />
+    <output_directory value="$PROJECT_DIR$/debug" />
     <method v="2" />
   </configuration>
 </component>

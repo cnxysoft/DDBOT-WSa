@@ -3,15 +3,15 @@ package lsp
 import (
 	"time"
 
-	"github.com/Sora233/DDBOT/proxy_pool"
-	"github.com/Sora233/DDBOT/requests"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/sirupsen/logrus"
 )
 
 var (
 	CommitId  = "UNKNOWN"
-	BuildTime = "2025-03-31 21:49:00"
-	Tags      = "fix_A038"
+	BuildTime = "2025-05-13 01:52:00"
+	Tags      = "fix_A039"
 )
 
 func CheckUpdate() string {
@@ -30,7 +30,7 @@ func CheckUpdate() string {
 		requests.RetryOption(2),
 	}
 	var m map[string]interface{}
-	err := requests.Get("https://api.github.com/repos/cnxysoft/DDBOT-WSa/releases/latest", nil, &m, opts...)
+	err := requests.Get("https://ddup.znin.net/", nil, &m, opts...)
 	if err != nil {
 		logrus.Errorf("更新检测失败：%v", err)
 		return ""

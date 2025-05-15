@@ -11,22 +11,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Sora233/DDBOT/lsp"
-	"github.com/Sora233/DDBOT/warn"
 	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/lsp"
+	"github.com/cnxysoft/DDBOT-WSa/warn"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
 
-	_ "github.com/Sora233/DDBOT/logging"
-	_ "github.com/Sora233/DDBOT/lsp/acfun"
-	_ "github.com/Sora233/DDBOT/lsp/douyu"
-	_ "github.com/Sora233/DDBOT/lsp/huya"
-	_ "github.com/Sora233/DDBOT/lsp/twitcasting"
-	_ "github.com/Sora233/DDBOT/lsp/weibo"
-	_ "github.com/Sora233/DDBOT/lsp/youtube"
-	_ "github.com/Sora233/DDBOT/msg-marker"
+	_ "github.com/cnxysoft/DDBOT-WSa/logging"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
+	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
 )
 
 // SetUpLog 使用默认的日志格式配置，会写入到logs文件夹内，日志会保留七天
@@ -155,6 +155,14 @@ bilibili:
   minFollowerCap: 0        # 设置订阅的b站用户需要满足至少有多少个粉丝，默认为0，设为-1表示无限制
   disableSub: false        # 禁止ddbot去b站关注帐号，这意味着只能订阅帐号已关注的用户，或者在b站手动关注
   onlyOnlineNotify: false  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+
+# 需自行先访问https://lightbrd.com/进行cookies的获取
+# 填入你访问网站时提交的user_agent，可在浏览器中查看
+# 填入你访问网站后得到的cf_clearance，可在浏览器中查看
+twitter:
+  useragent:
+  cfclearance:
+
 
 concern:
   emitInterval: 5s

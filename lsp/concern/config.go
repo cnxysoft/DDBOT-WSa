@@ -1,7 +1,7 @@
 package concern
 
 import (
-	"github.com/Sora233/DDBOT/utils/msgstringer"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"strings"
 )
 

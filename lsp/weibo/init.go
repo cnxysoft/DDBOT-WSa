@@ -1,9 +1,9 @@
 package weibo
 
 import (
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/requests"
-	localutils "github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"net/http"
 	"time"
 )

@@ -15,6 +15,17 @@ func trunc(c int, s string) string {
 	return s
 }
 
+func reTrunc(s string, c int) string {
+	switch {
+	case c > 0 && len(s) >= c: // 正数时取最后c个字符
+		return s[len(s)-c:]
+	case c < 0 && len(s)+c > 0: // 负数时去掉最后|c|个字符
+		return s[:len(s)+c]
+	default:
+		return s
+	}
+}
+
 func strslice(v interface{}) []string {
 	switch v := v.(type) {
 	case []string:

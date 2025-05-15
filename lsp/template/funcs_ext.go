@@ -16,11 +16,11 @@ import (
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/cfg"
-	"github.com/Sora233/DDBOT/lsp/interfaces"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	localutils "github.com/Sora233/DDBOT/utils"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/interfaces"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/shopspring/decimal"
 )
 
@@ -981,6 +981,29 @@ func remoteDownloadFile(urlOrBase64 string, opts ...interface{}) string {
 	return ret
 }
 
+func getFileUrl(groupCode int64, fileId string) string {
+	bot := localutils.GetBot()
+	if bot == nil {
+		logger.Error("bot 实例未找到")
+		return ""
+	}
+	return (*bot.Bot).QQClient.GetFileUrl(groupCode, fileId)
+}
+
+func getMsg(msgId int32) interface{} {
+	bot := localutils.GetBot()
+	if bot == nil {
+		logger.Error("bot 实例未找到")
+		return nil
+	}
+	ret, err := (*bot.Bot).QQClient.GetMsg(msgId)
+	if err != nil {
+		logger.Errorf("获取消息失败: %v", err)
+		return nil
+	}
+	return ret
+}
+
 func loop(from, to int64) <-chan int64 {
 	ch := make(chan int64)
 	go func() {
@@ -990,4 +1013,39 @@ func loop(from, to int64) <-chan int64 {
 		close(ch)
 	}()
 	return ch
+}
+
+func lsDir(dir string, recursive bool) []string {
+	var result []string
+
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		logger.Errorf("lsDir error: %v", err)
+		return nil
+	}
+
+	for _, item := range files {
+		result = append(result, item.Name())
+
+		// 若开启递归且当前项为目录，则递归遍历子目录
+		if recursive && item.IsDir() {
+			subItems := lsDir(filepath.Join(dir, item.Name()), recursive)
+			for _, subItem := range subItems {
+				result = append(result, filepath.Join(item.Name(), subItem)) // 添加相对路径
+			}
+		}
+	}
+
+	return result
+}
+
+func getEleType(v interface{}) string {
+	switch v.(type) {
+	case *message.GroupImageElement, *message.FriendImageElement:
+		return "image"
+	case *message.GroupFileElement, *message.FriendFileElement:
+		return "file"
+	default:
+		return "unknown"
+	}
 }

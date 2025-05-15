@@ -10,6 +10,7 @@ var (
 	ErrNotInitialized = errors.New("not initialized")
 	ErrRollback       = errors.New("rollback")
 	ErrLockNotHold    = errors.New("lock not hold")
+	ErrNotFound       = errors.New("not found")
 )
 
 func IsRollback(e error) bool {

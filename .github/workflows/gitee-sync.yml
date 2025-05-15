@@ -12,9 +12,9 @@ jobs:
       - name: Mirror the Github repos to Gitee.
         uses: Yikun/hub-mirror-action@master
         with:
-          src: github/Sora233
-          dst: gitee/sora233
+          src: github/cnxysoft
+          dst: gitee/cnxysoft
           dst_key: ${{ secrets.GITEE_PRIVATE_KEY }}
           dst_token: ${{ secrets.GITEE_TOKEN }}
-          static_list: "DDBOT"
+          static_list: "DDBOT-WSa"
           force_update: true

@@ -19,6 +19,7 @@ type GroupImageElement struct {
 	Height       int32
 	Md5          []byte
 	Url          string
+	Name         string
 
 	// EffectID show pic effect id.
 	EffectID int32

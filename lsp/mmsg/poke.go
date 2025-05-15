@@ -2,7 +2,7 @@ package mmsg
 
 import (
 	"github.com/Mrs4s/MiraiGo/message"
-	localutils "github.com/Sora233/DDBOT/utils"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 // PokeElement 戳一戳

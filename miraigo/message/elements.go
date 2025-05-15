@@ -45,6 +45,7 @@ type GroupFileElement struct {
 	Name  string
 	Size  int64
 	Path  string
+	Id    string
 	Busid int32
 }
 

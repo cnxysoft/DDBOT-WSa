@@ -1,4 +1,31 @@
 ## DDBOT最近更新日志
+- 2025-05-11 0.3.9(Wsa)
+  - 支持Twitter订阅
+  - 支持Twitter多个镜像源
+  - 支持twitter镜像的m3u8视频推送
+    - 需自行准备ffmpeg并放在程序目录或加入环境变量
+  - 兼容Youtube新、老ID订阅
+  - 修复HTTP服务允许重复创建的问题
+  - 修改更新检查服务器
+  - 还原部分原始函数
+  - 修复B站关注和直播推送失效
+  - 支持自定义私聊无效指令触发模板
+    - 名称：command.private.unknown_cmd_tips.tmpl
+    - 模板变量：cmd、args、full_args、help_cmd
+  - 新增群文件上传事件并支持自定义模板
+    - 名称：trigger.group.upload.tmpl
+    - 模板变量：group_code、member_code、member_name、file_name、file_size、file_id、file_url、file_busId
+  - 新增模板函数
+    - 下载文件到本地
+      - downloadFile(url string, path string, filename string) string
+        - 支持设置Headers、Cookies、UA等参数（详见TEMPLATE.md中http特殊参数一节）
+    - 遍历输出给定目录下的文件列表
+      - lsDir(path string, recursive bool) []string
+        - 支持遍历子目录
+    - 获取Element类型
+      - getEleType(ele interface{}) string
+        - 获取ele类型，返回：image、file、unknown
+
 - 2025-03-31 0.3.8(Wsa)
   - 修复群文件上传事件导致的消息处理错误
   - 将动态相关图片接口恢复（下载并调整大小后发送）

@@ -3,7 +3,7 @@ package mmsg
 import (
 	"fmt"
 	"github.com/Mrs4s/MiraiGo/message"
-	localutils "github.com/Sora233/DDBOT/utils"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 type AtElement struct {

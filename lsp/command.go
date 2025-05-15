@@ -1,8 +1,8 @@
 package lsp
 
 import (
-	"github.com/Sora233/DDBOT/lsp/cfg"
 	"github.com/Sora233/sliceutil"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 )
 
 // TODO command需要重构成注册模式，然后把这个文件废弃

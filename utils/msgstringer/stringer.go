@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/davecgh/go-spew/spew"
 )
 

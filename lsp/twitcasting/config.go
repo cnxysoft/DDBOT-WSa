@@ -1,7 +1,7 @@
 package twitcasting
 
 import (
-	"github.com/Sora233/DDBOT/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 )
 
 type GroupConcernConfig struct {

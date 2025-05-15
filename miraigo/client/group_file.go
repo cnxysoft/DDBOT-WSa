@@ -37,6 +37,10 @@ type (
 		DownloadTimes int64  `json:"download_times"`
 		Uploader      int64  `json:"uploader"`
 		UploaderName  string `json:"uploader_name"`
+		AltFildId     string `json:"id"`
+		AltFileSize   int64  `json:"size"`
+		AltFileName   string `json:"name"`
+		FileUrl       string `json:"file_url"`
 	}
 
 	GroupFolder struct {

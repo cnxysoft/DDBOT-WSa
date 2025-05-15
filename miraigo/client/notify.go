@@ -19,6 +19,12 @@ type (
 		Receiver  int64
 	}
 
+	GroupUploadNotifyEvent struct {
+		GroupCode int64
+		Sender    int64
+		File      GroupFile
+	}
+
 	// GroupRedBagLuckyKingNotifyEvent 群内抢红包运气王提示事件
 	GroupRedBagLuckyKingNotifyEvent struct {
 		GroupCode int64
@@ -187,4 +193,12 @@ func (e *MemberHonorChangedNotifyEvent) Content() string {
 	default:
 		return "ERROR"
 	}
+}
+
+func (e *GroupUploadNotifyEvent) From() int64 {
+	return e.GroupCode
+}
+
+func (e *GroupUploadNotifyEvent) Content() string {
+	return fmt.Sprintf("%d在群里上传了文件：%s", e.Sender, e.File.FileName)
 }

@@ -1,7 +1,7 @@
 package acfun
 
 import (
-	"github.com/Sora233/DDBOT/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 )
 
 func init() {
