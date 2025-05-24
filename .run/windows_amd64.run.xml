@@ -2,13 +2,13 @@
   <configuration default="false" name="windows_amd64" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$" />
-    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_windows_amd64.exe -ldflags=&quot;-s -w&quot;" />
+    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_windows_amd64.exe -ldflags=&quot;-s -w&quot; -trimpath" />
     <envs>
       <env name="GOOS" value="windows" />
       <env name="GOARCH" value="amd64" />
     </envs>
     <kind value="DIRECTORY" />
-    <package value="github.com/Sora233/DDBOT" />
+    <package value="github.com/cnxysoft/DDBOT-WSa" />
     <directory value="$PROJECT_DIR$/cmd" />
     <filePath value="$PROJECT_DIR$" />
     <output_directory value="$PROJECT_DIR$/dist" />

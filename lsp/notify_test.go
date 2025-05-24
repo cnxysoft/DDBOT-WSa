@@ -2,12 +2,12 @@ package lsp
 
 import (
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/internal/test"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/lsp/permission"
-	"github.com/Sora233/DDBOT/utils/msgstringer"
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"testing"

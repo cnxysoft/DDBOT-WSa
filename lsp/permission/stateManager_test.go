@@ -1,8 +1,8 @@
 package permission
 
 import (
-	"github.com/Sora233/DDBOT/internal/test"
-	localutils "github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"

@@ -105,8 +105,8 @@ message FeedListResponse {
       int64 online = 7;
       string link = 8;
       int64 uid = 9;
-      int64 parent_area_id = 10;
-      int64 area_id = 11;
+      int32 parent_area_id = 10;
+      int32 area_id = 11;
     }
     repeated ListInfo list = 4;
   }
@@ -519,6 +519,7 @@ message CardWithOrig {
     message Info {
       int64 uid = 1;
       string uname = 2;
+      string face = 3;
     }
     Info info = 1;
   }
@@ -702,4 +703,165 @@ message CardWithCourse {
   int32 update_count = 7;
   string update_info = 8;
   string url = 9;
+}
+
+message LiveRoomData {
+    int32 code = 1;
+    string msg = 2;
+    string message = 3;
+    Data data = 4;
+}
+
+message Data {
+    int64 uid = 1;
+    int64 room_id = 2;
+    int32 short_id = 3;
+    int64 attention = 4;
+    int64 online = 5;
+    bool is_portrait = 6;
+    string description = 7;
+    int32 live_status = 8;
+    int32 area_id = 9;
+    int32 parent_area_id = 10;
+    string parent_area_name = 11;
+    int32 old_area_id = 12;
+    string background = 13;
+    string title = 14;
+    string user_cover = 15;
+    string keyframe = 16;
+    bool is_strict_room = 17;
+    string live_time = 18;
+    string tags = 19;
+    int32 is_anchor = 20;
+    string room_silent_type = 21;
+    int32 room_silent_level = 22;
+    int32 room_silent_second = 23;
+    string area_name = 24;
+    string pendants = 25;
+    string area_pendants = 26;
+    repeated string hot_words = 27;
+    int32 hot_words_status = 28;
+    string verify = 29;
+    NewPendants new_pendants = 30;
+    string up_session = 31;
+    int32 pk_status = 32;
+    int64 pk_id = 33;
+    int64 battle_id = 34;
+    int64 allow_change_area_time = 35;
+    int64 allow_upload_cover_time = 36;
+    StudioInfo studio_info = 37;
+}
+
+message NewPendants {
+    PendantFrame frame = 1;
+    PendantBadge badge = 2;
+    PendantFrame mobile_frame = 3;
+    PendantBadge mobile_badge = 4;
+}
+
+message PendantFrame {
+    string name = 1;
+    string value = 2;
+    int32 position = 3;
+    string desc = 4;
+    int32 area = 5;
+    int32 area_old = 6;
+    string bg_color = 7;
+    string bg_pic = 8;
+    bool use_old_area = 9;
+}
+
+message PendantBadge {
+    string name = 1;
+    int32 position = 2;
+    string value = 3;
+    string desc = 4;
+}
+
+message StudioInfo {
+    int32 status = 1;
+    repeated StudioMaster master_list = 2;
+}
+
+message StudioMaster {
+    // 根据实际需求补充字段
+}
+
+message GetPlayTogetherUserAnchorInfoV2Response {
+  int32 code = 1;
+  string message = 2;
+  int32 ttl = 3;
+
+  message Data {
+    UserAnchorInfoBase user_anchor_info_base = 1;
+    repeated GoodsInfo anchor_goods_info_list = 2;
+  }
+  Data data = 4;
+}
+
+message UserAnchorInfoBase {
+  string anchor_nickname = 1;
+  string anchor_avatar = 2;
+  int32 monthly_sales = 3;
+  int32 high_evaluate = 4;
+  int32 total_sales = 5;
+  int32 role = 6;
+  int32 total_high_evaluate = 7;
+  int64 uid = 8;
+  int32 total_evaluate = 9;
+  int32 position = 10;
+}
+
+message GoodsInfo {
+  int32 id = 1;
+  string name = 2;
+  int32 service_type = 3;
+  string game_name = 4;
+  string game_area = 5;
+  int32 price = 6;
+  int32 target = 7;
+  string desc = 8;
+  string create_tm = 9;
+  string service_name = 10;
+  string game_icon = 11;
+  string expire_tm = 12;
+  int64 expire_ts = 13;
+  int32 monthly_sales = 14;
+  int32 high_evaluate = 15;
+  int32 discount = 16;
+  int32 discount_price = 17;
+  string service_duration = 18;
+}
+
+message Item {
+  string id = 1;
+  string parent_id = 2;
+  string parent_name = 3;
+  string old_area_id = 4;
+  string name = 5;
+  string pinyin = 6;
+  string act_id = 7;
+  int32 hot_status = 8;
+  string pk_status = 9;
+  string lock_status = 10;
+  string pic = 11;
+  int32 area_type = 12;
+}
+
+message Category {
+  int32 id = 1;
+  string name = 2;
+  repeated Item list = 3;
+}
+
+message AreaData {
+  repeated Category data = 1;
+  int32 expid = 2;
+}
+
+message XLiveGetWebAreaListResponse {
+  int32 code = 1;
+  string message = 2;
+  int32 ttl = 3;
+  AreaData data = 4;
 }

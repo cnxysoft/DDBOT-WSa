@@ -3,10 +3,10 @@ package bilibili
 import (
 	"context"
 	"fmt"
-	"github.com/Sora233/DDBOT/lsp/cfg"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
 	"go.uber.org/atomic"
@@ -106,18 +106,49 @@ func (c *Concern) fresh() concern.FreshFunc {
 					mid := id.(int64)
 					if selfUid != 0 && selfUid == mid {
 						// 特殊处理下关注自己
-						accResp, err := XSpaceAccInfo(selfUid)
+						selfInfo, err := c.GetUserInfo(selfUid)
 						if err != nil {
-							logger.Errorf("freshLive self-fresh %v error %v", selfUid, err)
-							return err
+							logger.WithField("uid", mid).WithField("name", selfInfo.Name).
+								WithField("room_id", selfInfo.RoomId).Errorf("GetRoomInfo error %v", err)
+							continue
 						}
-						liveRoom := accResp.GetData().GetLiveRoom()
+						roomId := selfInfo.RoomId
+						resp, err := GetRoomInfo(roomId)
+						if err != nil {
+							logger.WithField("uid", mid).WithField("name", selfInfo.Name).
+								WithField("room_id", roomId).Errorf("GetRoomInfo error %v", err)
+							continue
+						}
+						resp2, err := GetPlayTogetherUserAnchorInfoV2(mid)
+						if err != nil {
+							logger.WithField("uid", mid).WithField("name", selfInfo.Name).
+								WithField("room_id", roomId).Errorf("GetPlayTogetherUserAnchorInfoV2 error %v", err)
+							continue
+						}
 						selfLiveInfo := NewLiveInfo(
-							NewUserInfo(selfUid, liveRoom.GetRoomid(), accResp.GetData().GetName(), liveRoom.GetUrl()),
-							liveRoom.GetTitle(),
-							liveRoom.GetCover(),
-							liveRoom.GetLiveStatus(),
+							NewUserInfo(mid, resp.Data.RoomId, resp2.GetName(), resp.GetUrl()),
+							resp.GetTitle(),
+							resp.GetCover(),
+							resp.GetLiveStatus(),
 						)
+						selfLiveInfo.SetAreaData(
+							resp.Data.GetAreaId(),
+							resp.Data.GetAreaName(),
+							resp.Data.GetParentAreaId(),
+							resp.Data.GetParentAreaName(),
+						)
+						//accResp, err := XSpaceAccInfo(selfUid)
+						//if err != nil {
+						//	logger.Errorf("freshLive self-fresh %v error %v", selfUid, err)
+						//	return err
+						//}
+						//liveRoom := accResp.GetData().GetLiveRoom()
+						//selfLiveInfo := NewLiveInfo(
+						//	NewUserInfo(selfUid, liveRoom.GetRoomid(), accResp.GetData().GetName(), liveRoom.GetUrl()),
+						//	liveRoom.GetTitle(),
+						//	liveRoom.GetCover(),
+						//	liveRoom.GetLiveStatus(),
+						//)
 						if selfLiveInfo.Living() {
 							liveInfoMap[selfUid] = selfLiveInfo
 						}
@@ -153,21 +184,49 @@ func (c *Concern) fresh() concern.FreshFunc {
 								logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
 									Errorf("clear notlive count error %v", err)
 							}
-							resp, err := XSpaceAccInfo(mid)
-							if err != nil {
+							//resp, err := XSpaceAccInfo(mid)
+							//if err != nil {
+							//	logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
+							//		Errorf("XSpaceAccInfo error %v", err)
+							//	continue
+							//}
+							//if resp.GetData().GetLiveRoom().GetLiveStatus() == LiveStatus_Living {
+							//	continue
+							//} else {
+							//	logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
+							//		Debug("XSpaceAccInfo notlive confirmed")
+							//}
+							//newInfo = NewLiveInfo(&oldInfo.UserInfo, resp.GetData().GetLiveRoom().GetTitle(),
+							//	resp.GetData().GetLiveRoom().GetCover(), LiveStatus_NoLiving)
+							//newInfo.Name = resp.GetData().GetName()
+							roomId := oldInfo.RoomId
+							resp, err := GetRoomInfo(roomId)
+							if err != nil || resp.Data.Uid != mid {
 								logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
-									Errorf("XSpaceAccInfo error %v", err)
+									WithField("room_id", roomId).Errorf("GetRoomInfo error %v", err)
 								continue
 							}
-							if resp.GetData().GetLiveRoom().GetLiveStatus() == LiveStatus_Living {
+							if resp.GetLiveStatus() == LiveStatus_Living {
 								continue
 							} else {
 								logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
 									Debug("XSpaceAccInfo notlive confirmed")
 							}
-							newInfo = NewLiveInfo(&oldInfo.UserInfo, resp.GetData().GetLiveRoom().GetTitle(),
-								resp.GetData().GetLiveRoom().GetCover(), LiveStatus_NoLiving)
-							newInfo.Name = resp.GetData().GetName()
+							resp2, err := GetPlayTogetherUserAnchorInfoV2(mid)
+							if err != nil {
+								logger.WithField("uid", mid).WithField("name", oldInfo.UserInfo.Name).
+									WithField("room_id", roomId).Errorf("GetPlayTogetherUserAnchorInfoV2 error %v", err)
+								continue
+							}
+							newInfo = NewLiveInfo(&oldInfo.UserInfo, resp.GetTitle(),
+								resp.GetCover(), LiveStatus_NoLiving)
+							newInfo.SetAreaData(
+								resp.Data.GetAreaId(),
+								resp.Data.GetAreaName(),
+								resp.Data.GetParentAreaId(),
+								resp.Data.GetParentAreaName(),
+							)
+							newInfo.Name = resp2.GetName()
 							newInfo.liveStatusChanged = true
 							sendLiveInfo(newInfo)
 						} else {
@@ -338,6 +397,13 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 				l.GetPic(),
 				LiveStatus_Living,
 			)
+			ParentArea := c.AreaData.GetSubArea(l.GetParentAreaId())
+			Aria := ParentArea.GetSubCategory(l.GetAreaId())
+			info.SetAreaData(
+				l.GetAreaId(),
+				Aria.GetName(),
+				l.GetParentAreaId(),
+				ParentArea.GetName())
 			if info.Cover == "" {
 				info.Cover = l.GetCover()
 			}

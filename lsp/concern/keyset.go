@@ -1,7 +1,7 @@
 package concern
 
 import (
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 )
 
 // KeySet 是不同 StateManager 之间用来彼此隔离的一个接口。

@@ -1,9 +1,14 @@
 package template
 
 import (
-	"github.com/Sora233/DDBOT/proxy_pool"
-	"github.com/Sora233/DDBOT/requests"
+	"bytes"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/google/uuid"
 	"github.com/spf13/cast"
+	"net/url"
+	"os"
+	"path"
 	"reflect"
 	"strings"
 )
@@ -153,4 +158,92 @@ func httpPostForm(url string, oParams ...map[string]interface{}) (body []byte) {
 		logger.Errorf("template: httpGet error %v", err)
 	}
 	return
+}
+
+func downloadFile(inUrl string, loPath string, fileName string, oParams ...map[string]interface{}) string {
+	// 声明变量
+	var (
+		Url        *url.URL
+		err        error
+		localPath  string
+		resp       bytes.Buffer
+		respHeader requests.RespHeader
+	)
+	params, opts := preProcess(oParams)
+	if opts == nil {
+		opts = []requests.Option{
+			requests.AddUAOption(),
+		}
+	}
+	// 检查URL
+	if inUrl == "" {
+		logger.Error("请提供URL进行下载")
+		return ""
+	} else {
+		Url, err = url.Parse(inUrl)
+		if err != nil {
+			logger.Error("无效的URL")
+			return ""
+		}
+	}
+	// 设置下载路径
+	if loPath == "" {
+		logger.Trace("没有指定下载路径，将使用默认路径")
+		localPath = "./downloads"
+	} else {
+		localPath = loPath
+	}
+	// 检查文件路径是否存在
+	if _, err = os.Stat(localPath); os.IsNotExist(err) {
+		if err = os.MkdirAll(localPath, 0755); err != nil {
+			logger.Errorf("创建下载目录失败:%v", err)
+			return ""
+		}
+	}
+	err = requests.GetWithHeader(Url.String(), params, &resp, &respHeader, opts...)
+	if err != nil {
+		logger.Errorf("下载文件失败:%v", err)
+		return ""
+	}
+	if fileName == "" {
+		if respHeader.ContentDisposition != "" {
+			fileName = respHeader.ContentDisposition
+		} else {
+			var vaild bool
+			fileName, vaild = extractFilename(Url.String())
+			if fileName == "" || !vaild {
+				fileName = uuid.New().String()
+			}
+		}
+	}
+	filePath := localPath + "/" + fileName
+	err = os.WriteFile(filePath, resp.Bytes(), 0644)
+	if err != nil {
+		logger.Errorf("保存文件失败:%v", err)
+		return ""
+	}
+	return filePath
+}
+
+// 提取文件名并验证有效性，返回 (文件名, 是否有效)
+func extractFilename(urlStr string) (string, bool) {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return "", false
+	}
+
+	cleanPath := path.Clean(u.Path)
+	base := path.Base(cleanPath)
+
+	// 验证文件名有效性（与判断逻辑一致）
+	if base == "." || base == ".." || base == "/" || base == "" {
+		return "", false
+	}
+
+	dotIndex := strings.LastIndex(base, ".")
+	if dotIndex == -1 || dotIndex == 0 || dotIndex == len(base)-1 {
+		return "", false
+	}
+
+	return base, true
 }

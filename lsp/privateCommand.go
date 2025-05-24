@@ -11,16 +11,16 @@ import (
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/lsp/permission"
-	"github.com/Sora233/DDBOT/lsp/template"
-	localutils "github.com/Sora233/DDBOT/utils"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
 	"github.com/alecthomas/kong"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -130,7 +130,22 @@ func (c *LspPrivateCommand) Execute() {
 				)
 			}()
 		} else {
-			c.textReplyF("阁下似乎输入了一个无法识别的命令，请使用<%v>命令查看帮助。", c.l.CommandShowName(HelpCommand))
+			func() {
+				log := c.DefaultLoggerWithCommand("Unknown CMD Tips").WithField("CustomCommand", true)
+				log.Info("run Unknown CMD Tips command")
+				defer func() { log.Info("Unknown CMD Tips command end") }()
+				c.sendChain(
+					c.templateMsg(
+						"command.private.unknown_cmd_tips.tmpl",
+						map[string]interface{}{
+							"cmd":       c.CommandName(),
+							"args":      c.GetArgs(),
+							"full_args": strings.Join(c.GetArgs(), " "),
+							"help_cmd":  c.l.CommandShowName(HelpCommand),
+						},
+					),
+				)
+			}()
 			log.Debug("no command matched")
 		}
 	}

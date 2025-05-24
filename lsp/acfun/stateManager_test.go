@@ -1,9 +1,9 @@
 package acfun
 
 import (
-	"github.com/Sora233/DDBOT/internal/test"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/buntdb"
 	"testing"

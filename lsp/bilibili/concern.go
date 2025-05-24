@@ -6,15 +6,15 @@ import (
 	"sync"
 	"time"
 
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/cfg"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	localutils "github.com/Sora233/DDBOT/utils"
-	"github.com/Sora233/DDBOT/utils/expirable"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/cnxysoft/DDBOT-WSa/utils/expirable"
 	"github.com/tidwall/buntdb"
 	"go.uber.org/atomic"
 )
@@ -34,6 +34,7 @@ type Concern struct {
 	stop                   chan interface{}
 	wg                     sync.WaitGroup
 	cacheStartTs           int64
+	AreaData               *AreaData
 }
 
 func (c *Concern) Site() string {
@@ -74,6 +75,7 @@ func NewConcern(notify chan<- concern.Notify) *Concern {
 			return m
 		}),
 	}
+	c.AreaData = RefreshAreaList()
 	c.StateManager = NewStateManager(c)
 	return c
 }

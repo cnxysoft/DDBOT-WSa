@@ -1,0 +1,136 @@
+{{ $msg := "" -}}
+{{ $orgTip := "" -}}
+{{ if eq .dynamic.Type 2 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+        {{ $orgTip = "\n\n原动态：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Image.Description -}}
+    {{ if .dynamic.Image.ImageUrls -}}
+        {{ range $v := .dynamic.Image.ImageUrls -}}
+            {{ pic $v -}}
+        {{ end -}}
+    {{ end -}}
+{{ else if eq .dynamic.Type 4 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+        {{ $orgTip = "\n\n原动态：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Text.Content -}}
+{{ else if eq .dynamic.Type 8 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的视频：") -}}
+        {{ $orgTip = "\n\n原视频：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name .dynamic.Video.Action "：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Video.Title .dynamic.Video.Desc -}}
+    {{ pic .dynamic.Video.CoverUrl -}}
+{{ else if eq .dynamic.Type 64 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的专栏：") -}}
+        {{ $orgTip = "\n\n原专栏：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了新专栏：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Post.Title .dynamic.Post.Summary -}}
+    {{ if .dynamic.Post.ImageUrls -}}
+        {{ range $v := .dynamic.Post.ImageUrls -}}
+            {{ pic $v -}}
+        {{ end -}}
+    {{ end -}}
+{{ else if eq .dynamic.Type 256 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的音频：") -}}
+        {{ $orgTip = "\n\n原音频：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "投稿了新音频：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n%v\n%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Music.Title .dynamic.Music.Intro .dynamic.Music.Author -}}
+    {{ pic .dynamic.Music.CoverUrl -}}
+{{ else if eq .dynamic.Type 2048 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+        {{ $orgTip = "\n\n原动态：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发表了新动态：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n%v\n%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Sketch.Content .dynamic.Sketch.Title .dynamic.Sketch.DescText -}}
+    {{ if ne .dynamic.Sketch.CoverUrl "" -}}
+        {{ pic .dynamic.Sketch.CoverUrl -}}
+    {{ end -}}
+{{ else if or (eq .dynamic.Type 4200) (eq .dynamic.Type 4308) -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "分享了" .dynamic.OriginUser.Name "的直播：") -}}
+        {{ $orgTip = "\n\n原直播间：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了直播信息：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Live.Title -}}
+    {{ pic .dynamic.Live.CoverUrl -}}
+{{ else if eq .dynamic.Type 4300 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "分享了" .dynamic.OriginUser.Name "的收藏夹：") -}}
+        {{ $orgTip = "\n\n原收藏夹：\n" -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了收藏夹：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.MyList.Title -}}
+    {{ pic .dynamic.MyList.CoverUrl -}}
+{{ else if eq .dynamic.Type 1024 -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "分享了动态：") -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
+    {{ end -}}
+    {{ printf "%v\n%v\n%v%v\n%v\n" $msg .dynamic.Date .dynamic.Content $orgTip .dynamic.Miss.Tips -}}
+{{ else if eq .dynamic.Type 1 -}}
+    {{- .dynamic.User.Name }}转发了{{ .dynamic.OriginUser.Name }}的动态：
+    {{- .dynamic.Date }}
+    {{- .dynamic.Content }}
+{{ else if eq .dynamic.Type 4302 -}}
+    {{- .dynamic.User.Name }}转发了{{ .dynamic.Course.Name }}的{{ .dynamic.Course.Badge }}：
+    {{- .dynamic.Date }}
+    {{- .dynamic.Content }}\n原课程：
+    {{- .dynamic.Course.Title }}
+    {{ pic .dynamic.Course.CoverUrl -}}
+{{ else -}}
+    {{ if .dynamic.WithOrigin -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.Default.TypeName "【" .dynamic.Default.Title "】" .dynamic.Default.Desc "：") -}}
+        {{ printf "%v\n%v\n%v\n" $msg .dynamic.Date .dynamic.Content -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ end -}}
+{{ end -}}
+{{ if gt (len .dynamic.Addons) 0 -}}
+    {{ range $v := .dynamic.Addons -}}
+        {{ if eq $v.Type 1 -}}
+            {{ printf "\n%v：\n%v\n" $v.Goods.adMark $v.Goods.Name -}}
+        {{ else if eq $v.Type 6 -}}
+            {{ if ne $v.Reserve.Lottery "" -}}
+                {{ printf "\n附加信息：\n%v\n%v\n" $v.Reserve.Title $v.Reserve.Desc -}}
+            {{ else -}}
+                {{ printf "\n附加信息：\n%v\n%v\n%v\n" $v.Reserve.Title $v.Reserve.Desc $v.Reserve.Lottery -}}
+            {{ end -}}
+        {{ else if eq $v.Type 2 -}}
+            {{ printf "\n%v：\n%v\n%v\n" $v.Related.HeadText $v.Related.Title $v.Related.Desc -}}
+        {{ else if eq $v.Type 3 -}}
+            {{ if (and (gt (len $v.Vote.Index) 0) (eq (len $v.Vote.Index) (len $v.Vote.Desc))) -}}
+                {{ printf "\n附加信息：\n选项：\n" -}}
+                {{ range $i := loop 1 (len $v.Vote.Index) -}}
+                    {{ printf "%v - %v\n" (index $v.Vote.Index $i) (index $v.Vote.Desc $i) -}}
+                {{ end -}}
+            {{ end -}}
+        {{ else if eq $v.Type 5 -}}
+            {{ printf "\n附加视频：\n%v\n" $v.Video.Title -}}
+            {{ pic $v.Video.CoverUrl -}}
+            {{ printf "%v\n%v\n" $v.Video.DescPlayUrl $v.Video.PlayUrl -}}
+        {{ end -}}
+    {{ end -}}
+{{ end -}}
+{{ .dynamic.DynamicUrl }}

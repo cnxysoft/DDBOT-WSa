@@ -1,7 +1,7 @@
 package bilibili
 
 import (
-	"github.com/Sora233/DDBOT/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"time"
 )
 

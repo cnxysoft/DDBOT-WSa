@@ -164,6 +164,16 @@ func WeiboNewsInfoKey(keys ...interface{}) string {
 func WeiboMarkMblogIdKey(keys ...interface{}) string {
 	return NamedKey("WeiboMarkMblogId", keys)
 }
+func TwitterUserInfoKey(keys ...interface{}) string {
+	return NamedKey("TwitterUserInfo", keys)
+}
+func TwitterFreshKey(keys ...interface{}) string { return NamedKey("TwitterFresh", keys) }
+func TwitterNewsInfoKey(keys ...interface{}) string {
+	return NamedKey("TwitterNewsInfo", keys)
+}
+func TwitterLastFreshKey(keys ...interface{}) string {
+	return NamedKey("TwitterLastFresh", keys)
+}
 
 func PermissionKey(keys ...interface{}) string {
 	return NamedKey("Permission", keys)

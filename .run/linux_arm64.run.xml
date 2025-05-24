@@ -2,13 +2,13 @@
   <configuration default="false" name="linux_arm64" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$" />
-    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_linux_arm64 -ldflags=&quot;-s -w&quot;" />
+    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_linux_arm64 -ldflags=&quot;-s -w&quot; -trimpath" />
     <envs>
       <env name="GOOS" value="linux" />
       <env name="GOARCH" value="arm64" />
     </envs>
     <kind value="DIRECTORY" />
-    <package value="github.com/Sora233/DDBOT" />
+    <package value="github.com/cnxysoft/DDBOT-WSa" />
     <directory value="$PROJECT_DIR$/cmd" />
     <filePath value="$PROJECT_DIR$" />
     <output_directory value="$PROJECT_DIR$/dist" />

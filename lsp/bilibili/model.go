@@ -5,12 +5,12 @@ import (
 	"sync"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/lsp/template"
-	localutils "github.com/Sora233/DDBOT/utils"
-	"github.com/Sora233/DDBOT/utils/blockCache"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
 )
 
@@ -93,9 +93,13 @@ func (ui *UserInfo) GetName() string {
 
 type LiveInfo struct {
 	UserInfo
-	Status    LiveStatus `json:"status"`
-	LiveTitle string     `json:"live_title"`
-	Cover     string     `json:"cover"`
+	Status         LiveStatus `json:"status"`
+	LiveTitle      string     `json:"live_title"`
+	Cover          string     `json:"cover"`
+	AreaId         int32      `json:"area_id"`
+	AreaName       string     `json:"area_name"`
+	ParentAreaId   int32      `json:"parent_area_id"`
+	ParentAreaName string     `json:"parent_area_name"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -116,12 +120,14 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 	}
 	l.once.Do(func() {
 		var data = map[string]interface{}{
-			"uid":    l.Mid,
-			"title":  l.LiveTitle,
-			"name":   l.Name,
-			"url":    cleanRoomUrl(l.RoomUrl),
-			"cover":  l.Cover,
-			"living": l.Living(),
+			"uid":              l.Mid,
+			"title":            l.LiveTitle,
+			"name":             l.Name,
+			"url":              cleanRoomUrl(l.RoomUrl),
+			"cover":            l.Cover,
+			"living":           l.Living(),
+			"parent_area_name": l.ParentAreaName,
+			"area_name":        l.AreaName,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
@@ -170,6 +176,13 @@ func (l *LiveInfo) Logger() *logrus.Entry {
 		"Status": l.Status.String(),
 		"Type":   l.Type().String(),
 	})
+}
+
+func (l *LiveInfo) SetAreaData(AreaId int32, AreaName string, ParentAreaId int32, ParentAreaName string) {
+	l.AreaId = AreaId
+	l.AreaName = AreaName
+	l.ParentAreaId = ParentAreaId
+	l.ParentAreaName = ParentAreaName
 }
 
 func NewUserStat(mid, following, follower int64) *UserStat {
@@ -425,6 +438,7 @@ type CacheCard struct {
 	*Card
 	once     sync.Once
 	msgCache *mmsg.MSG
+	dynamic  DynamicInfo
 }
 
 func NewCacheCard(card *Card) *CacheCard {
@@ -433,6 +447,110 @@ func NewCacheCard(card *Card) *CacheCard {
 	return cacheCard
 }
 
+type DynamicInfo struct {
+	Type       DynamicDescType
+	Id         string
+	WithOrigin bool
+	Date       string
+	Content    string
+	DynamicUrl string
+	User       struct {
+		Uid  int64
+		Name string
+		Face string
+	}
+	OriginUser struct {
+		Uid  int64
+		Name string
+		Face string
+	}
+	Image struct {
+		ImageUrls   []string
+		Description string
+	}
+	Text struct {
+		Content string
+	}
+	Video struct {
+		Title    string
+		Desc     string
+		CoverUrl string
+		Action   string
+	}
+	Post struct {
+		Title     string
+		Summary   string
+		ImageUrls []string
+	}
+	Music struct {
+		Title    string
+		Intro    string
+		CoverUrl string
+		Author   string
+	}
+	Sketch struct {
+		Content  string
+		Title    string
+		DescText string
+		CoverUrl string
+	}
+	Live struct {
+		Title    string
+		CoverUrl string
+	}
+	MyList struct {
+		Title    string
+		CoverUrl string
+	}
+	Miss struct {
+		Tips string
+	}
+	Course struct {
+		Name     string
+		Badge    string
+		Title    string
+		CoverUrl string
+	}
+	Default struct {
+		TypeName string
+		Title    string
+		Desc     string
+		CoverUrl string
+	}
+	Addons []Addon
+}
+
+type Addon struct {
+	Type  AddOnCardShowType
+	Goods struct {
+		AdMark   string
+		Name     string
+		ImageUrl string
+	}
+	Reserve struct {
+		Title   string
+		Desc    string
+		Lottery string
+	}
+	Related struct {
+		Type     string
+		HeadText string
+		Title    string
+		Desc     string
+	}
+	Vote struct {
+		Index []int32
+		Desc  []string
+	}
+	Video struct {
+		Title    string
+		CoverUrl string
+		Desc     string
+		PlayUrl  string
+	}
+}
+
+/*
 func (c *CacheCard) prepare() {
 	var (
 		card       = c.Card
@@ -818,8 +936,406 @@ func (c *CacheCard) prepare() {
 	}
 	m.Text(dynamicUrl)
 }
+*/
+
+func (c *CacheCard) prepare() {
+	var (
+		card       = c.Card
+		log        = logger
+		Id         = card.GetDesc().GetDynamicIdStr()
+		dynamicUrl = DynamicUrl(Id)
+		date       = localutils.TimestampFormat(card.GetDesc().GetTimestamp())
+		name       = card.GetDesc().GetUserProfile().GetInfo().GetUname()
+	)
+	c.dynamic.Id = Id
+	c.dynamic.User.Name = name
+	c.dynamic.User.Uid = card.GetDesc().GetUserProfile().GetInfo().GetUid()
+	c.dynamic.User.Face = card.GetDesc().GetUserProfile().GetInfo().GetFace()
+	c.dynamic.Date = date
+	switch card.GetDesc().GetType() {
+	case DynamicDescType_WithOrigin:
+		c.dynamic.WithOrigin = true
+		cardOrigin, err := card.GetCardWithOrig()
+		if err != nil {
+			log.WithField("card", card).Errorf("GetCardWithOrig failed %v", err)
+			return
+		}
+		originName := cardOrigin.GetOriginUser().GetInfo().GetUname()
+		c.dynamic.OriginUser.Name = originName
+		c.dynamic.OriginUser.Uid = cardOrigin.GetOriginUser().GetInfo().GetUid()
+		c.dynamic.OriginUser.Face = cardOrigin.GetOriginUser().GetInfo().GetFace()
+		// very sb
+		switch cardOrigin.GetItem().GetOrigType() {
+		case DynamicDescType_WithImage:
+			c.dynamic.Type = DynamicDescType_WithImage
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithImage)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).
+					Errorf("Unmarshal origin cardWithImage failed %v", err)
+				return
+			}
+			c.dynamic.Image.Description = origin.GetItem().GetDescription()
+			if len(origin.GetItem().GetPictures()) > 0 {
+				var urls = make([]string, len(origin.GetItem().GetPictures()))
+				for index, pic := range origin.GetItem().GetPictures() {
+					urls[index] = pic.GetImgSrc()
+				}
+				c.dynamic.Image.ImageUrls = urls
+			}
+		case DynamicDescType_TextOnly:
+			c.dynamic.Type = DynamicDescType_TextOnly
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardTextOnly)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithText failed %v", err)
+				return
+			}
+			c.dynamic.Text.Content = origin.GetItem().GetContent()
+		case DynamicDescType_WithVideo:
+			c.dynamic.Type = DynamicDescType_WithVideo
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithVideo)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithVideo failed %v", err)
+				return
+			}
+			c.dynamic.Video.Title = origin.GetTitle()
+			c.dynamic.Video.Desc = origin.GetDesc()
+			c.dynamic.Video.CoverUrl = origin.GetPic()
+		case DynamicDescType_WithPost:
+			c.dynamic.Type = DynamicDescType_WithPost
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithPost)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithPost failed %v", err)
+				return
+			}
+			c.dynamic.Post.Title = origin.GetTitle()
+			c.dynamic.Post.Summary = origin.GetSummary()
+			if len(origin.GetImageUrls()) >= 1 {
+				c.dynamic.Post.ImageUrls = origin.GetImageUrls()
+			} else if len(origin.GetBannerUrl()) != 0 {
+				c.dynamic.Post.ImageUrls = []string{origin.GetBannerUrl()}
+			}
+		case DynamicDescType_WithMusic:
+			c.dynamic.Type = DynamicDescType_WithMusic
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithMusic)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithMusic failed %v", err)
+				return
+			}
+			c.dynamic.Music.Title = origin.GetTitle()
+			c.dynamic.Music.Intro = origin.GetIntro()
+			c.dynamic.Music.Author = origin.GetAuthor()
+			c.dynamic.Music.CoverUrl = origin.GetCover()
+		case DynamicDescType_WithSketch:
+			c.dynamic.Type = DynamicDescType_WithSketch
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithSketch)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithSketch failed %v", err)
+				return
+			}
+			c.dynamic.Sketch.Content = origin.GetVest().GetContent()
+			c.dynamic.Sketch.Title = origin.GetSketch().GetTitle()
+			c.dynamic.Sketch.DescText = origin.GetSketch().GetDescText()
+			if len(origin.GetSketch().GetCoverUrl()) != 0 {
+				c.dynamic.Sketch.CoverUrl = origin.GetSketch().GetCoverUrl()
+			}
+		case DynamicDescType_WithLive:
+			c.dynamic.Type = DynamicDescType_WithLive
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithLive)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithLive failed %v", err)
+				return
+			}
+			c.dynamic.Live.Title = origin.GetTitle()
+			c.dynamic.Live.CoverUrl = origin.GetCover()
+		case DynamicDescType_WithLiveV2:
+			c.dynamic.Type = DynamicDescType_WithLiveV2
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithLiveV2)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithLiveV2 failed %v", err)
+				return
+			}
+			c.dynamic.Live.Title = origin.GetLivePlayInfo().GetTitle()
+			c.dynamic.Live.CoverUrl = origin.GetLivePlayInfo().GetCover()
+		case DynamicDescType_WithMylist:
+			c.dynamic.Type = DynamicDescType_WithMylist
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithMylist)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithMylist failed %v", err)
+				return
+			}
+			c.dynamic.MyList.Title = origin.GetTitle()
+			c.dynamic.MyList.CoverUrl = origin.GetCover()
+		case DynamicDescType_WithMiss:
+			c.dynamic.Type = DynamicDescType_WithMiss
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Miss.Tips = cardOrigin.GetItem().GetTips()
+		case DynamicDescType_WithOrigin:
+			c.dynamic.Type = DynamicDescType_WithOrigin
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+		case DynamicDescType_WithCourse:
+			c.dynamic.Type = DynamicDescType_WithCourse
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			origin := new(CardWithCourse)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err != nil {
+				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithCourse failed %v", err)
+				return
+			}
+			c.dynamic.Course.Name = origin.GetUpInfo().GetName()
+			c.dynamic.Course.Badge = origin.GetBadge().GetText()
+			c.dynamic.Course.Title = origin.GetTitle()
+			c.dynamic.Course.CoverUrl = origin.GetCover()
+		default:
+			c.dynamic.Type = DynamicDescType_DynamicDescTypeUnknown
+			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			// 试试media
+			origin := new(CardWithMedia)
+			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			if err == nil && origin.GetApiSeasonInfo() != nil {
+				var desc = origin.GetNewDesc()
+				if len(desc) == 0 {
+					desc = origin.GetIndex()
+				}
+				c.dynamic.Default.TypeName = origin.GetApiSeasonInfo().GetTypeName()
+				c.dynamic.Default.Title = origin.GetApiSeasonInfo().GetTitle()
+				c.dynamic.Default.CoverUrl = origin.GetCover()
+			} else {
+				log.WithField("content", card.GetCard()).Info("found new type with origin")
+				c.dynamic.OriginUser.Name = originName
+			}
+		}
+	case DynamicDescType_WithImage:
+		c.dynamic.Type = DynamicDescType_WithImage
+		cardImage, err := card.GetCardWithImage()
+		if err != nil {
+			log.WithField("card", card).Errorf("GetCardWithImage cast failed %v", err)
+			return
+		}
+		c.dynamic.Image.Description = cardImage.GetItem().GetDescription()
+		if len(cardImage.GetItem().GetPictures()) > 0 {
+			var urls = make([]string, len(cardImage.GetItem().GetPictures()))
+			for index, pic := range cardImage.GetItem().GetPictures() {
+				urls[index] = pic.GetImgSrc()
+			}
+			c.dynamic.Image.ImageUrls = urls
+		}
+	case DynamicDescType_TextOnly:
+		c.dynamic.Type = DynamicDescType_TextOnly
+		cardText, err := card.GetCardTextOnly()
+		if err != nil {
+			log.WithField("card", card).Errorf("GetCardTextOnly cast failed %v", err)
+			return
+		}
+		c.dynamic.Content = cardText.GetItem().GetContent()
+	case DynamicDescType_WithVideo:
+		c.dynamic.Type = DynamicDescType_WithVideo
+		cardVideo, err := card.GetCardWithVideo()
+		if err != nil {
+			log.WithField("card", card).Errorf("GetCardWithVideo cast failed %v", err)
+			return
+		}
+		description := strings.TrimSpace(cardVideo.GetDynamic())
+		if description == "" {
+			description = cardVideo.GetDesc()
+		}
+		if description == cardVideo.GetTitle() {
+			description = ""
+		}
+		// web接口好像还区分不了动态视频，先不处理了
+		actionText := card.GetDisplay().GetUsrActionTxt()
+		c.dynamic.Video.Action = actionText
+		c.dynamic.Video.Title = cardVideo.GetTitle()
+		if len(description) != 0 {
+			c.dynamic.Video.Desc = description
+		}
+		c.dynamic.Video.CoverUrl = cardVideo.GetPic()
+	case DynamicDescType_WithPost:
+		c.dynamic.Type = DynamicDescType_WithPost
+		cardPost, err := card.GetCardWithPost()
+		if err != nil {
+			log.WithField("card", card).Errorf("GetCardWithPost cast failed %v", err)
+			return
+		}
+		c.dynamic.Post.Title = cardPost.Title
+		c.dynamic.Post.Summary = cardPost.Summary
+		if len(cardPost.GetImageUrls()) >= 1 {
+			c.dynamic.Post.ImageUrls = cardPost.GetImageUrls()
+		} else if len(cardPost.GetBannerUrl()) != 0 {
+			c.dynamic.Post.ImageUrls = []string{cardPost.GetBannerUrl()}
+		}
+	case DynamicDescType_WithMusic:
+		c.dynamic.Type = DynamicDescType_WithMusic
+		cardMusic, err := card.GetCardWithMusic()
+		if err != nil {
+			log.WithField("card", card).
+				Errorf("GetCardWithMusic cast failed %v", err)
+			return
+		}
+		c.dynamic.Music.Title = cardMusic.GetTitle()
+		c.dynamic.Music.Intro = cardMusic.GetIntro()
+		c.dynamic.Music.Author = cardMusic.GetAuthor()
+		c.dynamic.Music.CoverUrl = cardMusic.GetCover()
+	case DynamicDescType_WithSketch:
+		c.dynamic.Type = DynamicDescType_WithSketch
+		cardSketch, err := card.GetCardWithSketch()
+		if err != nil {
+			log.WithField("card", card).
+				Errorf("GetCardWithSketch cast failed %v", err)
+			return
+		}
+		c.dynamic.Sketch.Content = cardSketch.GetVest().GetContent()
+		if cardSketch.GetSketch().GetTitle() == cardSketch.GetSketch().GetDescText() {
+			c.dynamic.Sketch.Title = cardSketch.GetSketch().GetTitle()
+		} else {
+			c.dynamic.Sketch.Title = cardSketch.GetSketch().GetTitle()
+			c.dynamic.Sketch.DescText = cardSketch.GetSketch().GetDescText()
+		}
+		if len(cardSketch.GetSketch().GetCoverUrl()) > 0 {
+			c.dynamic.Sketch.CoverUrl = cardSketch.GetSketch().GetCoverUrl()
+		}
+	case DynamicDescType_WithLive:
+		c.dynamic.Type = DynamicDescType_WithLive
+		cardLive, err := card.GetCardWithLive()
+		if err != nil {
+			log.WithField("card", card).
+				Errorf("GetCardWithLive cast failed %v", err)
+			return
+		}
+		c.dynamic.Live.Title = cardLive.GetTitle()
+		c.dynamic.Live.CoverUrl = cardLive.GetCover()
+	case DynamicDescType_WithLiveV2:
+		c.dynamic.Type = DynamicDescType_WithLiveV2
+		// 2021-08-15 发现这个是系统推荐的直播间，应该不是人为操作，选择不推送，在filter中过滤
+		cardLiveV2, err := card.GetCardWithLiveV2()
+		if err != nil {
+			log.WithField("card", card).
+				Errorf("GetCardWithLiveV2 case failed %v", err)
+			return
+		}
+		c.dynamic.Live.Title = cardLiveV2.GetLivePlayInfo().GetTitle()
+		c.dynamic.Live.CoverUrl = cardLiveV2.GetLivePlayInfo().GetCover()
+	case DynamicDescType_WithMiss:
+		c.dynamic.Type = DynamicDescType_WithMiss
+		cardWithMiss, err := card.GetCardWithOrig()
+		if err != nil {
+			log.WithField("card", card).
+				Errorf("GetCardWithOrig case failed %v", err)
+			return
+		}
+		c.dynamic.Content = cardWithMiss.GetItem().GetContent()
+		c.dynamic.Miss.Tips = cardWithMiss.GetItem().GetTips()
+	default:
+		c.dynamic.Type = DynamicDescType_DynamicDescTypeUnknown
+		log.WithField("content", card.GetCard()).Info("found new DynamicDescType")
+	}
+
+	// 2021/04/16发现了有新增一个预约卡片
+	for _, addons := range [][]*Card_Display_AddOnCardInfo{
+		card.GetDisplay().GetAddOnCardInfo(),
+		card.GetDisplay().GetOrigin().GetAddOnCardInfo(),
+	} {
+		i := 0
+		for _, addon := range addons {
+			var addOn Addon
+			switch addon.AddOnCardShowType {
+			case AddOnCardShowType_goods:
+				addOn.Type = AddOnCardShowType_goods
+				goodsCard := new(Card_Display_AddOnCardInfo_GoodsCard)
+				if err := json.Unmarshal([]byte(addon.GetGoodsCard()), goodsCard); err != nil {
+					log.WithField("goods", addon.GetGoodsCard()).Errorf("Unmarshal goods card failed %v", err)
+					continue
+				}
+				if len(goodsCard.GetList()) == 0 {
+					continue
+				}
+				var item = goodsCard.GetList()[0]
+				addOn.Goods.AdMark = item.AdMark
+				addOn.Goods.Name = item.Name
+				addOn.Goods.ImageUrl = item.GetImg()
+			case AddOnCardShowType_reserve:
+				if len(addon.GetReserveAttachCard().GetReserveLottery().GetText()) == 0 {
+					addOn.Reserve.Title = addon.GetReserveAttachCard().GetTitle()
+					addOn.Reserve.Desc = addon.GetReserveAttachCard().GetDescFirst().GetText()
+				} else {
+					addOn.Reserve.Title = addon.GetReserveAttachCard().GetTitle()
+					addOn.Reserve.Desc = addon.GetReserveAttachCard().GetDescFirst().GetText()
+					addOn.Reserve.Lottery = addon.GetReserveAttachCard().GetReserveLottery().GetText()
+				}
+			case AddOnCardShowType_match:
+			// TODO 暂时没必要
+			case AddOnCardShowType_related:
+				aCard := addon.GetAttachCard()
+				// 游戏应该不需要
+				if aCard.GetType() != "game" {
+					addOn.Related.Type = aCard.GetType()
+					addOn.Related.Title = aCard.GetTitle()
+					addOn.Related.HeadText = aCard.GetHeadText()
+					addOn.Related.Desc = aCard.GetDescFirst()
+				}
+			case AddOnCardShowType_vote:
+				var Idx []int32
+				var Desc []string
+				textCard := new(Card_Display_AddOnCardInfo_TextVoteCard)
+				if err := json.Unmarshal([]byte(addon.GetVoteCard()), textCard); err == nil {
+					for _, opt := range textCard.GetOptions() {
+						Idx = append(Idx, opt.GetIdx())
+						Desc = append(Desc, opt.GetDesc())
+					}
+				} else {
+					log.WithField("content", addon.GetVoteCard()).Info("found new VoteCard")
+				}
+				addOn.Vote.Index = Idx
+				addOn.Vote.Desc = Desc
+			case AddOnCardShowType_video:
+				ugcCard := addon.GetUgcAttachCard()
+				addOn.Video.Title = ugcCard.GetTitle()
+				addOn.Video.CoverUrl = ugcCard.GetImageUrl()
+				addOn.Video.Desc = ugcCard.GetDescSecond()
+				addOn.Video.PlayUrl = ugcCard.GetPlayUrl()
+			default:
+				if b, err := json.Marshal(card.GetDisplay()); err != nil {
+					log.WithField("content", card).Errorf("found new AddOnCardShowType but marshal failed %v", err)
+				} else {
+					log.WithField("content", string(b)).Info("found new AddOnCardShowType")
+				}
+			}
+			c.dynamic.Addons = append(c.dynamic.Addons, addOn)
+			i++
+		}
+	}
+	c.dynamic.DynamicUrl = dynamicUrl
+}
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
-	c.once.Do(c.prepare)
+	c.once.Do(func() {
+		c.prepare()
+		var data = map[string]interface{}{
+			"dynamic": c.dynamic,
+		}
+		var err error
+		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)
+		if err != nil {
+			logger.Errorf("bilibili: NewsInfo LoadAndExec error %v", err)
+		}
+		return
+	})
 	return c.msgCache
 }

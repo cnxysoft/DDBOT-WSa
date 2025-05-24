@@ -1,7 +1,7 @@
 package youtube
 
 import (
-	"github.com/Sora233/DDBOT/internal/test"
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -17,7 +17,7 @@ func TestVideoInfo(t *testing.T) {
 	assert.Equal(t, Video, vi.Type())
 	assert.True(t, vi.IsVideo())
 
-	info := NewInfo([]*VideoInfo{vi})
+	info := NewInfo([]*VideoInfo{vi}, false)
 	assert.NotNil(t, info)
 
 	notify := NewConcernNotify(test.G1, vi)

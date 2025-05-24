@@ -1,6 +1,6 @@
 package acfun
 
-import "github.com/Sora233/DDBOT/lsp/concern"
+import "github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 
 type GroupConcernConfig struct {
 	concern.IConfig

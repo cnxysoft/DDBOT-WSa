@@ -64,6 +64,8 @@ type (
 		Nickname string
 		Remark   string
 		FaceId   int16
+
+		client *QQClient
 		// msgSeqList *utils.Cache
 	}
 
@@ -387,4 +389,8 @@ func (r *NewFriendRequest) Accept() {
 
 func (r *NewFriendRequest) Reject() {
 	r.client.SolveFriendRequest(r, false)
+}
+
+func (f *FriendInfo) Poke() {
+	f.client.SendFriendPoke(f.Uin)
 }

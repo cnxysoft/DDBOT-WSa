@@ -7,7 +7,7 @@ import (
 	"unicode"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/requests"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/samber/lo"
 )
 

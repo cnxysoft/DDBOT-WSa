@@ -6,7 +6,7 @@
 
 ## 预编译版本
 
-从 [Release](https://github.com/Sora233/DDBOT/releases) 中下载适合您的版本，版本规则：
+从 [Release](https://github.com/cnxysoft/DDBOT-WSa/releases) 中下载适合您的版本，版本规则：
 
 - 根据系统选择windows / linux / darwin
 - 根据架构选择 32位->386 / 64位->amd64 / arm->arm
@@ -227,6 +227,17 @@ twitcasting:
   # 自定义名称显示，日文字太多很大机会风控
   # 例如 "(如何显示) 正在直播""
   nameStrategy: "name" # 如何显示名称, name= 显示用户名称, userid= 显示用户ID, both= 显示 "用户名称 (用户ID)"
+
+# 支持使用多个nitter镜像，默认使用官方镜像（第三方镜像可能有额外校验）
+# 使用lightbrd镜像请自行先访问https://lightbrd.com/进行cookies的获取
+# 填入你访问网站时提交的user_agent，可在浏览器中查看
+# 填入你访问网站后得到的cf_clearance，可在浏览器中查看
+twitter:
+  baseurl:
+    - "https://nitter.net/"
+  interval: 300s # 查询间隔，过快可能导致ip被暂时封禁
+  useragent:
+  cfclearance:
 
 concern:
   emitInterval: 5s # 订阅的刷新频率，5s表示每5秒刷新一个ID，过快可能导致ip被暂时封禁

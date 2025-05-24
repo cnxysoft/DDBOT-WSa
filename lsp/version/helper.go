@@ -1,7 +1,7 @@
 package version
 
 import (
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/tidwall/buntdb"
 )
 

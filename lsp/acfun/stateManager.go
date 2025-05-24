@@ -2,8 +2,8 @@ package acfun
 
 import (
 	"errors"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/concern"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/tidwall/buntdb"
 )
 

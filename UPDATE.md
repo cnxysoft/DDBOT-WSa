@@ -1,4 +1,48 @@
 ## DDBOT最近更新日志
+- 2025-05-20 0.3.9(Wsa)
+  - 支持Twitter订阅
+  - 支持Twitter多个镜像源
+  - 支持twitter镜像的m3u8视频推送
+    - 需自行准备ffmpeg并放在程序目录或加入环境变量
+  - 兼容Youtube新、老ID订阅
+  - 修复HTTP服务允许重复创建的问题
+  - 修改更新检查服务器
+  - 还原部分原始函数
+  - 修复B站关注和直播推送失效
+  - 修复群组、私聊戳一戳报错
+  - 兼容ws-plugin的at操作和错误提示
+  - 删除模板函数link，请使用join代替
+  - 为bilibili直播推送模板增加直播分区变量
+    - 模板变量： area_name、parent_area_name
+  - 支持自定义bilibili动态推送模板
+    - 名称：notify.group.bilibili.news.tmpl
+    - 模板变量 .dynamic（详细结构请看文档）
+  - 支持自定义私聊无效指令触发模板
+    - 名称：command.private.unknown_cmd_tips.tmpl
+    - 模板变量：cmd、args、full_args、help_cmd
+  - 新增群文件上传事件并支持自定义模板
+    - 名称：trigger.group.upload.tmpl
+    - 模板变量：group_code、member_code、member_name、file_name、file_size、file_id、file_url、file_busId
+  - 新增BOT离线通知模板
+    - 名称：notify.bot.offline.tmpl
+    - 模板变量：无
+    - 本模板没有自带，需要自行创建，示例可去文档中寻找，且需注意以下几点：
+      - 1. 本模板在heartbeat事件中触发，需要在BOT实现启用心跳上报。
+      - 2. 本模板会在每次上报离线时触发，所以需要为模板设置冷却，避免重复通知。
+  - 新增模板函数
+    - 下载文件到本地
+      - downloadFile(url string, path string, filename string) string
+        - 支持设置Headers、Cookies、UA等参数（详见TEMPLATE.md中http特殊参数一节）
+    - 遍历输出给定目录下的文件列表
+      - lsDir(path string, recursive bool) []string
+        - 支持遍历子目录
+    - 获取Element类型
+      - getEleType(ele interface{}) string
+        - 获取ele类型，返回：image、file、unknown
+    - 新增一种Json转换函数
+      - toJson(v interface{}) []byte
+        - 支持多种类型到json uint8的转换
+
 - 2025-03-31 0.3.8(Wsa)
   - 修复群文件上传事件导致的消息处理错误
   - 将动态相关图片接口恢复（下载并调整大小后发送）

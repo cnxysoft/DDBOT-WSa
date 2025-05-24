@@ -1,12 +1,13 @@
 # DDBOT
 
-[<img src="https://github.com/Sora233/DDBOT/actions/workflows/ci.yml/badge.svg"/>](https://github.com/Sora233/DDBOT/actions/workflows/ci.yml)
+[<img src="https://github.com/cnxysoft/DDBOT-WSa/actions/workflows/ci.yml/badge.svg"/>](https://github.com/cnxysoft/DDBOT-WSa/actions/workflows/ci.yml)
 [<img src="https://coveralls.io/repos/github/Sora233/DDBOT/badge.svg?branch=master"/>](https://coveralls.io/github/Sora233/DDBOT)
-[![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](https://pkg.go.dev/github.com/Sora233/DDBOT)
+[![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](https://pkg.go.dev/github.com/cnxysoft/DDBOT-WSa)
 
 DDBOT-WSa 是基于 DDBOT-ws 的修改版本，目的是恢复DDBOT的原有功能。
 新增的模板函数以及事件（触发）等其它更详细的更动见更新日志和[DDBOT部署教程](https://ddbot.songlist.icu)。
 目前已经兼容：LLOnebot / NapCat / Lagrange。
+新增对推特推送的支持（实验阶段）
 
 **目前已经修复所有的主要指令（奇奇怪怪的指令没测试）。**
 
@@ -162,7 +163,7 @@ DDBOT已实现消息模板功能，一些内置命令和推送可通过模板自
 
 您也可以选择点一下右上角的⭐星⭐
 
-发现问题或功能建议请到 [issues](https://github.com/Sora233/DDBOT/issues)
+发现问题或功能建议请到 [issues](https://github.com/cnxysoft/DDBOT-WSa/issues)
 
 其他用法问题请到**交流群：755612788（已满）、980848391**
 

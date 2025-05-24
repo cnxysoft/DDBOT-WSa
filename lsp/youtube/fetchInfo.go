@@ -6,21 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Jeffail/gabs/v2"
-	"github.com/Sora233/DDBOT/proxy_pool"
-	"github.com/Sora233/DDBOT/requests"
-	"github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// 老的 channelID 订阅
-// const VideoPath1 = "https://www.youtube.com/channel/%s/videos?view=57&flow=grid"
-// const VideoPath2 = "https://www.youtube.com/channel/%s/streams?view=57&flow=grid"
-// 新的 UID 订阅
-const VideoPath1 = "https://www.youtube.com/%s/videos?view=57&flow=grid"
-const VideoPath2 = "https://www.youtube.com/%s/streams?view=57&flow=grid"
+const (
+	// 老的 channelID 订阅
+	VideoPathOld  = "https://www.youtube.com/channel/%s/videos?view=57&flow=grid"
+	StreamPathOld = "https://www.youtube.com/channel/%s/streams?view=57&flow=grid"
+	// 新的 UID 订阅
+	VideoPathNew  = "https://www.youtube.com/%s/videos?view=57&flow=grid"
+	StreamPathNew = "https://www.youtube.com/%s/streams?view=57&flow=grid"
+)
 
 type Searcher struct {
 	Sub []*gabs.Container
@@ -70,6 +72,24 @@ func extractData(content []byte) (*gabs.Container, error) {
 	return gabs.ParseJSON(result[reg.SubexpIndex("json")])
 }
 
+func YPatch(channelID string, video bool) string {
+	var baseUrl string
+	if strings.HasPrefix(channelID, "@") {
+		if video {
+			baseUrl = VideoPathNew
+		} else {
+			baseUrl = StreamPathNew
+		}
+	} else {
+		if video {
+			baseUrl = VideoPathOld
+		} else {
+			baseUrl = StreamPathOld
+		}
+	}
+	return fmt.Sprintf(baseUrl, channelID)
+}
+
 // XFetchInfo very sb
 func XFetchInfo(channelID string) ([]*VideoInfo, error) {
 	log := logger.WithField("channel_id", channelID)
@@ -91,7 +111,7 @@ func XFetchInfo(channelID string) ([]*VideoInfo, error) {
 
 	// 处理第一次请求
 	{
-		path := fmt.Sprintf(VideoPath1, channelID)
+		path := YPatch(channelID, true)
 		body := new(bytes.Buffer)
 		if err := requests.Get(path, nil, body, opts...); err != nil {
 			return nil, err
@@ -103,7 +123,7 @@ func XFetchInfo(channelID string) ([]*VideoInfo, error) {
 
 	// 处理第二次请求
 	{
-		path := fmt.Sprintf(VideoPath2, channelID)
+		path := YPatch(channelID, false)
 		body := new(bytes.Buffer)
 		if err := requests.Get(path, nil, body, opts...); err != nil {
 			return nil, err

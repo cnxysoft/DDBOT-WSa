@@ -77,6 +77,8 @@ func builtins() FuncMap {
 		"record":             record,
 		"file":               file,
 		"remoteDownloadFile": remoteDownloadFile,
+		"getMsg":             getMsg,
+		"getFileUrl":         getFileUrl,
 
 		// DDBOT common
 		"hour":          hour,
@@ -103,6 +105,8 @@ func builtins() FuncMap {
 		"uriEncode":     uriEncode,
 		"uriDecode":     uriDecode,
 		"loop":          loop,
+		"lsDir":         lsDir,
+		"getEleType":    getEleType,
 
 		// cast
 		"float64": toFloat64,
@@ -171,12 +175,12 @@ func builtins() FuncMap {
 		"split":      func(sep, orig string) []string { return strings.Split(orig, sep) },
 		"join":       join,
 		"trunc":      trunc,
+		"reTrunc":    reTrunc,
 		"replace":    strings.Replace,
 		"replaceAll": func(old, new, str string) string { return strings.ReplaceAll(str, old, new) },
 		"find":       strings.Index,
 		"findLast":   strings.LastIndex,
 		"count":      strings.Count,
-		"link":       func(a, b string) string { return a + b },
 
 		"snakecase": xstrings.ToSnakeCase,
 		"camelcase": xstrings.ToCamelCase,
@@ -220,9 +224,11 @@ func builtins() FuncMap {
 		"httpGet":      httpGet,
 		"httpPostJson": httpPostJson,
 		"httpPostForm": httpPostForm,
+		"downloadFile": downloadFile,
 
-		// gjson
+		// json
 		"toGJson": toGJson,
+		"toJson":  toJson,
 
 		// Comparisons
 		"eq": eq, // ==

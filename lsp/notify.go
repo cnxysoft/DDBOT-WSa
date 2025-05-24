@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/utils"
-	"github.com/Sora233/DDBOT/utils/msgstringer"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/sirupsen/logrus"
 )
 

@@ -10,25 +10,25 @@ import (
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/image_pool"
-	"github.com/Sora233/DDBOT/image_pool/local_pool"
-	"github.com/Sora233/DDBOT/image_pool/lolicon_pool"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/cfg"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/lsp/permission"
-	"github.com/Sora233/DDBOT/lsp/template"
-	"github.com/Sora233/DDBOT/lsp/version"
-	"github.com/Sora233/DDBOT/proxy_pool"
-	"github.com/Sora233/DDBOT/proxy_pool/local_proxy_pool"
-	"github.com/Sora233/DDBOT/proxy_pool/py"
-	localutils "github.com/Sora233/DDBOT/utils"
-	"github.com/Sora233/DDBOT/utils/msgstringer"
 	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
+	"github.com/cnxysoft/DDBOT-WSa/image_pool"
+	"github.com/cnxysoft/DDBOT-WSa/image_pool/local_pool"
+	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/version"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/local_proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/py"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/fsnotify/fsnotify"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/robfig/cron/v3"
@@ -644,6 +644,28 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 	})
 
+	bot.GroupUploadNotifyEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupUploadNotifyEvent) {
+		data := map[string]interface{}{
+			"member_code": event.Sender,
+			"group_code":  event.GroupCode,
+			"file_name":   event.File.FileName,
+			"file_size":   event.File.FileSize,
+			"file_id":     event.File.FileId,
+			"file_url":    event.File.FileUrl,
+			"file_busId":  event.File.BusId,
+		}
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			data["group_name"] = gi.Name
+			if fi := gi.FindMember(event.Sender); fi != nil {
+				data["member_name"] = fi.DisplayName()
+			}
+		}
+		m, _ := template.LoadAndExec("trigger.group.upload.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, event.Sender, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
+		}
+	})
+
 	bot.GroupMemberPermissionChangedEvent.Subscribe(func(qqClient *client.QQClient, event *client.MemberPermissionChangedEvent) {
 		// 群名片更新通知
 		data := map[string]interface{}{
@@ -675,6 +697,11 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if m != nil && l.DebugCheck(event.Group.Code, event.Member.Uin, true) {
 			l.SendMsg(m, mmsg.NewGroupTarget(event.Group.Code))
 		}
+	})
+
+	bot.BotOfflineEvent.Subscribe(func(qqClient *client.QQClient, event *client.BotOfflineEvent) {
+		data := map[string]interface{}{}
+		_, _ = template.LoadAndExec("notify.bot.offline.tmpl", data)
 	})
 
 }

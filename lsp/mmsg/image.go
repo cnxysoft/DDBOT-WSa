@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/requests"
-	"github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 type ImageBytesElement struct {
@@ -139,7 +139,7 @@ func (i *ImageBytesElement) Type() message.ElementType {
 
 func (i *ImageBytesElement) PackToElement(target Target) message.IMessageElement {
 	if i == nil {
-		return message.NewText("[空图片]\n")
+		return message.NewText("[nil image]\n")
 	} else if i.Url != "" {
 		var base64Text string
 		if strings.HasPrefix(i.Url, "http://") || strings.HasPrefix(i.Url, "https://") {
@@ -149,6 +149,9 @@ func (i *ImageBytesElement) PackToElement(target Target) message.IMessageElement
 		}
 		return message.NewText(base64Text)
 	} else if i.Buf == nil {
+		if target.TargetType() == TargetGroup && target.TargetCode() == 0 {
+			return message.NewText("test\n")
+		}
 		logger.Debugf("TargetPrivate %v nil image buf", target.TargetCode())
 		return nil
 	}
@@ -179,6 +182,4 @@ func (i *ImageBytesElement) PackToElement(target Target) message.IMessageElement
 	// default:
 	// 	panic("ImageBytesElement PackToElement: unknown TargetType")
 	// }
-
-	return message.NewText(base64Text)
 }

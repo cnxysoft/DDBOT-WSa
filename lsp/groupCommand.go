@@ -2,8 +2,8 @@ package lsp
 
 import (
 	"fmt"
-	"github.com/Sora233/DDBOT/lsp/concern"
-	"github.com/Sora233/DDBOT/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"go.uber.org/atomic"
 	"math/rand"
 	"runtime/debug"
@@ -13,16 +13,16 @@ import (
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/image_pool"
-	"github.com/Sora233/DDBOT/image_pool/lolicon_pool"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
-	"github.com/Sora233/DDBOT/lsp/mmsg"
-	"github.com/Sora233/DDBOT/lsp/permission"
-	"github.com/Sora233/DDBOT/utils"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
 	"github.com/alecthomas/kong"
+	"github.com/cnxysoft/DDBOT-WSa/image_pool"
+	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
 

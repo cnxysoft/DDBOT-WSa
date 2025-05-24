@@ -2,7 +2,7 @@ package mmsg
 
 import (
 	"github.com/Mrs4s/MiraiGo/message"
-	localutils "github.com/Sora233/DDBOT/utils"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 // PokeElement 戳一戳
@@ -31,7 +31,11 @@ func (p *PokeElement) PackToElement(target Target) message.IMessageElement {
 		}
 		fi.Poke()
 	case TargetPrivate:
-		// not supported
+		fi := localutils.GetBot().FindFriend(target.TargetCode())
+		if fi == nil {
+			return nil
+		}
+		fi.Poke()
 	}
 	return nil
 }

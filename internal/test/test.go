@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
-	localdb "github.com/Sora233/DDBOT/lsp/buntdb"
-	"github.com/Sora233/DDBOT/lsp/concern_type"
 	"github.com/Sora233/MiraiGo-Template/bot"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )

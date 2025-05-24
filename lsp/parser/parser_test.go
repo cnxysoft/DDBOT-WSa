@@ -2,8 +2,8 @@ package parser
 
 import (
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/DDBOT/internal/test"
-	"github.com/Sora233/DDBOT/utils"
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sora233/DDBOT/proxy_pool"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/guonaihong/gout"
 	"github.com/guonaihong/gout/dataflow"
 	"github.com/guonaihong/gout/middler"
@@ -17,6 +17,7 @@ import (
 type RespHeader struct {
 	ContentDisposition string `header:"Content-Disposition"`
 	ContentLength      string `header:"Content-Length"`
+	ContentEncoding    string `header:"Content-Encoding"`
 }
 
 var logger = utils.GetModuleLogger("request")
@@ -38,6 +39,7 @@ type option struct {
 	ResponseMiddleware  []middler.ResponseMiddler
 	AutoHeaderHost      bool
 	NotIgnoreEmpty      bool
+	Transport           *http.Transport
 }
 
 func (o *option) getGout() *gout.Client {
@@ -54,6 +56,11 @@ func (o *option) getGout() *gout.Client {
 	if o.CookieJar != nil {
 		goutOpts = append(goutOpts, gout.WithClient(&http.Client{
 			Jar: o.CookieJar,
+		}))
+	}
+	if o.Transport != nil {
+		goutOpts = append(goutOpts, gout.WithClient(&http.Client{
+			Transport: o.Transport,
 		}))
 	}
 	df := gout.NewWithOpt(goutOpts...)
@@ -172,6 +179,12 @@ func NotIgnoreEmptyOption() Option {
 func WithCookieJar(jar http.CookieJar) Option {
 	return func(o *option) {
 		o.CookieJar = jar
+	}
+}
+
+func WithTransport(tran *http.Transport) Option {
+	return func(o *option) {
+		o.Transport = tran
 	}
 }
 
