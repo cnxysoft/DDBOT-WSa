@@ -2149,7 +2149,7 @@ func (c *QQClient) wsInit(ws *websocket.Conn, mode string) {
 			time.Sleep(time.Second * 5)
 			for msg := range eventbus.BusObj.Subscribe("bot_online") {
 				if m, ok := msg.(bool); ok {
-					if !c.oldOnline.Load() && m {
+					if !c.oldOnline.Load() && m && len(offlineQueue) > 0 {
 						c.OnReconnect()
 					}
 				}
