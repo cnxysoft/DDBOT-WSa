@@ -180,6 +180,15 @@ func httpGet(url string, oParams ...map[string]interface{}) (body []byte) {
 	return
 }
 
+func httpHead(url string, oParams ...map[string]interface{}) (headers requests.RespHeader) {
+	params, opts := preProcess(oParams)
+	err := requests.Head(url, params, &headers, opts...)
+	if err != nil {
+		logger.Errorf("template: httpHead error %v", err)
+	}
+	return
+}
+
 func httpPostJson(url string, oParams ...map[string]interface{}) (body []byte) {
 	params, opts := preProcess(oParams)
 	err := requests.PostJson(url, params, &body, opts...)

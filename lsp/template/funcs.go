@@ -237,6 +237,7 @@ func builtins() FuncMap {
 
 		// http
 		"httpGet":       httpGet,
+		"httpHead":      httpHead,
 		"httpPostJson":  httpPostJson,
 		"httpPostForm":  httpPostForm,
 		"downloadFile":  downloadFile,
