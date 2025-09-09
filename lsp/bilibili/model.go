@@ -1,9 +1,6 @@
 package bilibili
 
 import (
-	"strings"
-	"sync"
-
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -12,6 +9,8 @@ import (
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
+	"strings"
+	"sync"
 )
 
 type NewsInfo struct {
@@ -101,6 +100,7 @@ type LiveInfo struct {
 	AreaName       string     `json:"area_name"`
 	ParentAreaId   int32      `json:"parent_area_id"`
 	ParentAreaName string     `json:"parent_area_name"`
+	LiveTime       int64      `json:"live_time"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -205,7 +205,7 @@ func NewUserInfo(mid, roomId int64, name, url, face string) *UserInfo {
 	}
 }
 
-func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status LiveStatus) *LiveInfo {
+func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status LiveStatus, liveTime int64) *LiveInfo {
 	if userInfo == nil {
 		return nil
 	}
@@ -214,6 +214,7 @@ func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status Live
 		Status:    status,
 		LiveTitle: liveTitle,
 		Cover:     cover,
+		LiveTime:  liveTime,
 	}
 }
 
