@@ -235,3 +235,8 @@ var reHtmlTag = regexp.MustCompile(`<[^>]+>`)
 func RemoveHtmlTag(s string) string {
 	return reHtmlTag.ReplaceAllString(s, "")
 }
+
+func ParseTime(s string) (time.Time, error) {
+	t, err := time.ParseInLocation(time.DateTime, s, time.Local)
+	return t, err
+}

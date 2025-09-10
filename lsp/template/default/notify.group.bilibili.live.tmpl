@@ -1,9 +1,11 @@
 {{ if .living -}}
 {{ .name }}正在直播【{{ .title }}】
 直播分区：{{ .parent_area_name }} - {{ .area_name }}
+开始时间：{{ getTime .live_time "" }}
 {{ .url -}}
 {{ pic .cover "[封面]" }}
 {{- else -}}
 {{ .name }}直播结束了
+直播时长：{{ getTime .live_time "elapsed" }}
 {{ pic .cover "[封面]" }}
 {{- end -}}

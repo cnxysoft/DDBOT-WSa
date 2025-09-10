@@ -56,11 +56,11 @@ func TestConcern_FindUserLiving(t *testing.T) {
 
 	c := initConcern(t)
 
-	origLiveInfo := NewLiveInfo(nil, "", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(nil, "", "", LiveStatus_Living, 0)
 	assert.Nil(t, origLiveInfo)
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
-	origLiveInfo = NewLiveInfo(origUserInfo, "", "", LiveStatus_Living)
+	origLiveInfo = NewLiveInfo(origUserInfo, "", "", LiveStatus_Living, 0)
 	assert.NotNil(t, origLiveInfo)
 
 	err := c.AddLiveInfo(origLiveInfo)
@@ -176,7 +176,7 @@ func TestConcernNotify(t *testing.T) {
 	assert.Nil(t, err)
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
-	origLiveInfo := NewLiveInfo(origUserInfo, "mytitle", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(origUserInfo, "mytitle", "", LiveStatus_Living, 0)
 	origLiveInfo.liveStatusChanged = true
 
 	select {
@@ -243,7 +243,7 @@ func TestConcern_GroupWatchNotify(t *testing.T) {
 	assert.Nil(t, err)
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
-	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living, 0)
 	assert.NotNil(t, origLiveInfo)
 
 	assert.Nil(t, c.AddLiveInfo(origLiveInfo))

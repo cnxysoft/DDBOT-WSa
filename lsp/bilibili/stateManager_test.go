@@ -50,7 +50,7 @@ func TestStateManager_GetLiveInfo(t *testing.T) {
 	c := initStateManager(t)
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
-	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living, 0)
 	assert.NotNil(t, origLiveInfo)
 
 	err := c.AddLiveInfo(origLiveInfo)
@@ -124,7 +124,7 @@ func TestStateManager_DeleteNewsAndLiveInfo(t *testing.T) {
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
 	origNewsInfo := NewNewsInfo(origUserInfo, test.DynamicID1, test.TIMESTAMP1)
-	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living, 0)
 	assert.NotNil(t, origNewsInfo)
 	assert.NotNil(t, origLiveInfo)
 
@@ -218,7 +218,7 @@ func TestStateManager_ClearByMid(t *testing.T) {
 
 	origUserInfo := NewUserInfo(test.UID1, test.ROOMID1, test.NAME1, "")
 	origNewsInfo := NewNewsInfo(origUserInfo, test.DynamicID1, test.TIMESTAMP1)
-	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living)
+	origLiveInfo := NewLiveInfo(origUserInfo, "", "", LiveStatus_Living, 0)
 	assert.NotNil(t, origNewsInfo)
 	assert.NotNil(t, origLiveInfo)
 
