@@ -130,6 +130,7 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"living":           l.Living(),
 			"parent_area_name": l.ParentAreaName,
 			"area_name":        l.AreaName,
+			"live_time":        l.LiveTime,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
