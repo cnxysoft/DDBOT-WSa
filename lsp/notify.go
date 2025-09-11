@@ -32,9 +32,6 @@ func (l *Lsp) ConcernNotify() {
 			if _inotify == nil {
 				continue
 			}
-			if !online {
-
-			}
 			var inotify = _inotify
 			target := mmsg.NewGroupTarget(inotify.GetGroupCode())
 			nLogger := inotify.Logger()

@@ -12,6 +12,8 @@ type Hook interface {
 	// 例如上播推送，下播推送
 	// 如果要根据推送的文案、内容判断，则应该使用 FilterHook
 	ShouldSendHook(notify Notify) *HookResult
+	// ShouldEnableHook 根据 Notify 本身的状态决定是否启用增强推送
+	ShouldEnableHook(notify Notify) *HookResult
 }
 
 // HookResult 定义了 Hook 的结果，Pass是false的时候，要把具体失败的地方填入Reason

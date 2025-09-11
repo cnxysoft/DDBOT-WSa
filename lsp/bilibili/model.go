@@ -101,6 +101,7 @@ type LiveInfo struct {
 	ParentAreaId   int32      `json:"parent_area_id"`
 	ParentAreaName string     `json:"parent_area_name"`
 	LiveTime       int64      `json:"live_time"`
+	ExtendNotify   bool       `json:"extend_notify"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -131,6 +132,7 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"parent_area_name": l.ParentAreaName,
 			"area_name":        l.AreaName,
 			"live_time":        l.LiveTime,
+			"extend_notify":    l.ExtendNotify,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
@@ -151,6 +153,10 @@ func (l *LiveInfo) LiveStatusChanged() bool {
 }
 
 func (l *LiveInfo) IsLive() bool {
+	return true
+}
+
+func (l *LiveInfo) SupportExtendNotify() bool {
 	return true
 }
 
