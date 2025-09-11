@@ -327,6 +327,11 @@ func (c *LspPrivateCommand) ConfigCommand() {
 			Id     string `arg:"" help:"配置的主播id"`
 			Switch string `arg:"" default:"off" enum:"on,off," help:"on / off"`
 		} `cmd:"" help:"配置下播时是否进行推送，默认不推送" name:"offline_notify"`
+		ExtendNotify struct {
+			Site   string `optional:"" short:"s" default:"bilibili" help:"网站参数"`
+			Id     string `arg:"" help:"配置的主播id"`
+			Switch string `arg:"" default:"off" enum:"on,off," help:"on / off"`
+		} `cmd:"" help:"配置是否启用增强推送，默认不启用" name:"extend_notify"`
 		Filter struct {
 			Site string `optional:"" short:"s" default:"bilibili" help:"网站参数"`
 			Type struct {
@@ -412,6 +417,16 @@ func (c *LspPrivateCommand) ConfigCommand() {
 		var on = localutils.Switch2Bool(configCmd.OfflineNotify.Switch)
 		log = log.WithField("site", site).WithField("id", configCmd.OfflineNotify.Id).WithField("on", on)
 		IConfigOfflineNotifyCmd(c.NewMessageContext(log), groupCode, configCmd.OfflineNotify.Id, site, ctype, on)
+	case "extend_notify":
+		site, ctype, err := c.ParseRawSiteAndType(configCmd.ExtendNotify.Site, "live")
+		if err != nil {
+			log.WithField("site", configCmd.ExtendNotify.Site).Errorf("ParseRawSiteAndType failed %v", err)
+			c.textSend(fmt.Sprintf("失败 - %v", err.Error()))
+			return
+		}
+		var on = localutils.Switch2Bool(configCmd.ExtendNotify.Switch)
+		log = log.WithField("site", site).WithField("id", configCmd.ExtendNotify.Id).WithField("on", on)
+		IConfigExtendNotifyCmd(c.NewMessageContext(log), groupCode, configCmd.ExtendNotify.Id, site, ctype, on)
 	case "filter":
 		filterCmd := kongPath[1]
 		site, ctype, err := c.ParseRawSiteAndType(configCmd.Filter.Site, "news")

@@ -554,6 +554,18 @@ func IConfigOfflineNotifyCmd(c *MessageContext, groupCode int64, id string, site
 	}
 }
 
+func IConfigExtendNotifyCmd(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type, on bool) {
+	err := iConfigCmd(c, groupCode, id, site, ctype, operateExtendNotifyConcernConfig(c, ctype, on))
+	if localdb.IsRollback(err) || permission.IsPermissionError(err) {
+		return
+	}
+	if err != nil {
+		c.TextReply(err.Error())
+	} else {
+		ReplyUserInfo(c, id, site, ctype)
+	}
+}
+
 func IConfigFilterCmdType(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type, types []string) {
 	err := configCmdGroupCommonCheck(c, groupCode)
 	if err == nil {
@@ -863,6 +875,31 @@ func operateOfflineNotifyConcernConfig(c *MessageContext, ctype concern_type.Typ
 				return false
 			} else {
 				concernConfig.GetGroupConcernNotify().OfflineNotify = concernConfig.GetGroupConcernNotify().OfflineNotify.Add(ctype)
+				return true
+			}
+		}
+	}
+}
+
+func operateExtendNotifyConcernConfig(c *MessageContext, ctype concern_type.Type, on bool) func(concernConfig concern.IConfig) bool {
+	return func(concernConfig concern.IConfig) bool {
+		if concernConfig.GetGroupConcernNotify().CheckExtendNotify(ctype) {
+			if on {
+				// 配置推送，但已经配置过了
+				c.TextReply("失败 - 已经配置过了")
+				return false
+			} else {
+				// 取消配置推送
+				concernConfig.GetGroupConcernNotify().ExtendNotify = concernConfig.GetGroupConcernNotify().ExtendNotify.Remove(ctype)
+				return true
+			}
+		} else {
+			if !on {
+				// 取消配置，但并没有配置
+				c.TextReply("失败 - 该配置未设置")
+				return false
+			} else {
+				concernConfig.GetGroupConcernNotify().ExtendNotify = concernConfig.GetGroupConcernNotify().ExtendNotify.Add(ctype)
 				return true
 			}
 		}

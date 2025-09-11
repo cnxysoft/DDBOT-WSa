@@ -329,7 +329,11 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 			} else {
 				log.WithFields(localutils.GroupLogFields(groupCode)).Error("unknown live status")
 			}
-			result = append(result, NewConcernLiveNotify(groupCode, event))
+			inotify := NewConcernLiveNotify(groupCode, event)
+			if extend := c.StateManager.IsExtendNotify(inotify); extend {
+				event.ExtendNotify = true
+			}
+			result = append(result, inotify)
 		case *NewsInfo:
 			notifies := NewConcernNewsNotify(groupCode, event, c)
 			log.WithFields(localutils.GroupLogFields(groupCode)).
