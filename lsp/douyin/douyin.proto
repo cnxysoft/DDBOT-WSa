@@ -801,6 +801,18 @@ message UserPostsResponse {
     string points = 6; // 如果 points 是 null 或字符串
   }
 
+  message Images {
+    string uri = 1;
+    repeated string url_list = 2;
+    repeated string download_url_list = 3;
+    int32 height = 4;
+    int32 width = 5;
+    repeated string mask_url_list = 6;
+    repeated string interaction_stickers = 7;
+    int32 is_new_text_mode = 8;
+    repeated string watermark_free_download_url_list = 9;
+  }
+
   message Aweme_list {
     string aweme_id = 1;
     string desc = 2;
@@ -883,7 +895,7 @@ message UserPostsResponse {
     int32 guide_btn_type = 79;
     int32 is_moment_history = 80;
     int32 personal_page_botton_diagnose_style = 81;
-    google.protobuf.Any images = 82;
+    repeated Images images = 82;
     google.protobuf.Any relation_labels = 83;
     int32 horizontal_type = 84;
     int32 is_moment_story = 85;
@@ -898,7 +910,7 @@ message UserPostsResponse {
     Comment_permission_info comment_permission_info = 94;
     google.protobuf.Any original_images = 95;
     Series_paid_info series_paid_info = 96;
-    google.protobuf.Any img_bitrate = 97;
+    repeated int64 img_bitrate = 97;
     int64 comment_gid = 98;
     Image_album_music_info image_album_music_info = 99;
     repeated Video_tag video_tag = 100;
@@ -940,13 +952,14 @@ message UserPostsResponse {
     google.protobuf.Any reply_smart_emojis = 136;
     int32 activity_video_type = 137;
     int32 boost_status = 138;
-    google.protobuf.Any create_scale_type = 139;
+    repeated string create_scale_type = 139;
     Entertainment_product_info entertainment_product_info = 140;
     string caption = 141;
     string item_title = 142;
     bool is_use_music = 143;
     int32 original = 144;
     Xigua_base_info xigua_base_info = 145;
+    int32 category_da = 146;
   }
 
   message Log_pb {
