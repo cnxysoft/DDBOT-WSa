@@ -189,7 +189,18 @@ func DouyinFreshKey(keys ...interface{}) string {
 func DouyinCurrentLiveKey(keys ...interface{}) string {
 	return NamedKey("DouyinCurrentLive", keys)
 }
-
+func DouyinDynamicIdKey(keys ...interface{}) string {
+	return NamedKey("DouyinDynamicId", keys)
+}
+func DouyinNotifyMsgKey(keys ...interface{}) string {
+	return NamedKey("DouyinNotifyMsg", keys)
+}
+func DouyinCompactMarkKey(keys ...interface{}) string {
+	return NamedKey("DouyinCompactMark", keys)
+}
+func DouyinUidFirstTimestampKey(keys ...interface{}) string {
+	return NamedKey("DouyinUidFirstTimestamp", keys)
+}
 func PermissionKey(keys ...interface{}) string {
 	return NamedKey("Permission", keys)
 }

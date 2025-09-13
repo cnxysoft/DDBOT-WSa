@@ -150,3 +150,7 @@ func GetNotifyParallel() int {
 func GetBilibiliOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("bilibili.onlyOnlineNotify")
 }
+
+func GetDouyinOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("douyin.onlyOnlineNotify")
+}

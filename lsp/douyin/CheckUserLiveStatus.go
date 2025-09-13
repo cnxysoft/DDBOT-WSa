@@ -7,7 +7,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 )
 
-const PathCheckUserLiveStatus = "/webcast/distribution/check_user_live_status"
+const PathCheckUserLiveStatus = "/webcast/distribution/check_user_live_status/"
 
 type LiveStatus struct {
 	StatusCode int `json:"status_code"`

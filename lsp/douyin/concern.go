@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"golang.org/x/sync/errgroup"
 	"math/rand"
 	"net/http/cookiejar"
 	"time"
@@ -27,36 +32,94 @@ const (
 	Site = "douyin"
 	// 这个插件支持的订阅类型可以像这样自定义，然后在 Types 中返回
 	Live concern_type.Type = "live"
+	News concern_type.Type = "news"
 	// 当像这样定义的时候，支持 /watch -s mysite -t type1 id
 	// 当实现的时候，请修改上面的定义
 	// API Base URL
 	BaseHost     = "https://www.douyin.com"
 	BaseLiveHost = "https://live.douyin.com"
 	ErrNotFound  = "not found"
+
+	CompactExpireTime = time.Minute * 60
 )
 
 var (
 	logger   = utils.GetModuleLogger(ConcernName)
 	Cookie   *cookiejar.Jar
+	online   bool
 	BasePath = map[string]string{
 		PathGetUserInfo:         BaseHost,
 		PathCheckUserLiveStatus: BaseLiveHost,
+		PathGetUserPosts:        BaseHost,
 	}
 )
 
 type StateManager struct {
 	*concern.StateManager
-	extraKey
+	*ExtraKey
+	concern *Concern
 }
 
 // GetGroupConcernConfig 重写 concern.StateManager 的GetGroupConcernConfig方法，让我们自己定义的 GroupConcernConfig 生效
 func (d *StateManager) GetGroupConcernConfig(groupCode int64, id interface{}) concern.IConfig {
-	return NewGroupConcernConfig(d.StateManager.GetGroupConcernConfig(groupCode, id))
+	return NewGroupConcernConfig(d.StateManager.GetGroupConcernConfig(groupCode, id), d.concern)
+}
+
+func (c *StateManager) SetUidFirstTimestampIfNotExist(uid string, timestamp int64) error {
+	return c.SetInt64(c.UidFirstTimestamp(uid), timestamp, localdb.SetNoOverWriteOpt())
+}
+
+func (c *StateManager) UnsetUidFirstTimestamp(uid string) error {
+	_, err := c.Delete(c.UidFirstTimestamp(uid))
+	return err
+}
+
+func (c *StateManager) GetUidFirstTimestamp(uid string) (timestamp int64, err error) {
+	return c.GetInt64(c.UidFirstTimestamp(uid))
+}
+
+func (c *StateManager) SetGroupCompactMarkIfNotExist(groupCode int64, compactKey string) error {
+	return c.Set(c.CompactMarkKey(groupCode, compactKey), "",
+		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
+}
+
+func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage) error {
+	tmp := &message.GroupMessage{
+		Id:        msg.Id,
+		GroupCode: msg.GroupCode,
+		Sender:    msg.Sender,
+		Time:      msg.Time,
+		Elements: localutils.MessageFilter(msg.Elements, func(e message.IMessageElement) bool {
+			return e.Type() == message.Text || e.Type() == message.Image
+		}),
+	}
+	value, err := localutils.SerializationGroupMsg(tmp)
+	if err != nil {
+		return err
+	}
+	return c.Set(c.NotifyMsgKey(tmp.GroupCode, notifyKey), value,
+		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
+}
+
+func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message.GroupMessage, error) {
+	value, err := c.Get(c.NotifyMsgKey(groupCode, notifyKey))
+	if err != nil {
+		return nil, err
+	}
+	return localutils.DeserializationGroupMsg(value)
+}
+
+func (c *StateManager) MarkDynamicId(dynamic string) (bool, error) {
+	var isOverwrite bool
+	err := c.Set(c.DynamicIdKey(dynamic), "",
+		localdb.SetExpireOpt(time.Hour*120), localdb.SetGetIsOverwriteOpt(&isOverwrite))
+	return isOverwrite, err
 }
 
 type Concern struct {
 	*StateManager
-	notify chan<- concern.Notify
+	notify       chan<- concern.Notify
+	cacheStartTs int64
 }
 
 func (d *Concern) Site() string {
@@ -64,7 +127,7 @@ func (d *Concern) Site() string {
 }
 
 func (d *Concern) Types() []concern_type.Type {
-	return []concern_type.Type{Live}
+	return []concern_type.Type{Live, News}
 }
 
 func (d *Concern) ParseId(s string) (interface{}, error) {
@@ -135,7 +198,12 @@ func (d *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype c
 	}
 	_, err = d.GetStateManager().AddGroupConcern(groupCode, id, ctype)
 	if err != nil {
-		return nil, err
+		log.Errorf("AddGroupConcern error %v", err)
+		return nil, fmt.Errorf("关注用户失败 - 内部错误")
+	}
+	err = d.StateManager.SetUidFirstTimestampIfNotExist(uid, time.Now().Add(-time.Second*30).Unix())
+	if err != nil && !localdb.IsRollback(err) {
+		log.Errorf("SetUidFirstTimestampIfNotExist failed %v", err)
 	}
 	if ctype.ContainAny(Live) {
 		// 其他群关注了同一uid，并且推送过Living，那么给新watch的群也推一份
@@ -238,6 +306,13 @@ func (d *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 			} else {
 				log.WithFields(localutils.GroupLogFields(groupCode)).Trace("noliving notify")
 			}
+		case *NewsInfo:
+			notifies := NewConcernNewsNotify(groupCode, event, d)
+			log.WithFields(localutils.GroupLogFields(groupCode)).
+				WithField("Size", len(notifies)).Trace("news notify")
+			for _, notify := range notifies {
+				result = append(result, notify)
+			}
 		default:
 			logger.Errorf("unknown EventType %+v", event.Type().String())
 		}
@@ -269,11 +344,16 @@ func (d *Concern) fresh() concern.FreshFunc {
 				return
 			}
 			var start = time.Now()
-			err := func() error {
-				defer func() { logger.WithField("cost", time.Now().Sub(start)).Tracef("watchCore live fresh done") }()
+			var errGroup errgroup.Group
+
+			errGroup.Go(func() error {
+				defer func() {
+					logger.WithField("cost", time.Now().Sub(start)).
+						Tracef("watchCore live fresh done")
+				}()
 				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Live) })
 				for _, userId := range ids {
-					events, err := d.freshLiveInfo(Live, userId)
+					events, err := d.freshInfo(Live, userId)
 					if err != nil {
 						continue
 					}
@@ -283,7 +363,28 @@ func (d *Concern) fresh() concern.FreshFunc {
 					time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
 				}
 				return nil
-			}()
+			})
+
+			errGroup.Go(func() error {
+				defer func() {
+					logger.WithField("cost", time.Now().Sub(start)).
+						Tracef("watchCore dynamic fresh done")
+				}()
+				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(News) })
+				for _, userId := range ids {
+					events, err := d.freshInfo(News, userId)
+					if err != nil {
+						continue
+					}
+					for _, e := range events {
+						eventChan <- e
+					}
+					time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
+				}
+				return nil
+			})
+
+			err := errGroup.Wait()
 			end := time.Now()
 			if err == nil {
 				logger.WithField("cost", end.Sub(start)).Tracef("watchCore loop done")
@@ -295,14 +396,15 @@ func (d *Concern) fresh() concern.FreshFunc {
 	}
 }
 
-func (d *Concern) freshLiveInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {
+func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {
+	var start = time.Now()
 	var result []concern.Event
 	userId := id.(string)
+	usrInfo, err := d.FindOrLoadUserInfo(userId)
+	if err != nil {
+		logger.Errorf("查找用户信息失败：%v", err)
+	}
 	if ctype.ContainAll(Live) {
-		usrInfo, err := d.FindOrLoadUserInfo(userId)
-		if err != nil {
-			logger.Errorf("查找用户信息失败：%v", err)
-		}
 		isLive, err := FreshLiveStatus(usrInfo.Uid)
 		if err != nil {
 			return nil, err
@@ -350,6 +452,36 @@ func (d *Concern) freshLiveInfo(ctype concern_type.Type, id interface{}) ([]conc
 			return nil, err
 		}
 	}
+	if ctype.ContainAll(News) {
+		resp, err := GetPosts(usrInfo.SecUid)
+		if err != nil {
+			return nil, err
+		}
+		if resp.GetStatusCode() != 0 {
+			logger.WithField("RespCode", resp.GetStatusCode()).
+				Errorf("DynamicSvrDynamicNew failed")
+			return nil, fmt.Errorf("DynamicSvrDynamicNew failed %v", resp.GetStatusCode())
+		}
+		var resCards []*UserPostsResponse_AwemeList
+		logger.WithField("cost", time.Now().Sub(start)).Trace("freshDynamicNew cost 1")
+		for i, card := range resp.GetAwemeList() {
+			if i == 0 {
+				usrInfo.NikeName = card.GetAuthor().GetNickname()
+			}
+			if d.filterCard(card) {
+				resCards = append(resCards, card)
+			}
+		}
+		result = append(result, NewNewsInfoWithDetail(usrInfo, resCards))
+		logger.WithField("cost", time.Now().Sub(start)).
+			WithField("NewsInfo Size", len(result)).
+			Trace("freshDynamicNew done")
+	}
+	err = d.AddUserInfo(usrInfo)
+	if err != nil {
+		logger.Errorf("内部错误 - 用户信息更新失败：%v", err)
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -383,6 +515,7 @@ func SetRequestOptions() []requests.Option {
 		requests.RequestAutoHostOption(),
 		requests.CookieOption("__ac_signature", AcSignature),
 		requests.CookieOption("__ac_nonce", AcNonce),
+		requests.CookieOption("sessionid", SessionId),
 		requests.HeaderOption("Connection", "keep-alive"),
 		requests.HeaderOption("Accept", "*/*"),
 		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br, zstd"),
@@ -404,6 +537,18 @@ func (d *Concern) Start() error {
 	// 下面两个函数是订阅的关键，需要实现，请阅读文档
 	d.StateManager.UseFreshFunc(d.fresh())
 	d.StateManager.UseNotifyGeneratorFunc(d.notifyGenerator())
+	go func() {
+		for msg := range eventbus.BusObj.Subscribe("bot_online") {
+			if m, ok := msg.(bool); ok {
+				if !online && m {
+					d.cacheStartTs = time.Now().Unix()
+					logger.Info("BOT已上线，刷新抖音订阅模块启动时间")
+				}
+				online = m
+			}
+			logger.Debugf("模块 DOUYIN 收到：bot_online: %v", msg)
+		}
+	}()
 	return d.StateManager.Start()
 }
 
@@ -419,9 +564,44 @@ func (d *Concern) GetStateManager() concern.IStateManager {
 	return d.StateManager
 }
 
+func (c *Concern) filterCard(card *UserPostsResponse_AwemeList) bool {
+	uid := card.GetAuthor().GetSecUid()
+	// 应该用dynamic_id_str
+	// 但好像已经没法保持向后兼容同时改动了
+	// 只能相信概率论了，出问题的概率应该比较小，出问题会导致推送丢失
+	replaced, err := c.MarkDynamicId(card.GetAwemeId())
+	if err != nil {
+		logger.WithField("uid", uid).
+			WithField("dynamicId", card.GetAwemeId()).
+			Errorf("MarkDynamicId error %v", err)
+		return false
+	}
+	if replaced {
+		return false
+	}
+	var tsLimit int64
+	if cfg.GetDouyinOnlyOnlineNotify() {
+		tsLimit = c.cacheStartTs
+	} else {
+		tsLimit, err = c.StateManager.GetUidFirstTimestamp(uid)
+		if err != nil {
+			return true
+		}
+	}
+	if int64(card.GetCreateTime()) < tsLimit {
+		logger.WithField("uid", uid).
+			WithField("dynamicId", card.GetAwemeId()).
+			Trace("past news skip")
+		return false
+	}
+	return true
+}
+
 func NewConcern(notifyChan chan<- concern.Notify) *Concern {
 	// 默认是string格式的id
-	sm := &StateManager{StateManager: concern.NewStateManagerWithStringID(Site, notifyChan)}
+	c := &Concern{notify: notifyChan}
+	sm := &StateManager{StateManager: concern.NewStateManagerWithStringID(Site, notifyChan), concern: c, ExtraKey: NewExtraKey()}
 	// 如果要使用int64格式的id，可以用下面的
-	return &Concern{sm, notifyChan}
+	c.StateManager = sm
+	return c
 }

@@ -11,6 +11,7 @@ var (
 	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
 	AcSignature = ""
 	AcNonce     = ""
+	SessionId   = ""
 	Stop        = false
 )
 
@@ -22,6 +23,7 @@ func setCookies() {
 	ua := config.GlobalConfig.GetString("douyin.userAgent")
 	as := config.GlobalConfig.GetString("douyin.acSignature")
 	an := config.GlobalConfig.GetString("douyin.acNonce")
+	si := config.GlobalConfig.GetString("douyin.sessionId")
 	Cookie, _ = cookiejar.New(nil)
 	if ua != "" {
 		UserAgent = ua
@@ -35,6 +37,9 @@ func setCookies() {
 		AcNonce = an
 	} else {
 		Stop = true
+	}
+	if si != "" {
+		SessionId = si
 	}
 }
 
