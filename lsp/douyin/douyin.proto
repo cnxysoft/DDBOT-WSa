@@ -3,132 +3,48 @@ package douyin;
 
 option go_package = "lsp/douyin";
 
-import "google/protobuf/any.proto";
-
+ // 精简后的UserPostsResponse定义，只保留推送和可视化所需的关键字段
 message UserPostsResponse {
-
-  message Avatar_thumb {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Share_qrcode_url {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Share_info {
-    string share_url = 1;
-    string share_weibo_desc = 2;
-    string share_desc = 3;
-    string share_title = 4;
-    Share_qrcode_url share_qrcode_url = 5;
-    string share_title_myself = 6;
-    string share_title_other = 7;
-    string share_desc_info = 8;
-  }
-
-  message Cover_url {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Story_ring {
-    int32 version = 1;
-    repeated google.protobuf.Any story_rings = 2;
-  }
-
+  // 作者信息
   message Author {
     string uid = 1;
-    google.protobuf.Any card_entries_not_display = 2;
     string nickname = 3;
-    google.protobuf.Any personal_tag_list = 4;
-    google.protobuf.Any can_set_geofencing = 5;
-    Avatar_thumb avatar_thumb = 6;
-    google.protobuf.Any creator_tag_list = 7;
-    string risk_notice_text = 8;
-    int32 follow_status = 9;
-    google.protobuf.Any data_label_list = 10;
-    int32 story_interactive = 11;
-    google.protobuf.Any not_seen_item_id_list_v2 = 12;
-    string custom_verify = 13;
-    google.protobuf.Any ban_user_functions = 14;
-    google.protobuf.Any cf_list = 15;
-    google.protobuf.Any interest_tags = 16;
-    google.protobuf.Any private_relation_list = 17;
-    google.protobuf.Any need_points = 18;
-    Share_info share_info = 19;
-    google.protobuf.Any white_cover_url = 20;
-    google.protobuf.Any endorsement_info_list = 21;
-    google.protobuf.Any homepage_bottom_toast = 22;
-    string enterprise_verify_reason = 23;
-    bool is_ad_fake = 24;
-    int32 story_ttl = 25;
-    google.protobuf.Any user_permissions = 26;
-    google.protobuf.Any display_info = 27;
-    string account_cert_info = 28;
-    google.protobuf.Any offline_info_list = 29;
-    google.protobuf.Any contrail_list = 30;
-    google.protobuf.Any card_sort_priority = 31;
-    bool prevent_download = 32;
-    google.protobuf.Any familiar_visitor_user = 33;
-    google.protobuf.Any user_tags = 34;
-    google.protobuf.Any text_extra = 35;
-    int32 follower_status = 36;
-    google.protobuf.Any verification_permission_ids = 37;
-    google.protobuf.Any avatar_schema_list = 38;
-    google.protobuf.Any profile_mob_params = 39;
-    repeated Cover_url cover_url = 40;
-    google.protobuf.Any im_role_ids = 41;
-    google.protobuf.Any not_seen_item_id_list = 42;
-    google.protobuf.Any special_people_labels = 43;
-    google.protobuf.Any signature_extra = 44;
-    google.protobuf.Any follower_list_secondary_information_struct = 45;
-    google.protobuf.Any card_entries = 46;
-    Story_ring story_ring = 47;
-    google.protobuf.Any batch_unfollow_relation_desc = 48;
-    google.protobuf.Any profile_component_disabled = 49;
-    google.protobuf.Any identity_labels = 50;
-    google.protobuf.Any link_item_list = 51;
-    google.protobuf.Any batch_unfollow_contain_tabs = 52;
+    AvatarThumb avatar_thumb = 6;
     string sec_uid = 53;
   }
 
-  message Cover_hd {
+  // 头像信息
+  message AvatarThumb {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
     int32 height = 4;
   }
 
-  message Cover_large {
+  // 音乐信息
+  message Music {
+    int64 id = 1;
+    string id_str = 2;
+    string title = 3;
+    string author = 4;
+    string album = 5;
+    CoverThumb cover_thumb = 9;
+    PlayUrl play_url = 10;
+    int32 duration = 15;
+    string owner_nickname = 23;
+    bool is_original = 24;
+  }
+
+  // 封面信息
+  message CoverThumb {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
     int32 height = 4;
   }
 
-  message Cover_medium {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Cover_thumb {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Play_url {
+  // 播放地址信息
+  message PlayUrl {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
@@ -136,121 +52,20 @@ message UserPostsResponse {
     string url_key = 5;
   }
 
-  message Avatar_thumb1 {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
+  // 视频信息
+  message Video {
+    PlayAddr play_addr = 1;
+    Cover cover = 2;
+    int32 height = 3;
+    int32 width = 4;
+    DynamicCover dynamic_cover = 5;
+    OriginCover origin_cover = 6;
+    string ratio = 7;
+    int32 duration = 12;
   }
 
-  message Avatar_medium {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Avatar_large {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Search_impr {
-    string entity_id = 1;
-  }
-
-  message Matched_pgc_sound {
-    string author = 1;
-    string title = 2;
-    string mixed_title = 3;
-    string mixed_author = 4;
-    Cover_medium cover_medium = 5;
-  }
-
-  message Song {
-    int64 id = 1;
-    string id_str = 2;
-    google.protobuf.Any artists = 3;
-    google.protobuf.Any chorus_v3_infos = 4;
-  }
-
-  message Music {
-    int64 id = 1;
-    string id_str = 2;
-    string title = 3;
-    string author = 4;
-    string album = 5;
-    Cover_hd cover_hd = 6;
-    Cover_large cover_large = 7;
-    Cover_medium cover_medium = 8;
-    Cover_thumb cover_thumb = 9;
-    Play_url play_url = 10;
-    string schema_url = 11;
-    int32 source_platform = 12;
-    int32 start_time = 13;
-    int32 end_time = 14;
-    int32 duration = 15;
-    string extra = 16;
-    int32 user_count = 17;
-    google.protobuf.Any position = 18;
-    int32 collect_stat = 19;
-    int32 status = 20;
-    string offline_desc = 21;
-    string owner_id = 22;
-    string owner_nickname = 23;
-    bool is_original = 24;
-    string mid = 25;
-    int32 binded_challenge_id = 26;
-    bool redirect = 27;
-    bool is_restricted = 28;
-    bool author_deleted = 29;
-    bool is_del_video = 30;
-    bool is_video_self_see = 31;
-    string owner_handle = 32;
-    google.protobuf.Any author_position = 33;
-    bool prevent_download = 34;
-    google.protobuf.Any unshelve_countries = 35;
-    int32 prevent_item_download_status = 36;
-    repeated google.protobuf.Any external_song_info = 37;
-    string sec_uid = 38;
-    Avatar_thumb1 avatar_thumb = 39;
-    Avatar_medium avatar_medium = 40;
-    Avatar_large avatar_large = 41;
-    float preview_start_time = 42;
-    int32 preview_end_time = 43;
-    bool is_commerce_music = 44;
-    bool is_original_sound = 45;
-    int32 audition_duration = 46;
-    int32 shoot_duration = 47;
-    int32 reason_type = 48;
-    repeated google.protobuf.Any artists = 49;
-    google.protobuf.Any lyric_short_position = 50;
-    bool mute_share = 51;
-    google.protobuf.Any tag_list = 52;
-    bool dmv_auto_show = 53;
-    bool is_pgc = 54;
-    bool is_matched_metadata = 55;
-    bool is_audio_url_with_cookie = 56;
-    google.protobuf.Any music_chart_ranks = 57;
-    bool can_background_play = 58;
-    int32 music_status = 59;
-    int32 video_duration = 60;
-    int32 pgc_music_type = 61;
-    int32 author_status = 62;
-    Search_impr search_impr = 63;
-    google.protobuf.Any artist_user_infos = 64;
-    int32 dsp_status = 65;
-    google.protobuf.Any musician_user_infos = 66;
-    int32 music_collect_count = 67;
-    string music_cover_atmosphere_color_value = 68;
-    bool show_origin_clip = 69;
-    Matched_pgc_sound matched_pgc_sound = 70;
-    Song song = 71;
-  }
-
-  message Play_addr {
+  // 播放地址
+  message PlayAddr {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
@@ -258,9 +73,9 @@ message UserPostsResponse {
     string url_key = 5;
     int32 data_size = 6;
     string file_hash = 7;
-    string file_cs = 8;
   }
 
+  // 封面
   message Cover {
     string uri = 1;
     repeated string url_list = 2;
@@ -268,712 +83,61 @@ message UserPostsResponse {
     int32 height = 4;
   }
 
-  message Dynamic_cover {
+  // 动态封面
+  message DynamicCover {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
     int32 height = 4;
   }
 
-  message Origin_cover {
+  // 原始封面
+  message OriginCover {
     string uri = 1;
     repeated string url_list = 2;
     int32 width = 3;
     int32 height = 4;
   }
 
-  message Play_addr1 {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-    string url_key = 5;
-    int32 data_size = 6;
-    string file_hash = 7;
-    string file_cs = 8;
-  }
-
-  message Bit_rate {
-    string gear_name = 1;
-    int32 quality_type = 2;
-    int32 bit_rate = 3;
-    Play_addr1 play_addr = 4;
-    int32 is_h265 = 5;
-    int32 is_bytevc1 = 6;
-    string HDR_type = 7;
-    string HDR_bit = 8;
-    int32 FPS = 9;
-    string video_extra = 10;
-    string format = 11;
-  }
-
-  message Gaussian_cover {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Play_addr_265 {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-    string url_key = 5;
-    int32 data_size = 6;
-    string file_hash = 7;
-    string file_cs = 8;
-  }
-
-  message Audio {
-    google.protobuf.Any original_sound_infos = 1;
-  }
-
-  message Play_addr_h264 {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-    string url_key = 5;
-    int32 data_size = 6;
-    string file_hash = 7;
-    string file_cs = 8;
-  }
-
-  message Raw_cover {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Big_thumbs {
-    int32 img_num = 1;
-    string uri = 2;
-    string img_url = 3;
-    int32 img_x_size = 4;
-    int32 img_y_size = 5;
-    int32 img_x_len = 6;
-    int32 img_y_len = 7;
-    double duration = 8;
-    double interval = 9;
-    string fext = 10;
-    repeated string uris = 11;
-    repeated string img_urls = 12;
-  }
-
-  message Audio_bit_rate {
-    Audio_meta audio_meta = 1;
-    int32 audio_quality = 2;
-    string audio_extra = 3; // 或者解析成 message
-  }
-
-  message Audio_meta {
-    Url_list url_list = 1;
-    string encoded_type = 2;
-    string media_type = 3;
-    string logo_type = 4;
-    string quality = 5;
-    string quality_desc = 6;
-    string format = 7;
-    int32 bitrate = 8;
-    string codec_type = 9;
-    int64 size = 10;
-    int32 fps = 11;
-    string file_id = 12;
-    string file_hash = 13;
-    string sub_info = 14; // 或者解析成 message
-  }
-
-  message Url_list {
-    string main_url = 1;
-    string backup_url = 2;
-    string fallback_url = 3;
-  }
-
-  message Video {
-    Play_addr play_addr = 1;
-    Cover cover = 2;
-    int32 height = 3;
-    int32 width = 4;
-    Dynamic_cover dynamic_cover = 5;
-    Origin_cover origin_cover = 6;
-    string ratio = 7;
-    string format = 8;
-    string meta = 9;
-    int32 is_source_HDR = 10;
-    repeated Bit_rate bit_rate = 11;
-    int32 duration = 12;
-    repeated Audio_bit_rate bit_rate_audio = 13;
-    Gaussian_cover gaussian_cover = 14;
-    Play_addr_265 play_addr_265 = 15;
-    Audio audio = 16;
-    Play_addr_h264 play_addr_h264 = 17;
-    Raw_cover raw_cover = 18;
-    int32 is_long_video = 19;
-    int32 horizontal_type = 20;
-    string misc_download_addrs = 21;
-    repeated Big_thumbs big_thumbs = 22;
-    string video_model = 23;
-    bool use_static_cover = 24;
-  }
-
+  // 统计信息
   message Statistics {
-    int32 recommend_count = 1;
     int32 comment_count = 2;
     int32 digg_count = 3;
-    int32 admire_count = 4;
     int32 play_count = 5;
     int32 share_count = 6;
     int32 collect_count = 7;
   }
 
-  message Review_result {
-    int32 review_status = 1;
-  }
-
+  // 状态信息
   message Status {
-    string not_allow_soft_del_reason = 1;
     bool is_delete = 2;
     bool allow_share = 3;
-    Review_result review_result = 4;
-    bool allow_friend_recommend_guide = 5;
-    int32 part_see = 6;
-    int32 private_status = 7;
-    int32 listen_video_status = 8;
-    bool in_reviewing = 9;
-    bool allow_self_recommend_to_friend = 10;
-    bool allow_friend_recommend = 11;
-    bool is_prohibited = 12;
-    int32 enable_soft_delete = 13;
   }
 
-  message Text_extra {
-    int32 start = 1;
-    int32 end = 2;
-    int32 type = 3;
-    string hashtag_name = 4;
-    string hashtag_id = 5;
-    bool is_commerce = 6;
-    int32 caption_start = 7;
-    int32 caption_end = 8;
-  }
-
-  message Share_info1 {
-    string share_url = 1;
-    string share_link_desc = 2;
-  }
-
-  message Series_basic_info {
-  }
-
-  message Follow_shoot_clip_info {
-    int64 clip_video_all = 1;
-    int64 clip_from_user = 2;
-  }
-
-  message Risk_infos {
-    bool vote = 1;
-    bool warn = 2;
-    bool risk_sink = 3;
-    int32 type = 4;
-    string content = 5;
-    int32 warn_level = 6;
-    string icon_url = 7;
-  }
-
-  message Special_info {
-    int32 recommend_group_name = 1;
-  }
-
-  message Product_genre_info {
-    Special_info special_info = 1;
-    int32 product_genre_type = 2;
-    repeated int32 material_genre_sub_type_set = 3;
-  }
-
-  message Galileo_pad_textcrop {
-    repeated int32 ipad_d_h_cut_ratio = 1;
-    repeated int32 ipad_d_v_cut_ratio = 2;
-    repeated int32 android_d_h_cut_ratio = 3;
-    repeated int32 android_d_v_cut_ratio = 4;
-    int32 version = 5;
-  }
-
-  message Aweme_listen_struct {
-    string trace_info = 1;
-  }
-
-  message Component_control {
-    string data_source_url = 1;
-  }
-
-  message Label_user_list {
-    User user = 1;
-    int64 recommend_time = 2;
-    int32 recommend_app_id = 3;
-  }
-
-  message User {
-    int64 uid = 1;
-    Avatar avatar = 2;
-    string nickname = 3;
-    Avatar avatar_thumb = 4;
-    int32 follow_status = 5;
-    string sec_uid = 6;
-  }
-
-  message Avatar {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Friend_recommend_info {
-    int32 friend_recommend_source = 1;
-    repeated Label_user_list label_user_list = 2;
-    bool disable_friend_recommend_guide_label = 3;
-  }
-
-  message Fail_info {
-    int32 code = 1;
-    string reason = 2;
-    string msg = 3;
-  }
-
-  message Download_info {
-    int32 level = 1;
-    Fail_info fail_info = 2;
-  }
-
-  message Fail_info1 {
-    int32 code = 1;
-    string reason = 2;
-  }
-
-  message Duet_info {
-    int32 level = 1;
-    Fail_info1 fail_info = 2;
-  }
-
-  message Timer_info {
-    int32 public_time = 1;
-    int32 timer_status = 2;
-  }
-
-  message Video_control {
-    bool allow_download = 1;
-    int32 share_type = 2;
-    int32 show_progress_bar = 3;
-    int32 draft_progress_bar = 4;
-    bool allow_duet = 5;
-    bool allow_react = 6;
-    int32 prevent_download_type = 7;
-    bool allow_dynamic_wallpaper = 8;
-    int32 timer_status = 9;
-    bool allow_music = 10;
-    bool allow_stitch = 11;
-    bool allow_douplus = 12;
-    bool allow_share = 13;
-    bool share_grayed = 14;
-    bool download_ignore_visibility = 15;
-    bool duet_ignore_visibility = 16;
-    bool share_ignore_visibility = 17;
-    Download_info download_info = 18;
-    Duet_info duet_info = 19;
-    bool allow_record = 20;
-    string disable_record_reason = 21;
-    Timer_info timer_info = 22;
-  }
-
-  message Aweme_control {
-    bool can_forward = 1;
-    bool can_share = 2;
-    bool can_comment = 3;
-    bool can_show_comment = 4;
-  }
-
-  message Cover_url1 {
-    string uri = 1;
-    repeated string url_list = 2;
-    int32 width = 3;
-    int32 height = 4;
-  }
-
-  message Status1 {
-    int32 status = 1;
-    int32 is_collected = 2;
-  }
-
-  message Statis {
-    int32 play_vv = 1;
-    int32 collect_vv = 2;
-    int32 current_episode = 3;
-    int32 updated_to_episode = 4;
-  }
-
-  message Share_info2 {
-    string share_url = 1;
-    string share_weibo_desc = 2;
-    string share_desc = 3;
-    string share_title = 4;
-    string share_title_myself = 5;
-    string share_title_other = 6;
-    string share_desc_info = 7;
-  }
-
-  message Mix_info {
-    string mix_id = 1;
-    string mix_name = 2;
-    Cover_url1 cover_url = 3;
-    Status1 status = 4;
-    Statis statis = 5;
-    string desc = 6;
-    string extra = 7;
-    Share_info2 share_info = 8;
-    int32 mix_type = 9;
-    int32 create_time = 10;
-    int32 update_time = 11;
-    google.protobuf.Any ids = 12;
-    string watched_item = 13;
-    int32 is_serial_mix = 14;
-    int32 mix_pic_type = 15;
-    int32 enable_ad = 16;
-    int32 is_iaa = 17;
-    google.protobuf.Any paid_episodes = 18;
-  }
-
-  message Entertainment_video_paid_way {
-    repeated google.protobuf.Any paid_ways = 1;
-    int32 paid_type = 2;
-    bool enable_use_new_ent_data = 3;
-  }
-
-  message Ent_log_extra {
-    string log_extra = 1;
-  }
-
-  message Publish_plus_alienation {
-    int32 alienation_type = 1;
-  }
-
-  message Impression_data {
-    repeated int64 group_id_list_a = 1;
-    repeated int64 group_id_list_b = 2;
-    repeated int64 similar_id_list_a = 3;
-    repeated int64 similar_id_list_b = 4;
-    repeated int64 group_id_list_c = 5;
-    repeated int64 group_id_list_d = 6;
-  }
-
-  message Game_name_tag {
-    int64 tag_id = 1;
-    string tag_name = 2;
-    //repeated google.protobuf.Any game_id_list = 3;
-  }
-
-  message Content_type_tag {
-    int64 tag_id = 1;
-    string tag_name = 2;
-  }
-
-  message Game_tag_info {
-    bool is_game = 1;
-    Game_name_tag game_name_tag = 2;
-    Content_type_tag content_type_tag = 3;
-  }
-
-  message Show_follow_button {
-  }
-
-  message Comment_permission_info {
-    int32 comment_permission_status = 1;
-    bool can_comment = 2;
-    bool item_detail_entry = 3;
-    bool press_entry = 4;
-    bool toast_guide = 5;
-  }
-
-  message Series_paid_info {
-    int32 series_paid_status = 1;
-    int32 item_price = 2;
-  }
-
-  message Image_album_music_info {
-    int32 begin_time = 1;
-    int32 end_time = 2;
-    int32 volume = 3;
-  }
-
-  message Video_tag {
-    int32 tag_id = 1;
-    string tag_name = 2;
-    int32 level = 3;
-  }
-
-  message Feed_comment_config {
-    string input_config_text = 1;
-    int32 author_audit_status = 2;
-    string common_flags = 3;
-  }
-
-  message Photo_search_entrance {
-    int32 ecom_type = 1;
-  }
-
-  message Activities {
-    int32 id = 1;
-    int32 type = 2;
-  }
-
-  message Danmaku_control {
-    bool enable_danmaku = 1;
-    int32 post_privilege_level = 2;
-    bool is_post_denied = 3;
-    string post_denied_reason = 4;
-    bool skip_danmaku = 5;
-    int32 danmaku_cnt = 6;
-    repeated Activities activities = 7;
-    string pass_through_params = 8;
-    int32 smart_mode_decision = 9;
-    int32 first_danmaku_offset = 10;
-    int32 last_danmaku_offset = 11;
-  }
-
-  message Item_warn_notification {
-    int32 type = 1;
-    bool show = 2;
-    string content = 3;
-  }
-
-  message Image_comment {
-  }
-
-  message Visual_search_info {
-    bool is_show_img_entrance = 1;
-    bool is_ecom_img = 2;
-    bool is_high_accuracy_ecom = 3;
-    bool is_high_recall_ecom = 4;
-  }
-
-  message Video_game_data_channel_config {
-  }
-
-  message Distribute_circle {
-    int32 distribute_type = 1;
-    bool campus_block_interaction = 2;
-    bool is_campus = 3;
-  }
-
-  message Play_progress {
-    int32 play_progress = 1;
-    int32 last_modified_time = 2;
-  }
-
-  message Limit_free {
-    bool in_free = 1;
-  }
-
-  message Market_info {
-    Limit_free limit_free = 1;
-    google.protobuf.Any marketing_tag = 2;
-  }
-
-  message Entertainment_product_info {
-    google.protobuf.Any sub_title = 1;
-    Market_info market_info = 2;
-  }
-
-  message Xigua_base_info {
-    int32 status = 1;
-    int32 star_altar_order_id = 2;
-    int32 star_altar_type = 3;
-    int32 item_id = 4;
-  }
-
-  message Chapter_list {
-    string desc = 1;
-    int64 timestamp = 2;
-    string desc_for_search = 3;
-    string url = 4;
-    string detail = 5;
-    string points = 6; // 如果 points 是 null 或字符串
-  }
-
-  message Images {
-    string uri = 1;
-    repeated string url_list = 2;
-    repeated string download_url_list = 3;
-    int32 height = 4;
-    int32 width = 5;
-    repeated string mask_url_list = 6;
-    repeated string interaction_stickers = 7;
-    int32 is_new_text_mode = 8;
-    repeated string watermark_free_download_url_list = 9;
-  }
-
-  message Aweme_list {
+  // 视频作品条目
+  message AwemeList {
     string aweme_id = 1;
     string desc = 2;
     int32 create_time = 3;
     Author author = 4;
     Music music = 5;
-    google.protobuf.Any ai_follow_images = 6;
     Video video = 7;
     string share_url = 8;
-    int32 user_digged = 9;
     Statistics statistics = 10;
     Status status = 11;
-    int32 flash_mob_trends = 12;
-    repeated Text_extra text_extra = 13;
-    int32 is_top = 14;
-    google.protobuf.Any mv_info = 15;
-    Share_info1 share_info = 16;
-    int32 douplus_user_type = 17;
-    google.protobuf.Any video_labels = 18;
-    string shoot_way = 19;
     bool is_ads = 20;
     int32 duration = 21;
     int32 aweme_type = 22;
-    Series_basic_info series_basic_info = 23;
-    Follow_shoot_clip_info follow_shoot_clip_info = 24;
-    google.protobuf.Any image_infos = 25;
-    Risk_infos risk_infos = 26;
-    int32 entertainment_video_type = 27;
-    google.protobuf.Any chapter_bar_color = 28;
-    google.protobuf.Any position = 29;
-    google.protobuf.Any uniqid_position = 30;
-    google.protobuf.Any comment_list = 31;
-    int64 author_user_id = 32;
-    Product_genre_info product_genre_info = 33;
-    repeated google.protobuf.Any geofencing = 34;
-    int32 cf_assets_type = 35;
-    Galileo_pad_textcrop galileo_pad_textcrop = 36;
-    string region = 37;
-    google.protobuf.Any video_text = 38;
-    int32 video_share_edit_status = 39;
-    int32 collect_stat = 40;
-    google.protobuf.Any label_top_text = 41;
-    repeated google.protobuf.Any promotions = 42;
-    string group_id = 43;
-    bool prevent_download = 44;
-    google.protobuf.Any nickname_position = 45;
-    google.protobuf.Any challenge_position = 46;
-    string trends_event_track = 47;
-    bool enable_comment_sticker_rec = 48;
-    bool mark_largely_following = 49;
-    google.protobuf.Any long_video = 50;
-    Aweme_listen_struct aweme_listen_struct = 51;
-    Component_control component_control = 52;
-    Friend_recommend_info friend_recommend_info = 53;
-    int32 caption_template_id = 54;
-    google.protobuf.Any interaction_stickers = 55;
-    bool can_cache_to_local = 56;
-    google.protobuf.Any origin_comment_ids = 57;
-    google.protobuf.Any commerce_config_data = 58;
-    google.protobuf.Any interest_points = 59;
-    Video_control video_control = 60;
-    Aweme_control aweme_control = 61;
-    int32 select_anchor_expanded_content = 62;
-    Mix_info mix_info = 63;
-    google.protobuf.Any nearby_hot_comment = 64;
-    string aweme_type_tags = 65;
-    Entertainment_video_paid_way entertainment_video_paid_way = 66;
-    google.protobuf.Any anchors = 67;
-    google.protobuf.Any hybrid_label = 68;
-    google.protobuf.Any geofencing_regions = 69;
-    int32 is_new_text_mode = 70;
-    Ent_log_extra ent_log_extra = 71;
-    int32 is_story = 72;
-    Publish_plus_alienation publish_plus_alienation = 73;
-    google.protobuf.Any trends_infos = 74;
-    int32 is_25_story = 75;
-    google.protobuf.Any cover_labels = 76;
-    bool is_from_ad_auth = 77;
-    string origin_duet_resource_uri = 78;
-    int32 guide_btn_type = 79;
-    int32 is_moment_history = 80;
-    int32 personal_page_botton_diagnose_style = 81;
-    repeated Images images = 82;
-    google.protobuf.Any relation_labels = 83;
-    int32 horizontal_type = 84;
-    int32 is_moment_story = 85;
-    Impression_data impression_data = 86;
-    Game_tag_info game_tag_info = 87;
-    int32 is_24_story = 88;
-    string libfinsert_task_id = 89;
-    google.protobuf.Any social_tag_list = 90;
-    Show_follow_button show_follow_button = 91;
-    bool duet_aggregate_in_music_tab = 92;
-    bool is_duet_sing = 93;
-    Comment_permission_info comment_permission_info = 94;
-    google.protobuf.Any original_images = 95;
-    Series_paid_info series_paid_info = 96;
-    repeated int64 img_bitrate = 97;
-    int64 comment_gid = 98;
-    Image_album_music_info image_album_music_info = 99;
-    repeated Video_tag video_tag = 100;
-    int32 is_collects_selected = 101;
-    repeated Chapter_list chapter_list = 102;
-    Feed_comment_config feed_comment_config = 103;
-    bool is_image_beat = 104;
-    google.protobuf.Any dislike_dimension_list = 105;
-    google.protobuf.Any standard_bar_info_list = 106;
-    Photo_search_entrance photo_search_entrance = 107;
-    Danmaku_control danmaku_control = 108;
-    bool is_life_item = 109;
-    google.protobuf.Any image_list = 110;
-    string component_info_v2 = 111;
-    Item_warn_notification item_warn_notification = 112;
-    google.protobuf.Any origin_text_extra = 113;
-    int32 disable_relation_bar = 114;
-    google.protobuf.Any packed_clips = 115;
-    int32 author_mask_tag = 116;
-    int32 user_recommend_status = 117;
-    int32 collection_corner_mark = 118;
-    bool is_share_post = 119;
-    Image_comment image_comment = 120;
-    Visual_search_info visual_search_info = 121;
-    google.protobuf.Any tts_id_list = 122;
-    google.protobuf.Any ref_tts_id_list = 123;
-    google.protobuf.Any voice_modify_id_list = 124;
-    google.protobuf.Any ref_voice_modify_id_list = 125;
-    string authentication_token = 126;
-    Video_game_data_channel_config video_game_data_channel_config = 127;
-    google.protobuf.Any dislike_dimension_list_v2 = 128;
-    Distribute_circle distribute_circle = 129;
-    int32 image_crop_ctrl = 130;
-    google.protobuf.Any yumme_recreason = 131;
-    google.protobuf.Any slides_music_beats = 132;
-    google.protobuf.Any jump_tab_info_list = 133;
-    int32 media_type = 134;
-    Play_progress play_progress = 135;
-    google.protobuf.Any reply_smart_emojis = 136;
-    int32 activity_video_type = 137;
-    int32 boost_status = 138;
-    repeated string create_scale_type = 139;
-    Entertainment_product_info entertainment_product_info = 140;
-    string caption = 141;
-    string item_title = 142;
-    bool is_use_music = 143;
-    int32 original = 144;
-    Xigua_base_info xigua_base_info = 145;
-    int32 category_da = 146;
   }
 
-  message Log_pb {
+  message LogPb {
     string impr_id = 1;
   }
 
   int32 status_code = 1;
-  int32 min_cursor = 2;
+  int64 min_cursor = 2;
   int64 max_cursor = 3;
   int32 has_more = 4;
-  repeated Aweme_list aweme_list = 5;
-  google.protobuf.Any time_list = 6;
-  Log_pb log_pb = 7;
-  int32 request_item_cursor = 8;
-  int32 post_serial = 9;
-  int32 replace_series_cover = 10;
+  repeated AwemeList aweme_list = 5;
+  LogPb log_pb = 7;
 }
