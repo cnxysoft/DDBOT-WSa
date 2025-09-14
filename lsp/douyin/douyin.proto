@@ -112,6 +112,13 @@ message UserPostsResponse {
   message Status {
     bool is_delete = 2;
     bool allow_share = 3;
+    ReviewResult review_result = 4;
+    bool in_reviewing = 9;
+  }
+
+  // 审核结果
+  message ReviewResult {
+    int32 review_status = 1;
   }
 
   // 视频作品条目

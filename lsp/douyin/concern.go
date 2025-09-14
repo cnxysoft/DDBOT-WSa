@@ -468,6 +468,10 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 			if i == 0 {
 				usrInfo.NikeName = card.GetAuthor().GetNickname()
 			}
+			// 遇到审核中的视频就跳过
+			if isUnderReview(card.GetStatus()) {
+				continue
+			}
 			if d.filterCard(card) {
 				resCards = append(resCards, card)
 			}

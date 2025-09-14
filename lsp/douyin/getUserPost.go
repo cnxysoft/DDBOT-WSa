@@ -47,3 +47,17 @@ func GetPosts(id string) (*UserPostsResponse, error) {
 	}
 	return posts, nil
 }
+
+func isUnderReview(s *UserPostsResponse_Status) bool {
+	if s == nil {
+		return true
+	}
+	if s.GetInReviewing() {
+		return true
+	}
+	review := s.GetReviewResult()
+	if review == nil || review.GetReviewStatus() != 0 {
+		return true
+	}
+	return false
+}
