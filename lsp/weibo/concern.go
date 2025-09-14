@@ -133,6 +133,21 @@ func (c *Concern) freshNews(uid int64) (*NewsInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FindOrLoadUserInfo error %v", err)
 	}
+	// 如果发现UID为0，重新刷新用户信息
+	if userInfo.GetUid() == int64(0) {
+		userInfo, err = c.FindUserInfo(uid, true)
+		if err != nil {
+			return nil, fmt.Errorf("user id is zero, get new user info %v", err)
+		}
+		if userInfo == nil {
+			return nil, fmt.Errorf("new userInfo is nil")
+		}
+		if userInfo.GetUid() == int64(0) {
+			userInfo.Uid = uid
+			userInfo.Name = "weibo用户"
+			logger.Warn("user id is zero, use default id")
+		}
+	}
 	if userInfo == nil {
 		return nil, fmt.Errorf("userInfo is nil")
 	}
