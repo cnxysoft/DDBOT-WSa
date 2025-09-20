@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/mitchellh/mapstructure"
 	"strings"
 )
@@ -242,6 +242,12 @@ func ParseUserInfoResp(body []byte) (*UserInfo, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+
+	// 查找 <body> 标签并判断 onload 属性
+	onload, exists := doc.Find("body").Attr("onload")
+	if exists && onload == "readygo()" {
+		return nil, errors.New("检测到人机验证，请稍后再试或尝试手动完成验证")
 	}
 
 	var userInfo *UserInfo
