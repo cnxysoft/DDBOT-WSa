@@ -10,7 +10,8 @@ import (
 )
 
 func initStateManager(t *testing.T, notifyChan chan<- concern.Notify) *StateManager {
-	sm := NewStateManager(notifyChan)
+	c := NewConcern(notifyChan)
+	sm := NewStateManager(c)
 	assert.NotNil(t, sm)
 	sm.FreshIndex(test.G1, test.G2)
 	return sm

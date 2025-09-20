@@ -22,7 +22,7 @@ func newLiveInfo(uid int64, living bool, liveStatusChanged bool, liveTitleChange
 }
 
 func TestNewGroupConcernConfig(t *testing.T) {
-	g := NewGroupConcernConfig(new(concern.GroupConcernConfig))
+	g := NewGroupConcernConfig(new(concern.GroupConcernConfig), NewConcern(concern.GetNotifyChan()))
 	assert.NotNil(t, g)
 }
 
@@ -120,7 +120,7 @@ func TestGroupConcernConfig_AtBeforeHook(t *testing.T) {
 		// 开播了改了标题 推
 		newLiveInfo(test.UID1, true, true, true),
 	}
-	var g = NewGroupConcernConfig(new(concern.GroupConcernConfig))
+	var g = NewGroupConcernConfig(new(concern.GroupConcernConfig), NewConcern(concern.GetNotifyChan()))
 	var expected = []bool{
 		false, false, false, false,
 		false, false, true, true,
