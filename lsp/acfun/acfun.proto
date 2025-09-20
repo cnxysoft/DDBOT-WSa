@@ -48,3 +48,323 @@ message LivePageResponse {
   }
   LiveInfo liveInfo = 1;
 }
+
+message ThumbnailImage {
+  repeated CdnUrl cdnUrls = 1;
+  int32 animated = 2; // 有些结构中是 int 类型
+}
+
+message CdnUrl {
+  string url = 1;
+  bool freeTrafficCdn = 2;
+  string freeTrafficProductAbbreviation = 3;
+}
+
+message ImageInfo {
+  int32 width = 1;
+  int32 height = 2;
+  int32 size = 3;
+  int32 type = 4;
+  bool animated = 5;
+  ThumbnailImage thumbnailImage = 6;
+  string thumbnailImageCdnUrl = 7;
+  ThumbnailImage smallSharedImage = 8;
+  ThumbnailImage expandedImage = 9;
+  ThumbnailImage originImage = 10;
+}
+
+message Info {
+  int32 renameCard = 1;
+  bool isEmailCheck = 2;
+  bool isMobileCheck = 3;
+  string mobile = 4;
+  string email = 5;
+  bool activeRecently = 6;
+  bool signIn = 7;
+  int32 membershipState = 8;
+  string membershipModuleDesc = 9;
+  string membershipModuleImgUrl = 10;
+  string taskModuleDesc = 11;
+  string contentCount = 12;
+  string verifiedText = 13;
+  bool nameRed = 14;
+  string headUrl = 15;
+  int32 avatarFrame = 16;
+  string avatarFrameMobileImg = 17;
+  string avatarFramePcImg = 18;
+  repeated int32 verifiedTypes = 19;
+  string followed = 20;
+  int32 nameColor = 21;
+  string experimentConfig = 22;
+  int32 firstDepositState = 23;
+  int32 verifiedType = 24;
+  string qq = 25;
+  string blog = 26;
+  string comeFrom = 27;
+  int32 sexTrend = 28;
+  int32 goldBanana = 29;
+  int32 gender = 30;
+  int64 registerTime = 31;
+  string userName = 32;
+  int32 banana = 33;
+  string avatarImage = 34;
+  bool isContractUp = 35;
+  string shareUrl = 36;
+  ImageInfo userHeadImgInfo = 37;
+  ImageInfo avatarFrameImgInfo = 38;
+  bool isRegular = 39;
+  int32 followedNum = 40;
+  string tagStowCount = 41;
+  bool isTeenagerMode = 42;
+  bool isSameCityTagAllowShown = 43;
+  bool allowShowLikeList = 44;
+  int64 userId = 45;
+  string following = 46;
+  string signature = 47;
+  int32 level = 48;
+  HonorMedal honorMedal = 49;
+}
+
+message HonorMedal {
+  // Add fields if needed
+}
+
+message UserResponse {
+  int32 result = 1;
+  Info info = 2;
+  string host_name = 3;
+}
+
+message LoginResponse {
+  int32 mobile_check = 1; // 对应 "mobile-check"
+  int32 gender = 2;
+  int32 group_level = 3; // 对应 "group-level"
+  string acPassToken = 4;
+  string mobile = 5;
+  string avatar = 6;
+  int64 auth_key = 7;
+  int64 userid = 8;
+  bool first_login = 9;
+  string token = 10;
+  int32 check_real = 11;
+  int32 result = 12;
+  string acSecurity = 13;
+  int32 check_password = 14;
+  bool passCheck = 15;
+  string username = 16;
+  string error_msg = 17;
+}
+
+message Follow {
+  string groupId = 1;
+  string groupName = 2;
+  int32 verifiedType = 3;
+  int32 gender = 4;
+  bool isFollowing = 5;
+  int32 followingStatus = 6;
+  int32 nameColor = 7;
+  repeated int32 verifiedTypes = 8;
+  string verifiedText = 9;
+  string comeFrom = 10;
+  int32 sexTrend = 11;
+  int32 contributeCount = 12;
+  string relationScore = 13;
+  int32 followingCount = 14;
+  string userImg = 15;
+  ImageInfo userHeadImgInfo = 16;
+  bool isFollowed = 17;
+  bool isSignedUpCollege = 18;
+  string userName = 19;
+  bool isFriend = 20;
+  int32 fanCount = 21;
+  SocialMedal socialMedal = 22;
+  HonorMedal honorMedal = 23;
+  string userId = 24;
+  string signature = 25;
+  string followingCountShow = 26;
+  string fanCountShow = 27;
+  string contributeCountShow = 28;
+}
+
+message SocialMedal {
+  // Add fields if needed
+}
+
+message FollowsResponse {
+  int32 result = 1;
+  string pcursor = 2;
+  repeated Follow friendList = 3;
+  string host_name = 4;
+  string error_msg = 5;
+  int32 totalCount = 6;
+}
+
+message FollowResponse {
+  int32 result = 1;
+  string error_msg = 2;
+  string host_name = 3;
+}
+
+message RelationStatusResponse {
+  int32 result = 1;
+  map<string, int32> followingStatus = 2;
+  string host_name = 3; // 对应 "host-name"
+  map<string, bool> isBlocking = 4;
+  map<string, bool> isFollowings = 5;
+  map<string, bool> isFollowed = 6;
+  string error_msg = 7;
+}
+
+message Profile {
+  int64 lastLoginTime = 1;
+  bool isContractUp = 2;
+  string thirdPartyVerifiedInfo = 3; // null 映射为可选 string
+  int32 likeCount = 4;
+  int32 gender = 5;
+  string headUrl = 6;
+  bool isFollowing = 7;
+  int32 followingStatus = 8;
+  repeated int32 verifiedTypes = 9;
+  string spaceImage = 10;
+  string avatarFramePcImg = 11;
+  string avatarFrameMobileImg = 12;
+  string contentCount = 13;
+  string verifiedText = 14;
+  string comeFrom = 15;
+  string followed = 16;
+  int32 verifiedType = 17;
+  int64 registerTime = 18;
+  string avatarImage = 19;
+  string shareUrl = 20;
+  string likeCountShow = 21;
+  ImageInfo userHeadImgInfo = 22;
+  bool isFollowed = 23;
+  ImageInfo avatarFrameImgInfo = 24;
+  ImageInfo spaceImgInfo = 25;
+  string following = 26;
+  string name = 27;
+  string signature = 28;
+  int64 userId = 29;
+}
+
+message SpaceProfileResponse {
+  int32 result = 1;
+  string error_msg = 2;
+  string host_name = 3;
+  bool enableUpdateSpaceImage = 4;
+  Profile profile = 5;
+}
+
+message FollowFeedV2Response {
+  int32 result = 1;
+  repeated FeedItem feedList = 2;
+  string pcursor = 7;
+  string host_name = 10;
+  string error_msg = 11;
+}
+
+message FeedItem {
+  string groupId = 1;
+  string caption = 2;
+  string coverUrl = 3;
+  string videoId = 5;
+  CoverImgInfo coverImgInfo = 6;
+  string playDuration = 7;
+  Channel channel = 9;
+  User user = 11;
+  int32 viewCount = 12;
+  int32 commentCount = 13;
+  int32 stowCount = 14;
+  int32 shareCount = 15;
+  int32 bananaCount = 16;
+  string shareUrl = 17;
+  int64 createTime = 26;
+  UserInfoA userInfo = 27;
+  string time = 28;
+  Detail detail = 29;
+  bool isThrowBanana = 30;
+  bool isLike = 31;
+  Moment moment = 32;
+  FeedItem repostSource = 33;
+  string discoveryResourceFeedShowContent = 34;
+  int32 discoveryResourceFeedShowImageCount = 35;
+  int64 resourceId = 36;
+}
+
+message CoverImgInfo {
+  int32 width = 1;
+  int32 height = 2;
+  string thumbnailImageCdnUrl = 10;
+}
+
+message Channel {
+  string parentName = 2;
+  string name = 3;
+  int32 id = 4;
+}
+
+message User {
+  string userHead = 1;
+  bool isFollowing = 2;
+  string userName = 7;
+  int64 userId = 8;
+  CoverImgInfo userHeadImgInfo = 9;
+}
+
+message UserInfoA {
+  int32 gender = 3;
+  string headUrl = 14;
+  string name = 24;
+  string signature = 25;
+  string id = 27;
+  int32 followingCountValue = 21;
+  int32 fanCountValue = 22;
+  int32 contributeCountValue = 23;
+}
+
+message Detail {
+  string title = 3;
+  UserInfoA user = 5;
+  int32 viewCount = 6;
+  int32 danmakuCount = 8;
+  repeated Video videoList = 9;
+  string coverUrl = 10;
+  int32 commentCount = 12;
+  int32 durationMillis = 13;
+  string dougaId = 14;
+  int32 stowCount = 15;
+  int32 shareCount = 16;
+  int32 bananaCount = 19;
+  string shareUrl = 21;
+  bool isLike = 23;
+  int64 createTimeMillis = 24;
+  string description = 38;
+  Channel channel = 40;
+}
+
+message Video {
+  string title = 5;
+  int64 uploadTime = 6;
+  int32 danmakuCount = 7;
+  int32 durationMillis = 8;
+  string id = 13;
+}
+
+message Moment {
+  string momentId = 1;
+  repeated MomentImage imgs = 2;
+  int32 commentCount = 5;
+  int32 shareCount = 8;
+  int32 bananaCount = 9;
+  string text = 11;
+  bool isThrowBanana = 12;
+  string replaceUbbText = 13;
+}
+
+message MomentImage {
+  int32 width = 1;
+  int32 height = 2;
+  string originUrl = 4;
+  string expandedUrl = 5;
+  string url = 6;
+}

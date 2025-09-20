@@ -1,0 +1,36 @@
+{{ if .msg -}}
+{{ reply .msg -}}
+{{ end -}}
+{{ $tipTxt := "发布" -}}
+{{ $orgTxt := "" -}}
+{{ if nonEmpty .repost -}}
+    {{ $tipTxt = "转发" -}}
+    {{ $orgTxt = printf "%v的" .repost.User.UserName -}}
+{{ end -}}
+{{ if ne .dynamic.VideoId "" -}}
+    {{ printf "Acfun-%v%v了%v视频：\n%v\n%v\n" .name $tipTxt $orgTxt .date .dynamic.Caption -}}
+    {{ if not .msg -}}
+        {{ pic .cover -}}
+    {{ end -}}
+{{ else if nonEmpty .moment -}}
+    {{ printf "Acfun-%v%v了%v动态：\n%v\n%v\n" .name $tipTxt $orgTxt .date .moment.ReplaceUbbText -}}
+    {{ if not .msg -}}
+        {{ range .moment.Imgs -}}
+            {{ pic .Url -}}
+        {{ end -}}
+    {{ end -}}
+{{ end -}}
+{{ if not .msg -}}
+    {{ if nonEmpty .repost -}}
+        {{ if ne .repost.VideoId "" -}}
+            {{ printf "\n原视频：\n%v\n" .repost.Caption -}}
+            {{ pic .cover -}}
+        {{ else if nonEmpty .repost.Moment -}}
+            {{ printf "\n原动态：\n%v\n" .repost.Moment.ReplaceUbbText -}}
+            {{ range .repost.Moment.Imgs -}}
+                {{ pic .Url -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+{{ end -}}
+{{ .url }}

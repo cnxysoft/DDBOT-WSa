@@ -143,6 +143,9 @@ func HuyaCurrentLiveKey(keys ...interface{}) string {
 func HuyaGroupAtAllMarkKey(keys ...interface{}) string {
 	return NamedKey("HuyaGroupAtAll", keys)
 }
+func AcfunUserCookieInfoKey(keys ...interface{}) string {
+	return NamedKey("AcfunUserCookieInfo", keys)
+}
 func AcfunUserInfoKey(keys ...interface{}) string {
 	return NamedKey("AcfunUserInfo", keys)
 }
@@ -154,6 +157,18 @@ func AcfunNotLiveKey(keys ...interface{}) string {
 }
 func AcfunUidFirstTimestampKey(keys ...interface{}) string {
 	return NamedKey("AcfunUidFirstTimestamp", keys)
+}
+func AcfunCurrentNewsKey(keys ...interface{}) string {
+	return NamedKey("AcfunCurrentNews", keys)
+}
+func AcfunDynamicIdKey(keys ...interface{}) string {
+	return NamedKey("AcfunDynamicId", keys)
+}
+func AcfunNotifyMsgKey(keys ...interface{}) string {
+	return NamedKey("AcfunNotifyMsg", keys)
+}
+func AcfunCompactMarkKey(keys ...interface{}) string {
+	return NamedKey("AcfunCompactMark", keys)
 }
 func WeiboUserInfoKey(keys ...interface{}) string {
 	return NamedKey("WeiboUserInfo", keys)

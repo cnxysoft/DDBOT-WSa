@@ -123,6 +123,14 @@ func GetCustomPrivateCommand() []string {
 	return config.GlobalConfig.GetStringSlice("autoreply.private.command")
 }
 
+func GetAcfunDisableSub() bool {
+	return config.GlobalConfig.GetBool("acfun.disableSub")
+}
+
+func GetAcfunUnsub() bool {
+	return config.GlobalConfig.GetBool("acfun.unsub")
+}
+
 func GetBilibiliMinFollowerCap() int {
 	return config.GlobalConfig.GetInt("bilibili.minFollowerCap")
 }
@@ -153,4 +161,8 @@ func GetBilibiliOnlyOnlineNotify() bool {
 
 func GetDouyinOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("douyin.onlyOnlineNotify")
+}
+
+func GetAcfunOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("acfun.onlyOnlineNotify")
 }

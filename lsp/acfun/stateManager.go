@@ -2,24 +2,31 @@ package acfun
 
 import (
 	"errors"
+	"github.com/Mrs4s/MiraiGo/message"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/tidwall/buntdb"
+	"time"
 )
 
 type StateManager struct {
 	*concern.StateManager
-	extraKey
+	*ExtraKey
+	concern *Concern
 }
 
 func (s *StateManager) GetGroupConcernConfig(groupCode int64, id interface{}) (concernConfig concern.IConfig) {
-	return NewGroupConcernConfig(s.StateManager.GetGroupConcernConfig(groupCode, id))
+	return NewGroupConcernConfig(s.StateManager.GetGroupConcernConfig(groupCode, id), s.concern)
 }
 
-func NewStateManager(notify chan<- concern.Notify) *StateManager {
-	return &StateManager{
-		StateManager: concern.NewStateManagerWithInt64ID("Acfun", notify),
+func NewStateManager(c *Concern) *StateManager {
+	sm := &StateManager{
+		concern: c,
 	}
+	sm.ExtraKey = NewExtraKey()
+	sm.StateManager = concern.NewStateManagerWithInt64ID(Site, c.notify)
+	return sm
 }
 
 func (s *StateManager) GetUserInfo(uid int64) (*UserInfo, error) {
@@ -88,4 +95,76 @@ func (s *StateManager) GetUidFirstTimestamp(uid int64) (timestamp int64, err err
 		timestamp = 0
 	}
 	return
+}
+
+func SetCookieInfo(username string, cookieInfo *LoginResponse) error {
+	if cookieInfo == nil {
+		return errors.New("<nil> cookieInfo")
+	}
+	return localdb.SetJson(localdb.AcfunUserCookieInfoKey(username), cookieInfo)
+}
+
+func GetCookieInfo(username string) (cookieInfo *LoginResponse, err error) {
+	err = localdb.GetJson(localdb.AcfunUserCookieInfoKey(username), &cookieInfo)
+	return
+}
+
+func ClearCookieInfo(username string) error {
+	_, err := localdb.Delete(localdb.AcfunUserCookieInfoKey(username), localdb.IgnoreNotFoundOpt())
+	return err
+}
+
+func (c *StateManager) GetNewsInfo(mid int64) (*NewsInfo, error) {
+	var newsInfo = &NewsInfo{}
+	err := c.GetJson(c.CurrentNewsKey(mid), newsInfo)
+	if err != nil {
+		return nil, err
+	}
+	return newsInfo, nil
+}
+
+func (c *StateManager) CheckDynamicId(dynamic int64) (result bool) {
+	_, err := c.Get(c.DynamicIdKey(dynamic))
+	if err == buntdb.ErrNotFound {
+		return true
+	}
+	return false
+}
+
+func (c *StateManager) MarkDynamicId(dynamic int64) (bool, error) {
+	var isOverwrite bool
+	err := c.Set(c.DynamicIdKey(dynamic), "",
+		localdb.SetExpireOpt(time.Hour*120), localdb.SetGetIsOverwriteOpt(&isOverwrite))
+	return isOverwrite, err
+}
+
+func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message.GroupMessage, error) {
+	value, err := c.Get(c.NotifyMsgKey(groupCode, notifyKey))
+	if err != nil {
+		return nil, err
+	}
+	return localutils.DeserializationGroupMsg(value)
+}
+
+func (c *StateManager) SetGroupCompactMarkIfNotExist(groupCode int64, compactKey string) error {
+	return c.Set(c.CompactMarkKey(groupCode, compactKey), "",
+		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
+}
+
+func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage) error {
+	tmp := &message.GroupMessage{
+		Id:        msg.Id,
+		GroupCode: msg.GroupCode,
+		Sender:    msg.Sender,
+		Time:      msg.Time,
+		Elements: localutils.MessageFilter(msg.Elements, func(e message.IMessageElement) bool {
+			return e.Type() == message.Text || e.Type() == message.Image
+		}),
+	}
+	value, err := localutils.SerializationGroupMsg(tmp)
+	if err != nil {
+		return err
+	}
+	return c.Set(c.NotifyMsgKey(tmp.GroupCode, notifyKey), value,
+		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
 }

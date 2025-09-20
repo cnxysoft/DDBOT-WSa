@@ -163,6 +163,17 @@ bilibili:
   onlyOnlineNotify: false  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
   autoParsePosts: false    # 自动解析专栏，将发送专栏动态改为发送专栏内容
 
+# A站相关的功能推荐配置一个b站账号，建议使用小号
+# bot将使用您A站帐号的以下功能（订阅动态时）：
+# 关注用户 / 取消关注用户 / 查看关注列表
+# 请注意，订阅一个账号后，此处使用的A站账号将自动关注该账号
+acfun:
+  account: 
+  password: 
+  unsub: false
+  interval: 25s
+  onlyOnlineNotify: false
+
 # 支持使用多个nitter镜像，默认使用官方镜像（第三方镜像可能有额外校验）
 # 使用lightbrd镜像请自行先访问https://lightbrd.com/进行cookies的获取
 # 填入你访问网站时提交的user_agent，可在浏览器中查看
@@ -177,11 +188,14 @@ twitter:
 
 # 抖音直播推送（测试）
 # 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce两个cookies和你的浏览器UA
+# 如需订阅视频更新，需再加一个Cookie，登录www.douyin.com后取得sessionId并填入
 douyin:
-  interval: 30s
-  userAgent: 
   acSignature: 
   acNonce: 
+  sessionId: 
+  userAgent: 
+  interval: 30s
+  onlyOnlineNotify: false
 
 concern:
   emitInterval: 5s
