@@ -17,13 +17,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sora233/MiraiGo-Template/utils"
+	templUtils "github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 const (
@@ -49,7 +50,7 @@ const (
 )
 
 var (
-	logger          = utils.GetModuleLogger(ConcernName)
+	logger          = templUtils.GetModuleLogger(ConcernName)
 	requestInterval = time.Second * 5 // 每个请求之间的间隔
 	buildProfileURL = func(screenName string) *url.URL {
 		Url, _ := url.Parse(BaseURL[rand.Intn(len(BaseURL))] + screenName)

@@ -1,10 +1,17 @@
 package utils
 
 import (
+	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"fmt"
+	"github.com/andybalholm/brotli"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/guonaihong/gout"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/klauspost/compress/zstd"
 	"github.com/sirupsen/logrus"
+	"io"
 	"io/fs"
 	"net/url"
 	"path/filepath"
@@ -181,6 +188,12 @@ func TimestampFormat(ts int64) string {
 	return t.Format("2006-01-02 15:04:05")
 }
 
+func NTimestampFormat(ts int64) string {
+	sec := ts / 1000
+	nsec := (ts % 1000) * int64(time.Millisecond)
+	t := time.Unix(sec, nsec)
+	return t.Format("2006-01-02 15:04:05")
+}
 func Retry(count int, interval time.Duration, f func() bool) bool {
 	for retry := 0; retry < count; retry++ {
 		if f() {
@@ -239,4 +252,68 @@ func RemoveHtmlTag(s string) string {
 func ParseTime(s string) (time.Time, error) {
 	t, err := time.ParseInLocation(time.DateTime, s, time.Local)
 	return t, err
+}
+
+func ParseRespBody(resp bytes.Buffer, header requests.RespHeader) ([]byte, error) {
+	// 解压缩HTML
+	body, err := HtmlDecoder(header.ContentEncoding, resp)
+	if err != nil {
+		logger.WithField("FuncName", FuncName()).Errorf("解压缩HTML失败：%v", err)
+		return nil, err
+	}
+	return body, nil
+}
+
+func HtmlDecoder(ContentEncoding string, resp bytes.Buffer) ([]byte, error) {
+	var body []byte
+	if encoding := ContentEncoding; encoding != "" {
+		body = resp.Bytes()
+		switch encoding {
+		case "gzip":
+			body, _ = decompressGzip(body)
+		case "deflate":
+			body, _ = decompressDeflate(body)
+		case "br":
+			body, _ = decompressBrotli(body)
+		case "zstd":
+			body, _ = decompressZstd(body)
+		default:
+			logger.Warnf("不支持的压缩格式: %s", encoding)
+		}
+	} else {
+		body = resp.Bytes()
+	}
+	return body, nil
+}
+
+// 解压HTTP数据
+func decompressGzip(data []byte) ([]byte, error) {
+	var b bytes.Buffer
+	r, _ := gzip.NewReader(bytes.NewReader(data))
+	_, _ = io.Copy(&b, r)
+	r.Close()
+	return b.Bytes(), nil
+}
+
+func decompressDeflate(data []byte) ([]byte, error) {
+	reader, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func decompressBrotli(data []byte) ([]byte, error) {
+	reader := brotli.NewReader(bytes.NewReader(data))
+	return io.ReadAll(reader)
+}
+
+func decompressZstd(data []byte) ([]byte, error) {
+	dctx, err := zstd.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer dctx.Close()
+	return io.ReadAll(dctx)
 }

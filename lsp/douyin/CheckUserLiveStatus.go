@@ -3,8 +3,8 @@ package douyin
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 const PathCheckUserLiveStatus = "/webcast/distribution/check_user_live_status/"

@@ -2,8 +2,8 @@ package douyin
 
 import (
 	"bytes"
-	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
