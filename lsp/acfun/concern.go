@@ -87,6 +87,9 @@ func (c *Concern) Start() error {
 
 func (c *Concern) Stop() {
 	logger.Trace("正在停止acfun concern")
+	if c.stop != nil {
+		close(c.stop)
+	}
 	logger.Trace("正在停止acfun StateManager")
 	c.StateManager.Stop()
 	logger.Trace("acfun StateManager已停止")
