@@ -329,7 +329,11 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 			} else {
 				log.WithFields(localutils.GroupLogFields(groupCode)).Error("unknown live status")
 			}
-			result = append(result, NewConcernLiveNotify(groupCode, event))
+			inotify := NewConcernLiveNotify(groupCode, event)
+			if extend := c.StateManager.IsExtendNotify(inotify); extend {
+				event.ExtendNotify = true
+			}
+			result = append(result, inotify)
 		case *NewsInfo:
 			notifies := NewConcernNewsNotify(groupCode, event, c)
 			log.WithFields(localutils.GroupLogFields(groupCode)).
@@ -357,10 +361,24 @@ func (c *Concern) FindUser(mid int64, load bool) (*UserInfo, error) {
 			resp.GetData().GetLiveRoom().GetUrl(),
 			resp.GetData().GetFace(),
 		)
+		var liveTime int64
+		if resp.GetData().GetLiveRoom().GetLiveStatus() == LiveStatus_Living {
+			var liveTimeStr string
+			respRoom, err := GetRoomInfo(resp.GetData().GetLiveRoom().GetRoomid())
+			if err != nil {
+				logger.Warnf("GetRoomInfo error %v", err)
+			} else {
+				liveTimeStr = respRoom.GetData().GetLiveTime()
+			}
+			if liveTimeStr != "" {
+				liveTime = ParseLiveTime(liveTimeStr)
+			}
+		}
 		newLiveInfo := NewLiveInfo(newUserInfo,
 			resp.GetData().GetLiveRoom().GetTitle(),
 			resp.GetData().GetLiveRoom().GetCover(),
 			resp.GetData().GetLiveRoom().GetLiveStatus(),
+			liveTime,
 		)
 		// AddLiveInfo 会顺便添加UserInfo
 		err = c.StateManager.AddLiveInfo(newLiveInfo)

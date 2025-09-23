@@ -117,6 +117,20 @@ func (g *GroupConcernConfig) ShouldSendHook(notify Notify) *HookResult {
 	return HookResultPass
 }
 
+// ShouldEnableHook 默认为false
+func (g *GroupConcernConfig) ShouldEnableHook(notify Notify) *HookResult {
+	var result = new(HookResult)
+	if liveExt, ok := notify.(ExtendNotifyLiveExt); ok && liveExt.SupportExtendNotify() {
+		// 检查该推送否启用了增强模式
+		result.PassOrReason(
+			g.GetGroupConcernNotify().CheckExtendNotify(notify.Type()),
+			"CheckExtendNotify is false",
+		)
+		return result
+	}
+	return defaultHookResult
+}
+
 // GetGroupConcernAt 返回 GroupConcernAtConfig，总是返回 non-nil
 func (g *GroupConcernConfig) GetGroupConcernAt() *GroupConcernAtConfig {
 	return &g.GroupConcernAt

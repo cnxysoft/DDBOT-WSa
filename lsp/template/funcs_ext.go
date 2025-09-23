@@ -608,19 +608,28 @@ func getTimeStamp(t string) int64 {
 
 func getTime(s interface{}, f string) string {
 	var t time.Time
-	if _, ok := s.(time.Time); ok {
-		t = s.(time.Time)
-	} else if _, ok := s.(string); ok {
-		if s.(string) == "now" {
+
+	switch v := s.(type) {
+	case time.Time:
+		t = v
+	case string:
+		if v == "now" {
 			t = time.Now()
 		} else {
-			tmp, err := time.Parse(time.DateTime, s.(string))
+			tmp, err := time.ParseInLocation(time.DateTime, v, time.Local)
 			if err != nil {
 				return "parse time error"
 			}
 			t = tmp
 		}
+	case int:
+		t = time.Unix(int64(v), 0).In(time.Local)
+	case int64:
+		t = time.Unix(v, 0).In(time.Local)
+	default:
+		panic("template: getTime with invalid s")
 	}
+
 	switch f {
 	case "dateonly":
 		return t.Format(time.DateOnly)
@@ -630,6 +639,12 @@ func getTime(s interface{}, f string) string {
 		return t.Format(time.Stamp)
 	case "unix":
 		return strconv.FormatInt(t.Unix(), 10)
+	case "elapsed":
+		dur := time.Since(t)
+		h := int64(dur.Hours())
+		m := int64(dur.Minutes()) % 60
+		s := int64(dur.Seconds()) % 60
+		return fmt.Sprintf("%d小时%d分%d秒", h, m, s)
 	default:
 		return t.Format(time.DateTime)
 	}

@@ -44,6 +44,7 @@ type groupConcernAtConfig struct {
 type groupConcernNotifyConfig struct {
 	TitleChangeNotify oldType `json:"title_change_notify"`
 	OfflineNotify     oldType `json:"offline_notify"`
+	ExtendNotify      oldType `json:"extend_notify"`
 }
 
 type groupConcernFilterConfig struct {
@@ -85,6 +86,7 @@ func (v *V1) configMigrate(key, value string) string {
 
 	ng.GroupConcernNotify.OfflineNotify = g.GroupConcernNotify.OfflineNotify.ToNewType()
 	ng.GroupConcernNotify.TitleChangeNotify = g.GroupConcernNotify.TitleChangeNotify.ToNewType()
+	ng.GroupConcernNotify.ExtendNotify = g.GroupConcernNotify.ExtendNotify.ToNewType()
 	return ng.ToString()
 }
 

@@ -70,7 +70,7 @@ func TestGroupConcernConfig_ToString(t *testing.T) {
 				"at_someone":[{"ctype":"bilibiliLive", "at_list":[1,2,3,4,5]}]
 			},
 			"group_concern_notify":{
-				"title_change_notify": "bilibiliLive", "offline_notify": "douyuLive"
+				"title_change_notify": "bilibiliLive", "offline_notify": "douyuLive", "extend_notify": ""
 			},
 			"group_concern_filter": {
 				"type": "", "config":""

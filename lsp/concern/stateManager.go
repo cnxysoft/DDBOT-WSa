@@ -603,6 +603,25 @@ func (c *StateManager) filterNotify(inotify Notify) bool {
 	return true
 }
 
+func (c *StateManager) IsExtendNotify(inotify Notify) bool {
+	if inotify == nil {
+		return false
+	}
+	nLogger := inotify.Logger()
+	concern, err := GetConcernBySiteAndType(inotify.Site(), inotify.Type())
+	if err != nil {
+		nLogger.Errorf("filterNotify: GetConcernBySiteAndType error %v", err)
+		return true
+	}
+	concernConfig := concern.GetStateManager().GetGroupConcernConfig(inotify.GetGroupCode(), inotify.GetUid())
+	sendHookResult := concernConfig.ShouldEnableHook(inotify)
+	if !sendHookResult.Pass {
+		nLogger.WithField("Reason", sendHookResult.Reason).Trace("notify filtered by hook ShouldEnableHook")
+		return false
+	}
+	return true
+}
+
 // DefaultDispatch 是 DispatchFunc 的默认实现。
 // 它查询所有订阅过此 Event.GetUid 与 Event.Type 的群，并为每个群生成 Notify 发送给框架
 func (c *StateManager) DefaultDispatch() DispatchFunc {

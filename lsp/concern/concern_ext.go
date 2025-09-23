@@ -18,3 +18,8 @@ type NotifyLiveExt interface {
 	// 如果没有变化也可以发送给DDBOT，DDBOT会自动进行过滤
 	LiveStatusChanged() bool
 }
+
+type ExtendNotifyLiveExt interface {
+	// SupportExtendNotify 检查该推送是否支持增强模式
+	SupportExtendNotify() bool
+}

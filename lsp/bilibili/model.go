@@ -1,9 +1,6 @@
 package bilibili
 
 import (
-	"strings"
-	"sync"
-
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -12,6 +9,8 @@ import (
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
+	"strings"
+	"sync"
 )
 
 type NewsInfo struct {
@@ -101,6 +100,8 @@ type LiveInfo struct {
 	AreaName       string     `json:"area_name"`
 	ParentAreaId   int32      `json:"parent_area_id"`
 	ParentAreaName string     `json:"parent_area_name"`
+	LiveTime       int64      `json:"live_time"`
+	ExtendNotify   bool       `json:"extend_notify"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -130,6 +131,8 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"living":           l.Living(),
 			"parent_area_name": l.ParentAreaName,
 			"area_name":        l.AreaName,
+			"live_time":        l.LiveTime,
+			"extend_notify":    l.ExtendNotify,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
@@ -150,6 +153,10 @@ func (l *LiveInfo) LiveStatusChanged() bool {
 }
 
 func (l *LiveInfo) IsLive() bool {
+	return true
+}
+
+func (l *LiveInfo) SupportExtendNotify() bool {
 	return true
 }
 
@@ -205,7 +212,7 @@ func NewUserInfo(mid, roomId int64, name, url, face string) *UserInfo {
 	}
 }
 
-func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status LiveStatus) *LiveInfo {
+func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status LiveStatus, liveTime int64) *LiveInfo {
 	if userInfo == nil {
 		return nil
 	}
@@ -214,6 +221,7 @@ func NewLiveInfo(userInfo *UserInfo, liveTitle string, cover string, status Live
 		Status:    status,
 		LiveTitle: liveTitle,
 		Cover:     cover,
+		LiveTime:  liveTime,
 	}
 }
 
