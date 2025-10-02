@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"errors"
 	"fmt"
 	"github.com/andybalholm/brotli"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
@@ -11,9 +12,11 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/klauspost/compress/zstd"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/text/encoding/simplifiedchinese"
 	"io"
 	"io/fs"
 	"net/url"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -316,4 +319,339 @@ func decompressZstd(data []byte) ([]byte, error) {
 	}
 	defer dctx.Close()
 	return io.ReadAll(dctx)
+}
+
+// ExecWithOption 执行命令，可以选择是否等待执行完成
+func ExecWithOption(cmd string, args []string, wait bool) ([]byte, error) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return nil, errors.New("command is empty")
+	}
+
+	// 查找命令的完整路径
+	cmdPath, err := exec.LookPath(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 创建命令
+	command := exec.Command(cmdPath, args...)
+
+	if !wait {
+		// 不等待执行完成，直接启动进程
+		err := command.Start()
+		if err != nil {
+			return nil, err
+		}
+		// 直接返回空结果和nil错误，表示已成功启动
+		return []byte("command started in background"), nil
+	}
+
+	// 获取命令输出
+	output, err := command.CombinedOutput()
+
+	// 处理 Windows 中文编码问题
+	if runtime.GOOS == "windows" {
+		// 尝试将 GBK/GB2312 编码转换为 UTF-8
+		if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
+			output = decoded
+		}
+	}
+
+	return output, err
+}
+
+// ExecSilently 执行命令并静默运行（不显示进度条等信息）
+func ExecSilently(cmd string, args []string) ([]byte, error) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return nil, errors.New("command is empty")
+	}
+
+	// 查找命令的完整路径
+	cmdPath, err := exec.LookPath(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 对于某些命令，添加静默参数
+	silentArgs := make([]string, len(args))
+	copy(silentArgs, args)
+
+	switch cmd {
+	case "curl":
+		// 检查是否已经存在静默参数
+		hasSilentFlag := false
+		for _, arg := range args {
+			if arg == "-s" || arg == "--silent" || arg == "-q" || arg == "--quiet" {
+				hasSilentFlag = true
+				break
+			}
+		}
+
+		// 如果没有静默参数，则添加 -s
+		if !hasSilentFlag {
+			silentArgs = append([]string{"-s"}, silentArgs...)
+		}
+	case "wget":
+		// 检查是否已经存在静默参数
+		hasQuietFlag := false
+		for _, arg := range args {
+			if arg == "-q" || arg == "--quiet" {
+				hasQuietFlag = true
+				break
+			}
+		}
+
+		// 如果没有静默参数，则添加 -q
+		if !hasQuietFlag {
+			silentArgs = append([]string{"-q"}, silentArgs...)
+		}
+	}
+
+	// 创建命令
+	command := exec.Command(cmdPath, silentArgs...)
+
+	// 获取命令输出
+	output, err := command.CombinedOutput()
+
+	// 处理 Windows 中文编码问题
+	if runtime.GOOS == "windows" {
+		// 尝试将 GBK/GB2312 编码转换为 UTF-8
+		if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
+			output = decoded
+		}
+	}
+
+	return output, err
+}
+
+// ExecWithElevation 在 Windows 上以管理员权限执行命令
+func ExecWithElevation(cmd string, args []string, wait bool) ([]byte, error) {
+	if runtime.GOOS != "windows" {
+		// 非 Windows 系统不支持此功能
+		return nil, errors.New("elevation is only supported on Windows")
+	}
+
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return nil, errors.New("command is empty")
+	}
+
+	// 查找命令的完整路径
+	cmdPath, err := exec.LookPath(cmd)
+	if err != nil {
+		// 如果找不到命令，可能是一个完整路径
+		cmdPath = cmd
+	}
+
+	// 首先尝试使用 PowerShell 执行（适用于 Win7 SP1 及以上版本）
+	output, psErr := execWithPowerShell(cmdPath, args, wait)
+	if psErr == nil {
+		return output, nil
+	}
+
+	// 如果 PowerShell 执行失败，尝试使用 runas 命令（兼容更老的系统）
+	output, runasErr := execWithRunas(cmdPath, args, wait)
+	if runasErr == nil {
+		return output, nil
+	}
+
+	// 如果两种方式都失败，返回详细的错误信息
+	return []byte(fmt.Sprintf("Failed to execute elevated command with PowerShell: %v, with runas: %v", psErr, runasErr)),
+		errors.New("failed to execute elevated command with all available methods")
+}
+
+// execWithPowerShell 使用 PowerShell 执行需要提升权限的命令
+func execWithPowerShell(cmdPath string, args []string, wait bool) ([]byte, error) {
+	// 构建参数字符串，正确处理带空格的参数
+	var escapedArgs []string
+	for _, arg := range args {
+		// 简单处理参数中的特殊字符
+		escapedArg := strings.ReplaceAll(arg, "\"", "\\\"")
+		if strings.Contains(arg, " ") {
+			escapedArgs = append(escapedArgs, "\""+escapedArg+"\"")
+		} else {
+			escapedArgs = append(escapedArgs, escapedArg)
+		}
+	}
+
+	argLine := strings.Join(escapedArgs, " ")
+
+	// 构建 PowerShell 命令
+	// 注意：在 PowerShell 中，Go 的 true/false 需要转换为 $true/$false
+	psWait := "$false"
+	if wait {
+		psWait = "$true"
+	}
+	
+	psCommand := fmt.Sprintf(`
+		$ErrorActionPreference = "Stop"
+		try {
+			$psi = New-Object System.Diagnostics.ProcessStartInfo
+			$psi.FileName = "%s"
+			$psi.Arguments = "%s"
+			$psi.Verb = "runas"
+			$psi.WindowStyle = "Hidden"
+			$psi.UseShellExecute = $true
+			$proc = [System.Diagnostics.Process]::Start($psi)
+			if ($true -eq %s) {
+				$proc.WaitForExit()
+				Exit $proc.ExitCode
+			} else {
+				Exit 0
+			}
+		} catch {
+			Write-Output "Error: $($_.Exception.Message)"
+			Exit 1
+		}
+	`, strings.ReplaceAll(cmdPath, "\"", "\\\""), argLine, psWait)
+
+	// 使用 PowerShell 启动一个提升权限的进程
+	psCmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command", psCommand)
+
+	// 如果不需要等待，直接启动进程
+	if !wait {
+		err := psCmd.Start()
+		if err != nil {
+			return nil, err
+		}
+		return []byte("elevated command started in background"), nil
+	}
+
+	output, err := psCmd.CombinedOutput()
+
+	// 处理 Windows 中文编码问题
+	if runtime.GOOS == "windows" {
+		// 尝试将 GBK/GB2312 编码转换为 UTF-8
+		if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
+			output = decoded
+		}
+	}
+
+	return output, err
+}
+
+// execWithRunas 使用 runas 命令执行需要提升权限的命令（兼容更老的系统）
+func execWithRunas(cmdPath string, args []string, wait bool) ([]byte, error) {
+	// 构建参数字符串
+	argLine := ""
+	if len(args) > 0 {
+		var escapedArgs []string
+		for _, arg := range args {
+			// 简单处理参数中的特殊字符
+			escapedArg := strings.ReplaceAll(arg, "\"", "\\\"")
+			if strings.Contains(arg, " ") {
+				escapedArgs = append(escapedArgs, "\""+escapedArg+"\"")
+			} else {
+				escapedArgs = append(escapedArgs, escapedArg)
+			}
+		}
+		argLine = strings.Join(escapedArgs, " ")
+	}
+
+	// 构建完整的命令行
+	fullCommand := cmdPath
+	if argLine != "" {
+		fullCommand += " " + argLine
+	}
+
+	// 使用 runas 命令启动一个提升权限的进程
+	// 注意：runas 需要用户手动输入密码，这里我们使用 /trustlevel:0x20000 参数尝试绕过
+	runasCmd := exec.Command("runas", "/trustlevel:0x20000", fullCommand)
+
+	// 如果不需要等待，直接启动进程
+	if !wait {
+		err := runasCmd.Start()
+		if err != nil {
+			return nil, err
+		}
+		return []byte("elevated command started in background"), nil
+	}
+
+	output, err := runasCmd.CombinedOutput()
+
+	// 处理 Windows 中文编码问题
+	if runtime.GOOS == "windows" {
+		// 尝试将 GBK/GB2312 编码转换为 UTF-8
+		if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
+			output = decoded
+		}
+	}
+
+	return output, err
+}
+
+// ExecWithShell 在 shell 中执行命令（兼容 Linux）
+func ExecWithShell(cmd string, args []string, wait bool) ([]byte, error) {
+	// 检查是否在类 Unix 环境中运行（Linux、macOS、Unix 等）
+	isUnix := runtime.GOOS != "windows"
+
+	// 在类 Unix 系统上使用 /bin/sh，在 Windows 上使用 cmd.exe
+	shell := "/bin/sh"
+	shellArg := "-c"
+	if !isUnix {
+		shell = "cmd.exe"
+		shellArg = "/C"
+	}
+
+	// 构建完整的命令行
+	// 对于类 Unix 系统，我们需要正确处理参数
+	fullCommand := cmd
+	if isUnix && len(args) > 0 {
+		// 在 Unix 系统中，我们需要对参数进行适当的转义
+		for _, arg := range args {
+			// 对参数进行基本的 shell 转义
+			if strings.ContainsAny(arg, " \t\n|&;()<>") {
+				// 如果参数包含特殊字符，用引号包围并转义内部引号
+				escapedArg := "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+				fullCommand += " " + escapedArg
+			} else {
+				fullCommand += " " + arg
+			}
+		}
+	} else if !isUnix && len(args) > 0 {
+		// 在 Windows 系统中，简单地用空格连接参数
+		// 但需要对参数进行适当的转义
+		for _, arg := range args {
+			// Windows cmd.exe 转义处理
+			if strings.ContainsAny(arg, " \t\n\v\"") {
+				// 如果参数包含特殊字符，用双引号包围并转义内部双引号
+				escapedArg := "\"" + strings.ReplaceAll(arg, "\"", "\"\"") + "\""
+				fullCommand += " " + escapedArg
+			} else {
+				fullCommand += " " + arg
+			}
+		}
+	}
+
+	// 创建命令
+	command := exec.Command(shell, shellArg, fullCommand)
+
+	if !wait {
+		// 不等待执行完成，直接启动进程
+		err := command.Start()
+		if err != nil {
+			return nil, err
+		}
+		// 直接返回空结果和nil错误，表示已成功启动
+		if isUnix {
+			return []byte("shell command started in background"), nil
+		} else {
+			return []byte("cmd command started in background"), nil
+		}
+	}
+
+	// 获取命令输出
+	output, err := command.CombinedOutput()
+
+	// 处理 Windows 中文编码问题
+	if runtime.GOOS == "windows" {
+		// 尝试将 GBK/GB2312 编码转换为 UTF-8
+		if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
+			output = decoded
+		}
+	}
+
+	return output, err
 }

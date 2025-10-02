@@ -113,6 +113,7 @@ func builtins() FuncMap {
 		"loop":          loop,
 		"lsDir":         lsDir,
 		"getEleType":    getEleType,
+		"exec":          exec,
 		"sleep": func(s string) bool {
 			t, e := time.ParseDuration(s)
 			if e != nil {

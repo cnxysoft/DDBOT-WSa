@@ -1,16 +1,15 @@
 package template
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -507,57 +506,6 @@ func setCooldown(ttlUnit string, keys ...interface{}) bool {
 	return true
 }
 
-func openFile(path string) []byte {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		logger.Errorf("template: openFile <%v> error %v", path, err)
-		return nil
-	}
-	return data
-}
-
-func updateFile(path string, data string) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		logger.Errorf("template: openFile <%v> error %v", path, err)
-		return err
-	}
-	defer file.Close()
-	_, err = file.WriteString(data)
-	if err != nil {
-		logger.Errorf("template: updateFile <%v> error %v", path, err)
-		return err
-	}
-	return nil
-}
-
-func writeFile(path string, data string) error {
-	err := os.WriteFile(path, []byte(data), 0644)
-	if err != nil {
-		logger.Errorf("template: writeFile <%v> error %v", path, err)
-		return err
-	}
-	return nil
-}
-
-func delFile(path string) error {
-	err := os.Remove(path)
-	if err != nil {
-		logger.Errorf("template: delFile <%v> error %v", path, err)
-		return err
-	}
-	return nil
-}
-
-func renameFile(path string, newPath string) error {
-	err := os.Rename(path, newPath)
-	if err != nil {
-		logger.Errorf("template: renameFile <%v> error %v", path, err)
-		return err
-	}
-	return nil
-}
-
 type ddError struct {
 	ddErrType string
 	e         message.IMessageElement
@@ -648,126 +596,6 @@ func getTime(s interface{}, f string) string {
 	default:
 		return t.Format(time.DateTime)
 	}
-}
-
-func readLine(p string, l int64) string {
-	file, err := os.OpenFile(p, os.O_RDONLY, 0666)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
-	var ret string
-	for i := int64(0); ; i++ {
-		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-		if i == l-1 {
-			ret = line
-			break
-		}
-	}
-	return ret
-}
-
-func findReadLine(p string, s string) string {
-	file, err := os.OpenFile(p, os.O_RDONLY, 0666)
-	if err != nil {
-		return ""
-	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
-	for {
-		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-		if strings.Contains(line, s) {
-			return line
-		}
-	}
-	return ""
-}
-
-func findWriteLine(p string, s string, n string) error {
-	file, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	lines := make([]string, 0)
-	reader := bufio.NewReader(file)
-	for {
-		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			break
-		}
-		if strings.Contains(line, s) {
-			lines = append(lines, n)
-		} else {
-			lines = append(lines, line)
-		}
-	}
-	writer := bufio.NewWriter(file)
-	_, err = file.Seek(0, 0)
-	if err != nil {
-		logger.Errorf("template: seek <%v> error %v", p, err)
-		return err
-	}
-	for _, line := range lines {
-		_, err = writer.WriteString(line)
-		if err != nil {
-			logger.Errorf("template: writeFile <%v> error %v", p, err)
-			return err
-		}
-	}
-	writer.Flush()
-	return nil
-}
-
-func writeLine(p string, l int64, s string) error {
-	file, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	writer := bufio.NewWriter(file)
-	if l == 0 {
-		_, err = writer.WriteString(s)
-		if err != nil {
-			logger.Errorf("template: writeFile <%v> error %v", p, err)
-			return err
-		}
-	} else {
-		lines := make([]string, 0)
-		reader := bufio.NewReader(file)
-		for i := int64(0); ; i++ {
-			line, err := reader.ReadString('\n')
-			if err == io.EOF {
-				break
-			}
-			if i == l-1 {
-				lines = append(lines, s)
-			} else {
-				lines = append(lines, line)
-			}
-		}
-		_, err = file.Seek(0, 0)
-		if err != nil {
-			logger.Errorf("template: seek <%v> error %v", p, err)
-			return err
-		}
-		for _, line := range lines {
-			_, err = writer.WriteString(line)
-			if err != nil {
-				logger.Errorf("template: writeFile <%v> error %v", p, err)
-				return err
-			}
-		}
-	}
-	writer.Flush()
-	return nil
 }
 
 func uriEncode(s string) string {
@@ -1080,30 +908,6 @@ func loop(from, to int64) <-chan int64 {
 	return ch
 }
 
-func lsDir(dir string, recursive bool) []string {
-	var result []string
-
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		logger.Errorf("lsDir error: %v", err)
-		return nil
-	}
-
-	for _, item := range files {
-		result = append(result, item.Name())
-
-		// 若开启递归且当前项为目录，则递归遍历子目录
-		if recursive && item.IsDir() {
-			subItems := lsDir(filepath.Join(dir, item.Name()), recursive)
-			for _, subItem := range subItems {
-				result = append(result, filepath.Join(item.Name(), subItem)) // 添加相对路径
-			}
-		}
-	}
-
-	return result
-}
-
 func getEleType(v interface{}) string {
 	switch v.(type) {
 	case *message.GroupImageElement, *message.FriendImageElement:
@@ -1142,4 +946,136 @@ func reCall(msg interface{}) bool {
 		return false
 	}
 	return true
+}
+
+func exec(input interface{}, inargs ...interface{}) string {
+	var cmd string
+	var args []string
+	var wait = true           // 默认等待执行完毕
+	var silent = false        // 默认不静默执行
+	var elevate = false       // 默认不提升权限
+	var shellMode = false     // 默认不使用 shell 执行
+	var explicitShell = false // 是否显式指定了 shell 参数
+
+	errTxt := "exec: %v"
+	errInvalidInput := "输入参数错误"
+
+	// 参数解析函数，处理特殊参数
+	parseSpecialArgs := func(arg string) bool {
+		switch arg {
+		case "nowait":
+			wait = false
+			return true
+		case "silent":
+			silent = true
+			return true
+		case "elevate":
+			elevate = true
+			return true
+		case "shell":
+			shellMode = true
+			explicitShell = true
+			return true
+		default:
+			return false
+		}
+	}
+
+	if len(inargs) > 0 {
+		if c, ok := inargs[0].(string); ok {
+			cmd = c
+		} else {
+			logger.Errorf(errTxt, inargs[0])
+			return errInvalidInput
+		}
+		for i := 1; i < len(inargs); i++ {
+			if arg, ok := inargs[i].(string); ok {
+				if !parseSpecialArgs(arg) {
+					args = append(args, arg)
+				}
+			} else {
+				logger.Errorf(errTxt, inargs[i])
+				return errInvalidInput
+			}
+		}
+	} else {
+		switch in := input.(type) {
+		case []string:
+			if len(in) < 1 {
+				logger.Errorf(errTxt, errInvalidInput)
+				return errInvalidInput
+			}
+			cmd = in[0]
+			for _, arg := range in[1:] {
+				if !parseSpecialArgs(arg) {
+					args = append(args, arg)
+				}
+			}
+		case string:
+			parts := strings.Fields(in)
+			if len(parts) < 1 {
+				logger.Errorf(errTxt, errInvalidInput)
+				return errInvalidInput
+			}
+			cmd = parts[0]
+			for _, arg := range parts[1:] {
+				if !parseSpecialArgs(arg) {
+					args = append(args, arg)
+				}
+			}
+		default:
+			logger.Errorf(errTxt, errInvalidInput)
+			return errInvalidInput
+		}
+	}
+
+	// 自动检测是否在类 Unix 环境下运行，如果是则默认使用 shell 模式
+	// 但仅在未显式指定 shell 参数时才启用自动模式
+	if !explicitShell && (runtime.GOOS == "linux" || runtime.GOOS == "darwin" ||
+		runtime.GOOS == "freebsd" || runtime.GOOS == "openbsd") {
+		shellMode = true
+	}
+
+	// 检查参数冲突
+	if elevate && silent {
+		return "参数冲突：elevate 和 silent 不能同时使用"
+	}
+
+	if elevate && shellMode {
+		return "参数冲突：elevate 和 shell 不能同时使用"
+	}
+
+	// 定义执行函数的类型
+	type execFunc func(cmd string, args []string, wait bool) ([]byte, error)
+
+	// 根据参数选择执行函数
+	var executor execFunc
+	var executeWait = wait
+
+	switch {
+	case shellMode:
+		executor = localutils.ExecWithShell
+	case elevate:
+		executor = func(cmd string, args []string, wait bool) ([]byte, error) {
+			return localutils.ExecWithElevation(cmd, args, wait)
+		}
+		executeWait = wait
+	case silent:
+		// 对于静默模式，wait参数不适用，始终等待执行完成
+		executor = func(cmd string, args []string, wait bool) ([]byte, error) {
+			bytes, err := localutils.ExecSilently(cmd, args)
+			return bytes, err
+		}
+		executeWait = true
+	default:
+		executor = localutils.ExecWithOption
+		executeWait = wait
+	}
+
+	// 执行命令
+	bytes, err := executor(cmd, args, executeWait)
+	if err != nil {
+		return err.Error()
+	}
+	return strings.ToValidUTF8(string(bytes), "")
 }
