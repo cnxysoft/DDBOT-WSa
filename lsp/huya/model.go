@@ -10,12 +10,13 @@ import (
 )
 
 type LiveInfo struct {
-	RoomId   string `json:"room_id"`
-	RoomUrl  string `json:"room_url"`
-	Avatar   string `json:"avatar"`
-	Name     string `json:"name"`
-	RoomName string `json:"room_name"`
-	IsLiving bool   `json:"living"`
+	RoomId    string `json:"room_id"`
+	RoomUrl   string `json:"room_url"`
+	Avatar    string `json:"avatar"`
+	Name      string `json:"name"`
+	RoomName  string `json:"room_name"`
+	IsLiving  bool   `json:"living"`
+	GroupCode int64  `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -82,11 +83,12 @@ func (m *LiveInfo) Site() string {
 func (m *LiveInfo) GetMSG() *mmsg.MSG {
 	m.once.Do(func() {
 		var data = map[string]interface{}{
-			"title":  m.RoomName,
-			"name":   m.Name,
-			"url":    m.RoomUrl,
-			"cover":  m.Avatar,
-			"living": m.Living(),
+			"title":      m.RoomName,
+			"name":       m.Name,
+			"url":        m.RoomUrl,
+			"cover":      m.Avatar,
+			"living":     m.Living(),
+			"group_code": m.GroupCode,
 		}
 		var err error
 		m.msgCache, err = template.LoadAndExec("notify.group.huya.live.tmpl", data)
@@ -108,6 +110,7 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 }
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
+	notify.LiveInfo.GroupCode = notify.GroupCode
 	return notify.LiveInfo.GetMSG()
 }
 

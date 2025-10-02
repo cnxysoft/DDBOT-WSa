@@ -17,6 +17,7 @@ type LiveInfo struct {
 	ShowStatus ShowStatus      `json:"show_status"`
 	VideoLoop  VideoLoopStatus `json:"videoLoop"`
 	Avatar     *Avatar         `json:"avatar"`
+	GroupCode  int64           `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -70,11 +71,12 @@ func (m *LiveInfo) Type() concern_type.Type {
 func (m *LiveInfo) GetMSG() *mmsg.MSG {
 	m.once.Do(func() {
 		var data = map[string]interface{}{
-			"title":  m.RoomName,
-			"name":   m.Nickname,
-			"url":    m.RoomUrl,
-			"cover":  m.GetAvatar().GetBig(),
-			"living": m.Living(),
+			"title":      m.RoomName,
+			"name":       m.Nickname,
+			"url":        m.RoomUrl,
+			"cover":      m.GetAvatar().GetBig(),
+			"living":     m.Living(),
+			"group_code": m.GroupCode,
 		}
 		var err error
 		m.msgCache, err = template.LoadAndExec("notify.group.douyu.live.tmpl", data)
@@ -162,6 +164,7 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 }
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
+	notify.LiveInfo.GroupCode = notify.GroupCode
 	return notify.LiveInfo.GetMSG()
 }
 

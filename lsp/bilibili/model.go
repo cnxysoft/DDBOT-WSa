@@ -102,6 +102,7 @@ type LiveInfo struct {
 	ParentAreaName string     `json:"parent_area_name"`
 	LiveTime       int64      `json:"live_time"`
 	ExtendNotify   bool       `json:"extend_notify"`
+	GroupCode      int64      `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -133,6 +134,7 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"area_name":        l.AreaName,
 			"live_time":        l.LiveTime,
 			"extend_notify":    l.ExtendNotify,
+			"group_code":       l.GroupCode,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
@@ -291,30 +293,10 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 		msg, _ := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
 		if msg != nil {
 			card.orgMsg = msg
-			//m.Append(message.NewReply(msg))
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
-		//switch notify.Card.GetDesc().GetType() {
-		//case DynamicDescType_WithVideo:
-		//	videoCard, _ := notify.Card.GetCardWithVideo()
-		//	m.Textf("%v%v：\n%v\n%v\n%v",
-		//		notify.Name,
-		//		notify.Card.GetDisplay().GetUsrActionTxt(),
-		//		date,
-		//		videoCard.GetTitle(),
-		//		dynamicUrl)
-		//	return
-		//case DynamicDescType_WithOrigin:
-		//	origCard, _ := notify.Card.GetCardWithOrig()
-		//	m.Textf("%v转发了%v的动态：\n%v\n%v\n%v",
-		//		notify.Name,
-		//		origCard.GetOriginUser().GetInfo().GetUname(),
-		//		date,
-		//		origCard.GetItem().GetContent(),
-		//		dynamicUrl)
-		//	return
-		//}
 	}
+	notify.Card.GroupCode = notify.GroupCode
 	m = notify.Card.GetMSG()
 	return
 }
@@ -350,6 +332,7 @@ func (notify *ConcernNewsNotify) Logger() *logrus.Entry {
 }
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
+	notify.LiveInfo.GroupCode = notify.GroupCode
 	return notify.LiveInfo.GetMSG()
 }
 
@@ -448,10 +431,11 @@ func urlsMergeImage(urls []string) (result []byte, err error) {
 
 type CacheCard struct {
 	*Card
-	once     sync.Once
-	msgCache *mmsg.MSG
-	dynamic  DynamicInfo
-	orgMsg   *message.GroupMessage
+	GroupCode int64
+	once      sync.Once
+	msgCache  *mmsg.MSG
+	dynamic   DynamicInfo
+	orgMsg    *message.GroupMessage
 }
 
 func NewCacheCard(card *Card) *CacheCard {
@@ -1007,9 +991,10 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(func() {
 		c.prepare()
 		var data = map[string]interface{}{
-			"dynamic":   c.dynamic,
-			"msg":       c.orgMsg,
-			"parsePost": config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
+			"dynamic":    c.dynamic,
+			"msg":        c.orgMsg,
+			"group_code": c.GroupCode,
+			"parsePost":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)

@@ -29,11 +29,12 @@ func (u *UserInfo) GetName() string {
 
 type LiveInfo struct {
 	UserInfo
-	LiveId   string `json:"live_id"`
-	Title    string `json:"title"`
-	Cover    string `json:"cover"`
-	StartTs  int64  `json:"start_ts"`
-	IsLiving bool   `json:"living"`
+	LiveId    string `json:"live_id"`
+	Title     string `json:"title"`
+	Cover     string `json:"cover"`
+	StartTs   int64  `json:"start_ts"`
+	IsLiving  bool   `json:"living"`
+	GroupCode int64  `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -78,11 +79,12 @@ func (l *LiveInfo) Logger() *logrus.Entry {
 func (l *LiveInfo) GetMSG() *mmsg.MSG {
 	l.once.Do(func() {
 		var data = map[string]interface{}{
-			"title":  l.Title,
-			"name":   l.Name,
-			"url":    l.LiveUrl,
-			"cover":  l.Cover,
-			"living": l.Living(),
+			"title":      l.Title,
+			"name":       l.Name,
+			"url":        l.LiveUrl,
+			"cover":      l.Cover,
+			"living":     l.Living(),
+			"group_code": l.GroupCode,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.acfun.live.tmpl", data)
@@ -104,6 +106,7 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 }
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
+	notify.LiveInfo.GroupCode = notify.GroupCode
 	return notify.LiveInfo.GetMSG()
 }
 
@@ -180,6 +183,7 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
 	}
+	notify.Card.GroupCode = notify.GroupCode
 	m = notify.Card.GetMSG()
 	return
 }
@@ -217,9 +221,10 @@ func (notify *ConcernNewsNotify) Logger() *logrus.Entry {
 
 type CacheCard struct {
 	*FeedItem
-	once     sync.Once
-	msgCache *mmsg.MSG
-	orgMsg   *message.GroupMessage
+	GroupCode int64
+	once      sync.Once
+	msgCache  *mmsg.MSG
+	orgMsg    *message.GroupMessage
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
@@ -232,14 +237,15 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 			url = DynamicUrl(resourceId)
 		}
 		var data = map[string]interface{}{
-			"dynamic": c.FeedItem,
-			"msg":     c.orgMsg,
-			"name":    c.GetUser().GetUserName(),
-			"date":    localutils.NTimestampFormat(c.GetCreateTime()),
-			"cover":   c.GetCoverUrl(),
-			"moment":  c.GetMoment(),
-			"repost":  c.GetRepostSource(),
-			"url":     url,
+			"dynamic":    c.FeedItem,
+			"msg":        c.orgMsg,
+			"name":       c.GetUser().GetUserName(),
+			"date":       localutils.NTimestampFormat(c.GetCreateTime()),
+			"cover":      c.GetCoverUrl(),
+			"moment":     c.GetMoment(),
+			"repost":     c.GetRepostSource(),
+			"url":        url,
+			"group_code": c.GroupCode,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.acfun.news.tmpl", data)

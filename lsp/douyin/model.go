@@ -50,7 +50,8 @@ func (u *UserInfo) GetRoomId() string {
 
 type LiveInfo struct {
 	UserInfo
-	IsLiving bool `json:"living"`
+	IsLiving  bool  `json:"living"`
+	GroupCode int64 `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -95,11 +96,12 @@ func (l *LiveInfo) Logger() *logrus.Entry {
 func (l *LiveInfo) GetMSG() *mmsg.MSG {
 	l.once.Do(func() {
 		var data = map[string]interface{}{
-			"uid":    l.Uid,
-			"name":   l.NikeName,
-			"roomId": l.WebRoomId,
-			"living": l.Living(),
-			"url":    BaseLiveHost + "/" + l.WebRoomId,
+			"uid":        l.Uid,
+			"name":       l.NikeName,
+			"roomId":     l.WebRoomId,
+			"living":     l.Living(),
+			"url":        BaseLiveHost + "/" + l.WebRoomId,
+			"group_code": l.GroupCode,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.douyin.live.tmpl", data)
@@ -121,6 +123,7 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 }
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
+	notify.LiveInfo.GroupCode = notify.GroupCode
 	return notify.LiveInfo.GetMSG()
 }
 
@@ -174,6 +177,7 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
 	}
+	notify.Card.GroupCode = notify.GroupCode
 	m = notify.Card.GetMSG()
 	return
 }
@@ -226,21 +230,23 @@ func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *Concern) []*Co
 
 type CacheCard struct {
 	*UserPostsResponse_AwemeList
-	once     sync.Once
-	msgCache *mmsg.MSG
-	orgMsg   *message.GroupMessage
+	GroupCode int64
+	once      sync.Once
+	msgCache  *mmsg.MSG
+	orgMsg    *message.GroupMessage
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(func() {
 		var data = map[string]interface{}{
-			"dynamic": c,
-			"msg":     c.orgMsg,
-			"name":    c.GetAuthor().GetNickname(),
-			"desc":    c.GetDesc(),
-			"date":    localutils.TimestampFormat(int64(c.GetCreateTime())),
-			"cover":   c.GetVideo().GetCover().GetUrlList()[0],
-			"url":     DynamicUrl(c.Author.SecUid, c.AwemeId),
+			"dynamic":    c,
+			"msg":        c.orgMsg,
+			"name":       c.GetAuthor().GetNickname(),
+			"desc":       c.GetDesc(),
+			"date":       localutils.TimestampFormat(int64(c.GetCreateTime())),
+			"cover":      c.GetVideo().GetCover().GetUrlList()[0],
+			"url":        DynamicUrl(c.Author.SecUid, c.AwemeId),
+			"group_code": c.GroupCode,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.douyin.news.tmpl", data)
