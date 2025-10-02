@@ -124,6 +124,18 @@ func builtins() FuncMap {
 			return true
 		},
 
+		// buntdb
+		"Set":         Set,
+		"Get":         Get,
+		"setJson":     setJson,
+		"getJson":     getJson,
+		"setInt64":    setInt64,
+		"getInt64":    getInt64,
+		"del":         delData,
+		"exist":       existData,
+		"getOptions":  getOptions,
+		"newDuration": newDuration,
+
 		// cast
 		"float64": toFloat64,
 		"int":     toInt,

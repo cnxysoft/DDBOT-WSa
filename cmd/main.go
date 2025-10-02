@@ -2,11 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/http"
-	_ "net/http/pprof"
-	"os"
-	"runtime"
-
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/alecthomas/kong"
 	"github.com/cnxysoft/DDBOT-WSa"
@@ -23,7 +18,11 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/warn"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
 )
 
 func main() {
@@ -52,17 +51,13 @@ func main() {
 		return
 	}
 
-	if runtime.GOOS == "windows" {
-		if err := exitHook(func() {
-			localdb.Close()
-		}); err != nil {
-			localdb.Close()
-			warn.Warn("无法正常初始化Windows环境！")
-			return
-		}
-	} else {
-		defer localdb.Close()
-	}
+	// 添加数据库关闭钩子
+	utils.AddExitHook(func() {
+		localdb.Close()
+	})
+
+	// 设置退出钩子处理器
+	utils.SetupExitHook()
 
 	if cli.SetAdmin != 0 {
 		sm := permission.NewStateManager()

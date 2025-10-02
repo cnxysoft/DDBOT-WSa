@@ -3,6 +3,8 @@ package template
 import (
 	"embed"
 	"fmt"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/fsnotify/fsnotify"
 	"os"
@@ -92,6 +94,10 @@ func Close() {
 }
 
 func LoadTemplate(name string) *Template {
+	if cfg.GetExtDbEnable() && templateDB == nil {
+		logger.Errorf("ExtDb: 未初始化")
+		return nil
+	}
 	initRootT()
 	mu.RLock()
 	defer mu.RUnlock()
@@ -110,4 +116,20 @@ func LoadAndExec(name string, data interface{}) (*mmsg.MSG, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+var templateDB *buntdb.DB
+
+func InitTemplateDB(dbPath string) error {
+	var err error
+	templateDB, err = buntdb.NewDB(dbPath)
+	return err
+}
+
+func GetTemplateDB() *buntdb.DB {
+	return templateDB
+}
+
+func GetTemplateSC() *buntdb.ShortCut {
+	return buntdb.WithDB(templateDB)
 }

@@ -1,3 +1,8 @@
+// Package buntdb 提供了数据库操作的快捷方法
+// 包含 ShortCut 结构体和一系列全局函数，支持对 buntdb 数据库进行便捷操作
+// 支持两种使用方式：
+// 1. 全局函数：Get/Set/GetJson/SetJson 等，操作全局数据库实例
+// 2. ShortCut 实例：通过 WithDB 创建绑定到特定数据库实例的 ShortCut，操作独立数据库
 package buntdb
 
 import (
@@ -11,24 +16,56 @@ import (
 )
 
 // ShortCut 包含了许多数据库的读写helper，只需嵌入即可使用，如果不想嵌入，也可以通过包名调用
-type ShortCut struct{}
+// 支持绑定到特定的数据库实例，实现数据库解耦
+type ShortCut struct{
+	// 如果 db 不为 nil，则使用该实例，否则使用全局实例
+	db *DB
+}
 
-var shortCut = new(ShortCut)
+var shortCut *ShortCut
+
+func init() {
+	shortCut = new(ShortCut)
+}
 
 var txKey = new(struct{})
 
 var logger = utils.GetModuleLogger("localdb")
+
+// WithDB 创建一个绑定到特定数据库实例的 ShortCut
+// 通过该 ShortCut 操作数据库时，会使用指定的数据库实例而非全局实例
+// 示例:
+// 
+// db, _ := buntdb.NewDB(":memory:")
+// sc := buntdb.WithDB(db)
+// sc.SetFunc("key", "value")
+func WithDB(db *DB) *ShortCut {
+	return &ShortCut{db: db}
+}
+
+// getClient 获取数据库客户端，优先使用实例数据库，其次使用全局数据库
+func (s *ShortCut) getClient() (*buntdb.DB, error) {
+	// 检查 s 是否为 nil（这种情况可能发生在全局函数调用中）
+	if s == nil {
+		return GetClient()
+	}
+	
+	if s.db != nil {
+		return s.db.GetDB(), nil
+	}
+	return GetClient()
+}
 
 // RWCoverTx 在一个可读可写事务中执行f，注意f的返回值不一定是RWCoverTx的返回值
 // 有可能f返回nil，但RWTxCover返回non-nil
 // 可以忽略error，但不要简单地用f返回值替代RWTxCover返回值，ref: bilibili/MarkDynamicId
 // 需要注意可写事务是唯一的，同一时间只会存在一个可写事务，所有耗时操作禁止放在可写事务中执行
 // 在同一Goroutine中，可写事务可以嵌套
-func (*ShortCut) RWCoverTx(f func(tx *buntdb.Tx) error) error {
+func (s *ShortCut) RWCoverTx(f func(tx *buntdb.Tx) error) error {
 	if itx := gls.Get(txKey); itx != nil {
 		return f(itx.(*buntdb.Tx))
 	}
-	db, err := GetClient()
+	db, err := s.getClient()
 	if err != nil {
 		return err
 	}
@@ -45,11 +82,11 @@ func (*ShortCut) RWCoverTx(f func(tx *buntdb.Tx) error) error {
 // RWCover 在一个可读可写事务中执行f，不同的是它不获取 buntdb.Tx ，而由 f 自己控制。
 // 需要注意可写事务是唯一的，同一时间只会存在一个可写事务，所有耗时操作禁止放在可写事务中执行
 // 在同一Goroutine中，可写事务可以嵌套
-func (*ShortCut) RWCover(f func() error) error {
+func (s *ShortCut) RWCover(f func() error) error {
 	if itx := gls.Get(txKey); itx != nil {
 		return f()
 	}
-	db, err := GetClient()
+	db, err := s.getClient()
 	if err != nil {
 		return err
 	}
@@ -65,11 +102,11 @@ func (*ShortCut) RWCover(f func() error) error {
 
 // RCoverTx 在一个只读事务中执行f。
 // 所有写操作会失败或者回滚。
-func (*ShortCut) RCoverTx(f func(tx *buntdb.Tx) error) error {
+func (s *ShortCut) RCoverTx(f func(tx *buntdb.Tx) error) error {
 	if itx := gls.Get(txKey); itx != nil {
 		return f(itx.(*buntdb.Tx))
 	}
-	db, err := GetClient()
+	db, err := s.getClient()
 	if err != nil {
 		return err
 	}
@@ -85,11 +122,11 @@ func (*ShortCut) RCoverTx(f func(tx *buntdb.Tx) error) error {
 
 // RCover 在一个只读事务中执行f，不同的是它不获取 buntdb.Tx ，而由 f 自己控制。
 // 所有写操作会失败，或者回滚。
-func (*ShortCut) RCover(f func() error) error {
+func (s *ShortCut) RCover(f func() error) error {
 	if itx := gls.Get(txKey); itx != nil {
 		return f()
 	}
-	db, err := GetClient()
+	db, err := s.getClient()
 	if err != nil {
 		return err
 	}
@@ -326,6 +363,37 @@ func (s *ShortCut) CreatePatternIndex(patternFunc KeyPatternFunc, suffix []inter
 	})
 }
 
+// RemoveByPrefixAndIndex 遍历每个index，如果一个key满足任意prefix，则删掉
+func (s *ShortCut) RemoveByPrefixAndIndex(prefixKey []string, indexKey []string) ([]string, error) {
+	var deletedKey []string
+	err := s.RWCoverTx(func(tx *buntdb.Tx) error {
+		var removeKey = make(map[string]interface{})
+		var iterErr error
+		for _, index := range indexKey {
+			iterErr = tx.Ascend(index, func(key, value string) bool {
+				for _, prefix := range prefixKey {
+					if strings.HasPrefix(key, prefix) {
+						removeKey[key] = struct{}{}
+						return true
+					}
+				}
+				return true
+			})
+			if iterErr != nil {
+				return iterErr
+			}
+		}
+		for key := range removeKey {
+			_, err := tx.Delete(key)
+			if err == nil {
+				deletedKey = append(deletedKey, key)
+			}
+		}
+		return nil
+	})
+	return deletedKey, err
+}
+
 // RWCoverTx 在一个可读可写事务中执行f，注意f的返回值不一定是RWCoverTx的返回值
 // 有可能f返回nil，但RWTxCover返回non-nil
 // 可以忽略error，但不要简单地用f返回值替代RWTxCover返回值，ref: bilibili/MarkDynamicId
@@ -440,33 +508,7 @@ func ExpireOption(duration time.Duration) *buntdb.SetOptions {
 
 // RemoveByPrefixAndIndex 遍历每个index，如果一个key满足任意prefix，则删掉
 func RemoveByPrefixAndIndex(prefixKey []string, indexKey []string) ([]string, error) {
-	var deletedKey []string
-	err := RWCoverTx(func(tx *buntdb.Tx) error {
-		var removeKey = make(map[string]interface{})
-		var iterErr error
-		for _, index := range indexKey {
-			iterErr = tx.Ascend(index, func(key, value string) bool {
-				for _, prefix := range prefixKey {
-					if strings.HasPrefix(key, prefix) {
-						removeKey[key] = struct{}{}
-						return true
-					}
-				}
-				return true
-			})
-			if iterErr != nil {
-				return iterErr
-			}
-		}
-		for key := range removeKey {
-			_, err := tx.Delete(key)
-			if err == nil {
-				deletedKey = append(deletedKey, key)
-			}
-		}
-		return nil
-	})
-	return deletedKey, err
+	return shortCut.RemoveByPrefixAndIndex(prefixKey, indexKey)
 }
 
 func CreatePatternIndex(patternFunc KeyPatternFunc, suffix []interface{}, less ...func(a, b string) bool) error {

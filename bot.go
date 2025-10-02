@@ -2,6 +2,10 @@ package DDBOT
 
 import (
 	"fmt"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"io/ioutil"
 	"os"
 	"os/signal"
@@ -114,6 +118,23 @@ func Run() {
 	}
 	config.GlobalConfig.WatchConfig()
 
+	// 根据配置启用EXT数据库
+	if cfg.GetExtDbEnable() {
+		err = template.InitTemplateDB(cfg.GetExtDbPath())
+		if err != nil {
+			if err == localdb.ErrLockNotHold {
+				warn.Warn("tryLock数据库失败：您可能重复启动了这个BOT！\n如果您确认没有重复启动，请删除.lsp_ext.db.lock文件并重新运行。")
+			} else {
+				warn.Warn("无法正常初始化数据库！请检查.ext.db文件权限是否正确，如无问题则为数据库文件损坏，请阅读文档获得帮助。")
+			}
+			return
+		}
+		db := template.GetTemplateDB()
+		// 添加数据库关闭钩子
+		utils.AddExitHook(func() {
+			db.Close()
+		})
+	}
 	// 快速初始化
 	bot.Init()
 
@@ -239,6 +260,13 @@ websocket:
 reloadDelay:
   enable: true # 是否启用数据延迟加载
   time: 3s # 延迟时间，默认为3秒
+
+# 自定义数据库设置
+# 启用后才会生成自定义数据库文件，并持久化保存
+# 不启用时如果使用了相关函数，则会写入.lsp.db（慎重！）
+extDb:
+  enable: false
+  path: ".ext.db"
 `
 	// win上用记事本打开不会正确换行
 	if runtime.GOOS == "windows" {

@@ -1143,6 +1143,140 @@ abort也支持图片参数
 {{ sleep "1s" }}
 ```
 
+- 本地数据库函数
+
+一组用于操作本地数据库的函数（基于buntdb）：
+警告：如未在配置文件中启用extDb，则会将数据写入.lsp.db（慎重！）
+
+`Set` - 设置键值对
+```text
+{{ Set "key" "value" }}
+```
+
+`Get` - 获取键对应的值
+```text
+{{ Get "key" }}
+```
+
+`setJson` - 设置键值对，值为JSON对象
+```text
+{{ setJson "key" (dict "name" "test" "value" 123) }}
+```
+
+<details>
+    <summary>例子：设置自定义直播间信息</summary>
+
+```gotemplate
+{{ $p := join ":" (list .group_code (index .args 1)) -}}
+{{ $q := (dict "room_id" (index .args 2)) -}}
+{{ $d := httpGet "https://uapis.cn/api/v1/social/bilibili/liveroom" $q | toGJson -}}
+{{ $o := getOptions (list "IgnoreNotFound") -}}
+{{ $r := setJson $p $d $o -}}
+{{ if eq $r "key exist" -}}
+    这里写存在时的处理逻辑
+{{ else if ne $r "" -}}
+    这里写失败时的处理逻辑
+{{ else -}}
+    successful.
+{{ end -}}
+```
+
+</details>
+
+`getJson` - 获取键对应的JSON对象
+```text
+{{ $data := getJson "key" }}
+```
+
+<details>
+    <summary>例子：读取自定义直播间信息</summary>
+
+```gotemplate
+{{ $p := join ":" (list .group_code (index .args 1)) -}}
+{{ $o := getOptions (list "IgnoreNotFound") -}}
+{{ $r := getJson $p $o -}}
+{{ if $r -}}
+{{ if nonEmpty $r.uid -}}
+{{ printf "主播ID：%0.0f\n粉丝数：%v\n房间ID：%0.0f\n房间短ID：%0.0f\n" $r.uid $r.attention $r.room_id $r.short_id -}}
+{{ printf "人气值：%0.0f\n直播状态：%v\n直播时间：%v\n直播标题：%v\n" $r.online $r.live_status $r.live_time $r.title -}}
+{{ printf "房间简介：%v\n父分区：%v\n子分区：%v\n" $r.description $r.parent_area_name $r.area_name -}}
+{{ printf "房间标签：%v\n直播封面：\n" $r.tags }}
+{{- pic $r.user_cover -}}
+背景图：
+{{- pic $r.background -}}
+{{ end -}}
+{{- else -}}
+not found.
+{{ end -}}
+```
+
+</details>
+
+`setInt64` - 设置键值对，值为int64类型
+```text
+{{ setInt64 "counter" 42 }}
+```
+
+`getInt64` - 获取键对应的int64值
+```text
+{{ $counter := getInt64 "counter" }}
+```
+
+`del` - 删除指定键
+```text
+{{ del "key" }}
+```
+
+<details>
+    <summary>例子：删除自定义直播间信息</summary>
+
+```gotemplate
+{{ $p := join ":" (list .group_code (index .args 1)) -}}
+{{ $o := getOptions (list "IgnoreNotFound") -}}
+{{ $r := del $p $o -}}
+{{ if $r -}}
+此处写删除失败后的处理逻辑
+{{ else -}}
+successful.
+{{ end -}}
+```
+
+</details>
+
+`exist` - 检查键是否存在
+```text
+{{ if exist "key" }}Key exists{{ else }}Key does not exist{{ end }}
+```
+
+`getOptions` - 获取数据库操作选项
+```text
+{{ $opts := getOptions (list "SetExpire") "10m" }}
+{{ Set "key" "value" (list $opts) }}
+```
+
+<details>
+    <summary>例子：获取对应功能的选项</summary>
+
+```text
+SetGetIsOverwrite: Set配置，获取此次set是否将覆盖一个旧值，可以与 SetNoOverWriteOpt 同时设置
+SetGetPreviousValueJsonObject: Set配置，将key的上一个值用json解析并放到previous中
+SetGetPreviousValueString: Set配置，存储key上一个值到previous中
+SetGetPreviousValueInt64: Set配置，将key的上一个值解析到int64并放到previous中
+SetNoOverWrite: Set配置，当key已经存在时不进行覆盖，而是返回 ErrRollback
+SetKeepLastExpire: 设置set时保留上次的过期时间 该设置与 SetKeepLastExpireOpt 同时设置时， SetExpireOpt 设置会生效
+SetExpire: 设置set时的过期时间 该设置与 SetKeepLastExpireOpt 同时设置时，本设置会生效
+GetTTL: 获取key上的ttl
+IgnoreNotFound: 获取值时不返回 buntdb.ErrNotFound ，而是返回nil
+GetIgnoreExpire: Get配置，忽略key的过期时间，如果key曾经设置过但已经过期，依然可以获取到
+```
+
+</details>
+
+`newDuration` - 创建一个新的时间间隔变量
+```text
+{{ $duration := newDuration }}
+```
+
 ## 当前支持的命令模板
 
 命令通用模板变量：

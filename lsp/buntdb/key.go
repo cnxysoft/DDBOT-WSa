@@ -277,6 +277,10 @@ func DDBotNoUpdateKey(keys ...interface{}) string {
 	return NamedKey("DDBotNoUpdateKey", keys)
 }
 
+func ExtDbCustomKey(keys ...interface{}) string {
+	return NamedKey("ExtDbCustomKey", keys)
+}
+
 func ParseConcernStateKeyWithInt64(key string) (groupCode int64, id int64, err error) {
 	keys := strings.Split(key, ":")
 	if len(keys) != 3 {

@@ -166,3 +166,11 @@ func GetDouyinOnlyOnlineNotify() bool {
 func GetAcfunOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("acfun.onlyOnlineNotify")
 }
+
+func GetExtDbEnable() bool {
+	return config.GlobalConfig.GetBool("extDb.enable")
+}
+
+func GetExtDbPath() string {
+	return config.GlobalConfig.GetString("extDb.path")
+}

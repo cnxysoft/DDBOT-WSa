@@ -1,9 +1,10 @@
 //go:build windows
 // +build windows
 
-package main
+package utils
 
 import (
+	"os"
 	"syscall"
 	"time"
 )
@@ -21,22 +22,31 @@ var (
 	procSetConsoleCtrlHandler = kernel32.NewProc("SetConsoleCtrlHandler")
 )
 
-func exitHook(f func()) error {
+// setupWindowsExitHook 设置Windows系统退出钩子
+func setupWindowsExitHook() {
+	// 注册Windows控制台事件处理函数
 	n, _, err := procSetConsoleCtrlHandler.Call(
 		syscall.NewCallback(func(controlType uint32) uint {
-			f()
+			// 执行所有退出钩子
+			RunExitHooks()
+
+			// 等待一段时间确保清理完成
 			time.Sleep(time.Second * 1)
+
+			// 对于关闭事件，返回1表示已处理
 			switch controlType {
 			case CTRL_CLOSE_EVENT:
+				os.Exit(0)
 				return 1
 			default:
+				os.Exit(0)
 				return 0
 			}
 		}),
 		1)
-
-	if n == 0 {
-		return err
+	if n == 0 || err != nil && err.Error() != "The operation completed successfully." {
+		// 注册失败，使用备用方案
+		setupSignalExitHook()
+		return
 	}
-	return nil
 }

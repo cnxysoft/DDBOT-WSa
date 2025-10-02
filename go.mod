@@ -28,6 +28,7 @@ require (
 	github.com/huandu/xstrings v1.4.0
 	github.com/imdario/mergo v0.3.14
 	github.com/json-iterator/go v1.1.12
+	github.com/klauspost/compress v1.18.0
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/mitchellh/copystructure v1.2.0
 	github.com/modern-go/gls v0.0.0-20220109145502-612d0167dce5
@@ -50,7 +51,7 @@ require (
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/sagikazarmark/locafero v0.10.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	golang.org/x/image v0.30.0 // indirect
@@ -60,7 +61,7 @@ require (
 require (
 	github.com/RomiChan/protobuf v0.1.1-0.20230204044148-2ed269a2e54d // indirect
 	github.com/RomiChan/syncx v0.0.0-20240418144900-b7402ffdebc7 // indirect
-	github.com/andybalholm/brotli v1.0.5 // indirect
+	github.com/andybalholm/brotli v1.0.5
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/bytedance/sonic v1.9.2 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
@@ -100,7 +101,7 @@ require (
 	golang.org/x/crypto v0.10.0 // indirect
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29 // indirect
 	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	golang.org/x/text v0.28.0
 	gopkg.ilharper.com/x/isatty v1.1.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
