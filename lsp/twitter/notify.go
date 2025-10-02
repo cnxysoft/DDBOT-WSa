@@ -47,14 +47,17 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 			m.Append(message.NewReply(msg))
 		}
 		logger.WithField("compact_key", n.compactKey).Debug("compact notify")
+		Tips := "转发"
 		var OrgUserName string
 		if n.Tweet.QuoteTweet != nil {
 			OrgUserName = n.Tweet.QuoteTweet.OrgUser.Name
+			Tips = "引用"
 		} else {
 			OrgUserName = n.Tweet.OrgUser.Name
 		}
-		m.Textf("X-%s转发了%s的推文：\n%s\n%s\n",
+		m.Textf("X-%s%s了%s的推文：\n%s\n%s\n",
 			n.Name,
+			Tips,
 			OrgUserName,
 			CSTTime(time.Now().UTC()).Format(time.DateTime),
 			n.Tweet.Content,
