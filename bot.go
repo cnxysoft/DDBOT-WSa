@@ -40,17 +40,25 @@ func SetUpLog() {
 		logrus.WithError(err).Error("unable to write logs")
 		return
 	}
-	logrus.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:    true,
-		PadLevelText:     true,
-		QuoteEmptyFields: true,
-	})
-	logrus.AddHook(lfshook.NewHook(writer, &logrus.TextFormatter{
+	formatter := &logrus.TextFormatter{
 		FullTimestamp:    true,
 		PadLevelText:     true,
 		QuoteEmptyFields: true,
 		ForceQuote:       true,
-	}))
+	}
+	logrus.SetOutput(writer)
+	logrus.SetFormatter(formatter)
+	logrus.AddHook(lfshook.NewHook(
+		lfshook.WriterMap{
+			logrus.DebugLevel: os.Stdout,
+			logrus.InfoLevel:  os.Stdout,
+			logrus.WarnLevel:  os.Stderr,
+			logrus.ErrorLevel: os.Stderr,
+			logrus.FatalLevel: os.Stderr,
+			logrus.PanicLevel: os.Stderr,
+		},
+		formatter,
+	))
 }
 
 // Run 启动bot，这个函数会阻塞直到收到退出信号
@@ -111,7 +119,7 @@ func Run() {
 
 	// 初始化 Modules
 	bot.StartService()
-	//fmt.Println("运行完了bot.StartService()")
+
 	// 登录 跳过登录
 	//bot.Login()
 
@@ -120,7 +128,6 @@ func Run() {
 	// bot.RefreshList()
 
 	lsp.Instance.PostStart(bot.Instance)
-	//fmt.Println("运行完了lsp.Instance.PostStart(bot.Instance)")
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)

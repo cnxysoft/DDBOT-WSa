@@ -569,8 +569,6 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if !l.started.Load() {
 			return
 		}
-		//fmt.Printf("运行到cmd := NewLspGroupCommand(l, msg)啦!")
-		//fmt.Printf("%+v\n", msg)
 		logger.Debugf("%+v\n", msg)
 		cmd := NewLspGroupCommand(l, msg)
 		if Debug {
@@ -948,7 +946,6 @@ func (l *Lsp) sendPrivateMessage(uin int64, msg *message.SendingMessage) (res *m
 		logger.WithFields(localutils.FriendLogFields(uin)).Debug("send with nil private message")
 		return &message.PrivateMessage{Id: -1}
 	}
-	//logger.Debugf("发送私聊消息：%v\n", msgstringer.MsgToString(msg.Elements))
 	msg.Elements = localutils.MessageFilter(msg.Elements, func(element message.IMessageElement) bool {
 		return element != nil
 	})
@@ -972,7 +969,6 @@ func (l *Lsp) sendPrivateMessage(uin int64, msg *message.SendingMessage) (res *m
 // sendGroupMessage 发送一条消息，返回值总是非nil，Id为-1表示发送失败
 // miraigo偶尔发送消息会panic？！
 func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, recovered ...bool) (res *message.GroupMessage) {
-	//fmt.Printf("运行到发信息了%v\n", msgstringer.MsgToString(msg.Elements))
 	defer func() {
 		if e := recover(); e != nil {
 			if len(recovered) == 0 {
@@ -1002,12 +998,10 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, rec
 		logger.WithFields(localutils.GroupLogFields(groupCode)).Debug("send with nil group message")
 		return &message.GroupMessage{Id: -1}
 	}
-	//logger.Debugf("发送群消息：%v\n", msgstringer.MsgToString(msg.Elements))
 	msg.Elements = localutils.MessageFilter(msg.Elements, func(element message.IMessageElement) bool {
 		return element != nil
 	})
 	if len(msg.Elements) == 0 {
-		//logger.Debug("消息元素为空，返回")
 		logger.WithFields(localutils.GroupLogFields(groupCode)).Debug("send with empty group message")
 		return &message.GroupMessage{Id: -1}
 	}

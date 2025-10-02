@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"net/http/cookiejar"
+	"time"
+
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
@@ -11,9 +15,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"golang.org/x/sync/errgroup"
-	"math/rand"
-	"net/http/cookiejar"
-	"time"
 
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
@@ -348,7 +349,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 
 			errGroup.Go(func() error {
 				defer func() {
-					logger.WithField("cost", time.Now().Sub(start)).
+					logger.WithField("cost", time.Since(start)).
 						Tracef("watchCore live fresh done")
 				}()
 				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Live) })
@@ -367,7 +368,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 
 			errGroup.Go(func() error {
 				defer func() {
-					logger.WithField("cost", time.Now().Sub(start)).
+					logger.WithField("cost", time.Since(start)).
 						Tracef("watchCore dynamic fresh done")
 				}()
 				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(News) })
@@ -432,7 +433,7 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 					usrInfo = newUserInfo
 				}
 			}
-			if time.Now().Sub(time.Unix(oldFreshTime, 0)) < 30*time.Minute || oldFreshTime == 0 {
+			if time.Since(time.Unix(oldFreshTime, 0)) < 30*time.Minute || oldFreshTime == 0 {
 				live := &LiveInfo{
 					UserInfo:          *usrInfo,
 					IsLiving:          isLive,
@@ -463,7 +464,7 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 			return nil, fmt.Errorf("DynamicSvrDynamicNew failed %v", resp.GetStatusCode())
 		}
 		var resCards []*UserPostsResponse_AwemeList
-		logger.WithField("cost", time.Now().Sub(start)).Trace("freshDynamicNew cost 1")
+		logger.WithField("cost", time.Since(start)).Trace("freshDynamicNew cost 1")
 		for i, card := range resp.GetAwemeList() {
 			if i == 0 {
 				usrInfo.NikeName = card.GetAuthor().GetNickname()
@@ -477,7 +478,7 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 			}
 		}
 		result = append(result, NewNewsInfoWithDetail(usrInfo, resCards))
-		logger.WithField("cost", time.Now().Sub(start)).
+		logger.WithField("cost", time.Since(start)).
 			WithField("NewsInfo Size", len(result)).
 			Trace("freshDynamicNew done")
 	}

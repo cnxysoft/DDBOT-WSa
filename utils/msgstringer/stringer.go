@@ -18,7 +18,7 @@ func MsgToString(elements []message.IMessageElement) string {
 		}
 		// Print each element's type for debugging
 		logger.Debugf(`Element %d is of type %T\n`, i, elem)
-		//fmt.Printf("Element %d is of type %T\n", i, elem)
+
 		switch e := elem.(type) {
 		case *message.TextElement:
 			res.WriteString(e.Content)
@@ -52,8 +52,6 @@ func MsgToString(elements []message.IMessageElement) string {
 			res.WriteString(e.Title)
 			res.WriteString("]")
 		case *message.ReplyElement:
-			//fmt.Printf("暂时不发送at:[Reply:%s]\n", strconv.FormatInt(int64(e.ReplySeq), 10))
-			//logger.Infof(`暂时不发送at:[Reply:%s]\n`, strconv.FormatInt(int64(e.ReplySeq), 10))
 			res.WriteString("[回复:")
 			res.WriteString(strconv.FormatInt(int64(e.ReplySeq), 10))
 			res.WriteString("]")
