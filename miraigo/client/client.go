@@ -998,9 +998,6 @@ func (c *QQClient) handleGroupBanNotice(wsmsg WebSocketMessage) (bool, error) {
 			} else {
 				member.ShutUpTimestamp = 0
 			}
-			if wsmsg.Duration == -1 {
-				wsmsg.Duration = 268435455
-			}
 			c.GroupMuteEvent.dispatch(c, &GroupMuteEvent{
 				GroupCode:   wsmsg.GroupID.ToInt64(),
 				OperatorUin: wsmsg.OperatorId.ToInt64(),

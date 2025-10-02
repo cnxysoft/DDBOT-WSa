@@ -574,8 +574,11 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if Debug {
 			cmd.Debug()
 		}
-		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin) {
+		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin) ||
+			l.PermissionStateManager.CheckGroupAdministrator(msg.GroupCode, bot.Uin) {
 			go cmd.Execute()
+		} else {
+			logger.Debug("BOT被禁言无法响应群指令")
 		}
 	})
 
@@ -987,7 +990,8 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, rec
 	if bot.Instance == nil {
 		return &message.GroupMessage{Id: -1, Elements: msg.Elements}
 	}
-	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin) {
+	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin) &&
+		!l.PermissionStateManager.CheckGroupAdministrator(groupCode, bot.Instance.Uin) {
 		logger.WithField("content", msgstringer.MsgToString(msg.Elements)).
 			WithFields(localutils.GroupLogFields(groupCode)).
 			Debug("BOT被禁言无法发送群消息")
