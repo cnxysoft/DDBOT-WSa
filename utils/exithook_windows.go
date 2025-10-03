@@ -4,7 +4,6 @@
 package utils
 
 import (
-	"os"
 	"syscall"
 	"time"
 )
@@ -36,10 +35,8 @@ func setupWindowsExitHook() {
 			// 对于关闭事件，返回1表示已处理
 			switch controlType {
 			case CTRL_CLOSE_EVENT:
-				os.Exit(0)
 				return 1
 			default:
-				os.Exit(0)
 				return 0
 			}
 		}),
