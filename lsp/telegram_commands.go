@@ -24,6 +24,9 @@ func (l *Lsp) StartTelegramCommands() {
 
     // Start receiving text messages from Telegram
     lsptelegram.StartReceiving(func(chatID int64, fromID int64, text string) {
+        // Build a TG-namespaced Lsp (shallow copy) so permissions are isolated
+        tgL := *l
+        tgL.PermissionStateManager = permission.NewTgStateManager()
         // Parse command token and args
         cmd, args := parseTGLine(text)
         if cmd == "" {
@@ -42,13 +45,13 @@ func (l *Lsp) StartTelegramCommands() {
             lsptelegram.SendToChat(chatID, mmsg.NewText("可用命令: /whosyourdaddy /list /watch /unwatch /enable /disable /grant /config /silence /abnormal /clean /noupdate /help /ping\n说明: 在群聊中可省略 -g；站点默认 bilibili，仅在其他平台时使用 -s\n示例: /watch -s bilibili -t live 123456"))
             return
         case "whosyourdaddy":
-            c := l.newTGContext(chatID, fromID, senderUin, 0)
-            if l.PermissionStateManager.CheckRole(senderUin, permission.Admin) {
+            c := tgL.newTGContext(chatID, fromID, senderUin, 0)
+            if tgL.PermissionStateManager.CheckRole(senderUin, permission.Admin) {
                 c.TextReply("您已经是管理员了，请不要重复使用此命令。")
                 return
             }
-            if l.PermissionStateManager.CheckNoAdmin() {
-                if err := l.PermissionStateManager.GrantRole(senderUin, permission.Admin); err != nil {
+            if tgL.PermissionStateManager.CheckNoAdmin() {
+                if err := tgL.PermissionStateManager.GrantRole(senderUin, permission.Admin); err != nil {
                     c.TextReply("失败 - 内部错误")
                 } else {
                     c.TextReply("成功 - 您已成为bot管理员")
@@ -66,7 +69,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             // remember mapping for convenience next time
             _ = tgSetBoundGroup(chatID, group)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             IList(c, group, site)
             return
         case "watch", "unwatch":
@@ -78,9 +81,9 @@ func (l *Lsp) StartTelegramCommands() {
             }
             _ = tgSetBoundGroup(chatID, group)
             lsptelegram.BindGroupToChat(group, chatID)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if site == "" { site = "bilibili" }
-            normSite, wt, err := NewRuntime(l).ParseRawSiteAndType(site, typ)
+            normSite, wt, err := NewRuntime(&tgL).ParseRawSiteAndType(site, typ)
             if err != nil {
                 c.TextReply("参数错误 - " + err.Error())
                 return
@@ -96,7 +99,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             _ = tgSetBoundGroup(chatID, group)
             lsptelegram.BindGroupToChat(group, chatID)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             IEnable(c, group, targetCmd, strings.ToLower(cmd) == "disable")
             return
         case "grant":
@@ -126,7 +129,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             _ = tgSetBoundGroup(chatID, group)
             lsptelegram.BindGroupToChat(group, chatID)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if command != "" {
                 IGrantCmd(c, group, command, target, del)
             } else if role != "" {
@@ -145,7 +148,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             _ = tgSetBoundGroup(chatID, group)
             lsptelegram.BindGroupToChat(group, chatID)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             ISilenceCmd(c, group, del)
             return
         case "config":
@@ -157,7 +160,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             _ = tgSetBoundGroup(chatID, group)
             lsptelegram.BindGroupToChat(group, chatID)
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if len(args) == 0 { c.TextReply("参数错误"); return }
             // find first non-flag index
             idx := 0
@@ -174,7 +177,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> at <id> <add|remove|clear|show> [qq]"); return }
                 id := rest[0]
                 action := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(l).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 var qqs []int64
                 if action == "add" || action == "remove" {
@@ -186,7 +189,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> at_all <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(l).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigAtAllCmd(c, group, id, normSite, ctype, on)
@@ -194,7 +197,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> title_notify <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(l).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigTitleNotifyCmd(c, group, id, normSite, ctype, on)
@@ -202,14 +205,14 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> offline_notify <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(l).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigOfflineNotifyCmd(c, group, id, normSite, ctype, on)
             case "filter":
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> filter <type|not_type|text|clear|show> ..."); return }
                 fsub := strings.ToLower(rest[0])
-                normSite, ctype, err := NewRuntime(l).ParseRawSiteAndType(site, "news")
+                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "news")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 switch fsub {
                 case "type":
@@ -243,7 +246,7 @@ func (l *Lsp) StartTelegramCommands() {
             }
             return
         case "abnormal":
-            c := l.newTGContext(chatID, fromID, senderUin, 0)
+            c := tgL.newTGContext(chatID, fromID, senderUin, 0)
             IAbnormalConcernCheck(c)
             return
         case "clean":
@@ -257,14 +260,14 @@ func (l *Lsp) StartTelegramCommands() {
                 _ = tgSetBoundGroup(chatID, group)
                 lsptelegram.BindGroupToChat(group, chatID)
             }
-            c := l.newTGContext(chatID, fromID, senderUin, group)
+            c := tgL.newTGContext(chatID, fromID, senderUin, group)
             ICleanConcern(c, abnormal, groups, site, typ)
             return
         case "noupdate", "no_update":
             // /noupdate [-d]
             del := false
             for _, a := range args { if a == "-d" || a == "--delete" { del = true; break } }
-            c := l.newTGContext(chatID, fromID, senderUin, 0)
+            c := tgL.newTGContext(chatID, fromID, senderUin, 0)
             key := localdb.DDBotNoUpdateKey(senderUin)
             var err error
             if del {

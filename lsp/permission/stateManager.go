@@ -396,18 +396,29 @@ func (c *StateManager) RemoveAllByGroupCode(groupCode int64) ([]string, error) {
 }
 
 func (c *StateManager) FreshIndex() {
-	for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
-		c.CreatePatternIndex(pattern, nil)
-	}
-	for _, group := range localutils.GetBot().GetGroupList() {
-		c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
-		c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
-	}
+    // Build indices for the namespace this StateManager is configured with
+    for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
+        c.CreatePatternIndex(pattern, nil)
+    }
+    for _, group := range localutils.GetBot().GetGroupList() {
+        c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
+        c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
+    }
 }
 
 func NewStateManager() *StateManager {
-	sm := &StateManager{
-		KeySet: NewKeySet(),
-	}
-	return sm
+    sm := &StateManager{
+        KeySet: NewKeySet(),
+    }
+    sm.FreshIndex()
+    return sm
+}
+
+// NewTgStateManager returns a StateManager whose keys are in the TG namespace
+func NewTgStateManager() *StateManager {
+    sm := &StateManager{
+        KeySet: NewKeySet().WithNamespace("tg"),
+    }
+    sm.FreshIndex()
+    return sm
 }
