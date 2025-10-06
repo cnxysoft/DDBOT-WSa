@@ -1,4 +1,4 @@
-package lsp
+﻿package lsp
 
 import (
 	"fmt"
@@ -760,7 +760,6 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		logger.Debug("消息多次发送失败，尝试触发提醒模板")
 		_, _ = template.LoadAndExec(templateName, data)
 	})
-
 }
 
 func (l *Lsp) SendMsgToAdmin(m *mmsg.MSG) {
@@ -782,6 +781,9 @@ func (l *Lsp) PostStart(bot *bot.Bot) {
 	l.CronStart()
 	concern.StartAll()
 	l.started.Store(true)
+
+	// 启动TG适配器
+	l.StartTelegramCommands()
 
 	var newVersionChan = make(chan string, 1)
 	go func() {

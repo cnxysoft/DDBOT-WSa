@@ -2,10 +2,6 @@ package DDBOT
 
 import (
 	"fmt"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"io/ioutil"
 	"os"
 	"os/signal"
@@ -14,6 +10,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 
 	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -267,6 +268,17 @@ reloadDelay:
 extDb:
   enable: false
   path: ".ext.db"
+
+# Telegram 推送设置
+# 启用后，可在 Telegram 中进行所有操作（命令与 QQ 一致）
+telegram:
+  enable: false            # 是否启用Telegram
+  token: ""                # Telegram Bot Token
+  proxy:
+    enable: false         # 是否启用代理（http/https/socks5/socks5h）
+    url: ""               # 代理地址，例如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080
+  endpoint: ""            # 可选：自定义 Telegram API Endpoint，留空使用默认
+
 `
 	// win上用记事本打开不会正确换行
 	if runtime.GOOS == "windows" {
