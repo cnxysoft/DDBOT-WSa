@@ -168,7 +168,7 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 							requests.ProxyOption(proxy_pool.PreferOversea),
 							requests.AddUAOption(UserAgent),
 							requests.WithCookieJar(Cookie)))
-				case "video", "gif":
+				case "video":
 					if strings.Contains(unescape, "video.twimg.com") {
 						idx := strings.Index(unescape, "video.twimg.com")
 						unescape, err = processMediaURL(unescape[idx:])
@@ -189,6 +189,27 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 							requests.ProxyOption(proxy_pool.PreferOversea),
 							requests.AddUAOption(UserAgent),
 							requests.WithCookieJar(Cookie)))
+				case "gif":
+					if strings.Contains(unescape, "video.twimg.com") {
+						idx := strings.Index(unescape, "video.twimg.com")
+						unescape, err = processMediaURL(unescape[idx:])
+						if err != nil {
+							logger.WithField("stack", string(debug.Stack())).
+								WithField("tweetId", tweet.ID).
+								Errorf("concern notify recoverd: %v", err)
+							continue
+						}
+						m.Url = "https://" + unescape
+					}
+					// 下载并转码
+					filePath, err := downloadMedia(m.Url, true)
+					if err != nil {
+						logger.WithField("stack", string(debug.Stack())).
+							WithField("tweetId", tweet.ID).
+							Errorf("concern notify recoverd: %v", err)
+						continue
+					}
+					message.Append(mmsg.NewImageByLocal(filePath))
 				case "video(m3u8)":
 					var fullURL *url.URL
 					var err error
@@ -220,27 +241,12 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 						}
 						m.Url = fullURL.String()
 					}
-					var proxyStr string
-					proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
+					// 下载并转码
+					filePath, err := downloadMedia(m.Url, false)
 					if err != nil {
 						logger.WithField("stack", string(debug.Stack())).
 							WithField("tweetId", tweet.ID).
-							Warnf("concern notify recoverd: proxy setting failed: %v", err)
-					} else {
-						proxyStr = proxy.ProxyString()
-					}
-					if _, err = os.Stat("./res"); os.IsNotExist(err) {
-						if err = os.MkdirAll("./res", 0755); err != nil {
-							logger.Error("创建下载目录失败")
-							continue
-						}
-					}
-					filePath, _ := filepath.Abs("./res/" + uuid.New().String() + ".mp4")
-					err = convertWithProxy(m.Url, filePath, proxyStr)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", tweet.ID).
-							Errorf("concern notify recoverd: convertWithProxy failed: %v", err)
+							Errorf("concern notify recoverd: %v", err)
 						continue
 					}
 					if mainTweet {
@@ -248,10 +254,6 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 					}
 					message.Cut()
 					message.Append(mmsg.NewVideoByLocal(filePath))
-					go func(path string) {
-						time.Sleep(time.Second * 128)
-						os.Remove(path)
-					}(filePath)
 				}
 			}
 		}
@@ -275,13 +277,67 @@ func addTweetUrl(msg *mmsg.MSG, url string, added *bool) {
 	}
 }
 
-func convertWithProxy(m3u8URL, outputPath, proxyURL string) error {
-	cmd := exec.Command("ffmpeg",
+func downloadMedia(Url string, IsGif bool) (string, error) {
+	var proxyStr string
+	proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
+	if err != nil {
+		return "", err
+	} else {
+		proxyStr = proxy.ProxyString()
+	}
+	if _, err = os.Stat("./res"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./res", 0755); err != nil {
+			return "", err
+		}
+	}
+	fileExt := "mp4"
+	if IsGif {
+		fileExt = "gif"
+	}
+	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + fileExt)
+
+	if IsGif {
+		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	} else {
+		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	}
+	if err != nil {
+		return "", err
+	}
+	go func(path string) {
+		time.Sleep(time.Second * 180)
+		logger.Debugf("Delete temporary files: %s", path)
+		err := os.Remove(path)
+		if err != nil {
+			logger.WithField("stack", string(debug.Stack())).
+				WithField("filePath", path).
+				Errorf("Delete temporary files error: %v", err)
+		}
+	}(filePath)
+	return filePath, nil
+}
+
+func convMediaWithProxy(Url, outputPath, proxyURL, Type string) error {
+	args := []string{
 		"-v", "error",
-		"-i", m3u8URL,
-		"-c", "copy",
-		"-f", "mp4",
-		outputPath)
+		"-i", Url,
+		"-f", Type,
+		outputPath,
+	}
+
+	if Type == "mp4" {
+		args = []string{
+			"-v", "error",
+			"-i", Url,
+			"-c", "copy",
+			"-movflags",
+			"+faststart",
+			"-f", Type,
+			outputPath,
+		}
+	}
+
+	cmd := exec.Command("ffmpeg", args...)
 	if proxyURL != "" {
 		cmd.Env = append(os.Environ(), "http_proxy="+proxyURL, "https_proxy="+proxyURL, "rw_timeout=30000000")
 	}
