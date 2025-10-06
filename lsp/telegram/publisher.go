@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -137,14 +138,8 @@ func ensureInit() bool {
 			}
 		}
 
-		// Build HTTP client (with or without proxy)
-		var httpClient *http.Client
-		if config.GlobalConfig.GetBool("telegram.proxy.enable") {
-			httpClient = buildTelegramHTTPClient()
-		}
-		if httpClient == nil {
-			httpClient = http.DefaultClient
-		}
+		// Build tuned HTTP client (with or without proxy)
+		httpClient := buildTelegramHTTPClient()
 		// Determine API endpoint
 		endpoint := config.GlobalConfig.GetString("telegram.endpoint")
 		if endpoint == "" {
@@ -194,19 +189,40 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 		return
 	}
 	recvOnce.Do(func() {
-		u := tgbotapi.NewUpdate(0)
-		u.Timeout = 60
-		updates := bot.GetUpdatesChan(u)
 		go func() {
-			for update := range updates {
-				if update.Message == nil || update.Message.From == nil {
+			var offset int = 0
+			var backoff time.Duration = 3 * time.Second
+			const maxBackoff = 60 * time.Second
+			for {
+				u := tgbotapi.NewUpdate(offset)
+				u.Timeout = 60
+				u.AllowedUpdates = []string{"message", "edited_message", "channel_post"}
+				updates, err := bot.GetUpdates(u)
+				if err != nil {
+					log.WithError(err).Debug("telegram getUpdates failed; retrying")
+					time.Sleep(backoff)
+					if backoff < maxBackoff {
+						backoff *= 2
+						if backoff > maxBackoff {
+							backoff = maxBackoff
+						}
+					}
 					continue
 				}
-				txt := strings.TrimSpace(update.Message.Text)
-				if txt == "" {
-					continue
+				backoff = 3 * time.Second
+				for _, update := range updates {
+					if update.UpdateID >= offset {
+						offset = update.UpdateID + 1
+					}
+					if update.Message == nil || update.Message.From == nil {
+						continue
+					}
+					txt := strings.TrimSpace(update.Message.Text)
+					if txt == "" {
+						continue
+					}
+					onText(update.Message.Chat.ID, update.Message.From.ID, txt)
 				}
-				onText(update.Message.Chat.ID, update.Message.From.ID, txt)
 			}
 		}()
 	})
@@ -215,38 +231,46 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 // buildTelegramHTTPClient constructs an *http.Client honoring telegram.proxy.url
 // Supports http(s) proxies and socks5/socks5h proxies.
 func buildTelegramHTTPClient() *http.Client {
-	proxyURL := config.GlobalConfig.GetString("telegram.proxy.url")
-	if proxyURL == "" {
-		return nil
+	// Base transport with conservative timeouts suitable for long-polling
+	tr := &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 70 * time.Second, // > long-poll Timeout
+		ForceAttemptHTTP2:     false,            // more stable with some proxies
 	}
-	tr := &http.Transport{}
-	lower := strings.ToLower(proxyURL)
-	if strings.HasPrefix(lower, "socks5://") || strings.HasPrefix(lower, "socks5h://") {
-		u, err := url.Parse(proxyURL)
-		if err != nil {
-			log.WithError(err).Warnf("invalid telegram.proxy.url for socks5: %s", proxyURL)
-			return nil
+	proxyURL := config.GlobalConfig.GetString("telegram.proxy.url")
+	if proxyURL != "" {
+		lower := strings.ToLower(proxyURL)
+		if strings.HasPrefix(lower, "socks5://") || strings.HasPrefix(lower, "socks5h://") {
+			u, err := url.Parse(proxyURL)
+			if err != nil {
+				log.WithError(err).Warnf("invalid telegram.proxy.url for socks5: %s", proxyURL)
+			} else {
+				var auth *xproxy.Auth
+				if u.User != nil {
+					pass, _ := u.User.Password()
+					auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
+				}
+				d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{})
+				if err != nil {
+					log.WithError(err).Warnf("failed to init socks5 dialer for %s", proxyURL)
+				} else {
+					tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+						return d.Dial(network, addr)
+					}
+				}
+			}
+		} else {
+			u, err := url.Parse(proxyURL)
+			if err != nil {
+				log.WithError(err).Warnf("invalid telegram.proxy.url: %s", proxyURL)
+			} else {
+				tr.Proxy = http.ProxyURL(u)
+			}
 		}
-		var auth *xproxy.Auth
-		if u.User != nil {
-			pass, _ := u.User.Password()
-			auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
-		}
-		d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{})
-		if err != nil {
-			log.WithError(err).Warnf("failed to init socks5 dialer for %s", proxyURL)
-			return nil
-		}
-		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return d.Dial(network, addr)
-		}
-	} else {
-		u, err := url.Parse(proxyURL)
-		if err != nil {
-			log.WithError(err).Warnf("invalid telegram.proxy.url: %s", proxyURL)
-			return nil
-		}
-		tr.Proxy = http.ProxyURL(u)
 	}
 	return &http.Client{Transport: tr}
 }
