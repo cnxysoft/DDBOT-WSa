@@ -24,9 +24,11 @@ func (l *Lsp) StartTelegramCommands() {
 
     // Start receiving text messages from Telegram
     lsptelegram.StartReceiving(func(chatID int64, fromID int64, text string) {
-        // Build a TG-namespaced Lsp (shallow copy) so permissions are isolated
-        tgL := *l
-        tgL.PermissionStateManager = permission.NewTgStateManager()
+        // Build a TG-namespaced Lsp (no struct copy to avoid copying locks)
+        tgL := &Lsp{
+            PermissionStateManager: permission.NewTgStateManager(),
+            LspStateManager:        l.LspStateManager,
+        }
         // Parse command token and args
         cmd, args := parseTGLine(text)
         if cmd == "" {
@@ -83,7 +85,7 @@ func (l *Lsp) StartTelegramCommands() {
             lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if site == "" { site = "bilibili" }
-            normSite, wt, err := NewRuntime(&tgL).ParseRawSiteAndType(site, typ)
+            normSite, wt, err := NewRuntime(tgL).ParseRawSiteAndType(site, typ)
             if err != nil {
                 c.TextReply("参数错误 - " + err.Error())
                 return
@@ -177,7 +179,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> at <id> <add|remove|clear|show> [qq]"); return }
                 id := rest[0]
                 action := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 var qqs []int64
                 if action == "add" || action == "remove" {
@@ -189,7 +191,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> at_all <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigAtAllCmd(c, group, id, normSite, ctype, on)
@@ -197,7 +199,7 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> title_notify <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigTitleNotifyCmd(c, group, id, normSite, ctype, on)
@@ -205,14 +207,14 @@ func (l *Lsp) StartTelegramCommands() {
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> offline_notify <id> <on|off>"); return }
                 id := rest[0]
                 sw := strings.ToLower(rest[1])
-                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "live")
+                normSite, ctype, err := NewRuntime(tgL).ParseRawSiteAndType(site, "live")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 on := sw == "on"
                 IConfigOfflineNotifyCmd(c, group, id, normSite, ctype, on)
             case "filter":
                 if len(rest) < 2 { c.TextReply("用法: /config -g <群号> filter <type|not_type|text|clear|show> ..."); return }
                 fsub := strings.ToLower(rest[0])
-                normSite, ctype, err := NewRuntime(&tgL).ParseRawSiteAndType(site, "news")
+                normSite, ctype, err := NewRuntime(tgL).ParseRawSiteAndType(site, "news")
                 if err != nil { c.TextReply("参数错误 - "+err.Error()); return }
                 switch fsub {
                 case "type":
