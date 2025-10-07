@@ -7,7 +7,6 @@ import (
     "github.com/Mrs4s/MiraiGo/message"
     "github.com/Sora233/MiraiGo-Template/config"
     localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-    "github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
     "github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
     "github.com/cnxysoft/DDBOT-WSa/lsp/permission"
     lsptelegram "github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
@@ -24,6 +23,7 @@ func (l *Lsp) StartTelegramCommands() {
 
     // Start receiving text messages from Telegram
     lsptelegram.StartReceiving(func(chatID int64, fromID int64, text string) {
+        logger.WithField("tg_chat", chatID).WithField("tg_from", fromID).Info("telegram text received")
         // Build a TG-namespaced Lsp (no struct copy to avoid copying locks)
         tgL := &Lsp{
             PermissionStateManager: permission.NewTgStateManager(),
@@ -34,6 +34,7 @@ func (l *Lsp) StartTelegramCommands() {
         if cmd == "" {
             return
         }
+        logger.WithField("tg_chat", chatID).WithField("tg_from", fromID).WithField("cmd", cmd).Info("telegram command parsed")
         // Build context: treat Telegram user ID as operator UIN
         senderUin := fromID
         // Default group: in Telegram 群聊/频道可省略 -g，默认使用当前聊天ID；私聊需显式 -g
@@ -69,8 +70,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("请先使用 -g <群号> 指定操作群；本聊天后续可省略 -g"))
                 return
             }
-            // remember mapping for convenience next time
-            _ = tgSetBoundGroup(chatID, group)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             IList(c, group, site)
             return
@@ -81,8 +80,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("用法: /watch -g <群号> -s <站点> -t <类型> <ID>"))
                 return
             }
-            _ = tgSetBoundGroup(chatID, group)
-            lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if site == "" { site = "bilibili" }
             normSite, wt, err := NewRuntime(tgL).ParseRawSiteAndType(site, typ)
@@ -99,8 +96,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("用法: /enable -g <群号> <命令名>"))
                 return
             }
-            _ = tgSetBoundGroup(chatID, group)
-            lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             IEnable(c, group, targetCmd, strings.ToLower(cmd) == "disable")
             return
@@ -129,8 +124,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("用法: /grant -g <群号> (-c <命令> | -r <Admin|GroupAdmin>) [-d] <目标QQ>"))
                 return
             }
-            _ = tgSetBoundGroup(chatID, group)
-            lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if command != "" {
                 IGrantCmd(c, group, command, target, del)
@@ -148,8 +141,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("用法: /silence -g <群号> [-d]"))
                 return
             }
-            _ = tgSetBoundGroup(chatID, group)
-            lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             ISilenceCmd(c, group, del)
             return
@@ -160,8 +151,6 @@ func (l *Lsp) StartTelegramCommands() {
                 lsptelegram.SendToChat(chatID, mmsg.NewText("用法: /config -g <群号> [-s <站点>] <子命令> ..."))
                 return
             }
-            _ = tgSetBoundGroup(chatID, group)
-            lsptelegram.BindGroupToChat(group, chatID)
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             if len(args) == 0 { c.TextReply("参数错误"); return }
             // find first non-flag index
@@ -258,10 +247,6 @@ func (l *Lsp) StartTelegramCommands() {
             for _, a := range args { if a == "-a" || a == "--abnormal" { abnormal = true; break } }
             var groups []int64
             if group != 0 { groups = []int64{group} }
-            if group != 0 {
-                _ = tgSetBoundGroup(chatID, group)
-                lsptelegram.BindGroupToChat(group, chatID)
-            }
             c := tgL.newTGContext(chatID, fromID, senderUin, group)
             ICleanConcern(c, abnormal, groups, site, typ)
             return
@@ -282,7 +267,20 @@ func (l *Lsp) StartTelegramCommands() {
             if err != nil { c.TextReply("失败 - "+err.Error()) }
             return
         default:
-            lsptelegram.SendToChat(chatID, mmsg.NewText("未知命令: "+cmd))
+            // 仅当用户使用了可识别的前缀（配置前缀或以'/'开头）时才回复未知命令，避免在群内刷屏
+            first := ""
+            fields := strings.Fields(strings.TrimSpace(text))
+            if len(fields) > 0 { first = fields[0] }
+            pref := strings.TrimSpace(config.GlobalConfig.GetString("bot.commandPrefix"))
+            shouldNotify := false
+            if pref != "" {
+                shouldNotify = strings.HasPrefix(first, pref)
+            } else {
+                shouldNotify = strings.HasPrefix(first, "/")
+            }
+            if shouldNotify {
+                lsptelegram.SendToChat(chatID, mmsg.NewText("未知命令: "+cmd))
+            }
             return
         }
     })
@@ -322,8 +320,17 @@ func parseTGLine(text string) (string, []string) {
         return "", nil
     }
     cmd := parts[0]
-    if strings.HasPrefix(cmd, cfg.GetCommandPrefix()) {
-        cmd = strings.TrimPrefix(cmd, cfg.GetCommandPrefix())
+    pref := strings.TrimSpace(config.GlobalConfig.GetString("bot.commandPrefix"))
+    if pref != "" {
+        if !strings.HasPrefix(cmd, pref) {
+            return "", nil
+        }
+        cmd = strings.TrimPrefix(cmd, pref)
+    } else {
+        // 前缀配置为空时，同时兼容“/cmd”和“cmd”两种形式
+        if strings.HasPrefix(cmd, "/") {
+            cmd = strings.TrimPrefix(cmd, "/")
+        }
     }
     if i := strings.IndexByte(cmd, '@'); i >= 0 {
         cmd = cmd[:i]
@@ -374,31 +381,4 @@ func tgDefaultGroup(chatID int64) int64 {
         return chatID
     }
     return 0
-}
-
-// tgBindKey builds the buntdb key for a Telegram chat binding
-func tgBindKey(chatID int64) string {
-    return localdb.Key("telegram", "bind", "chat", chatID)
-}
-
-// tgGetBoundGroup returns the QQ groupCode bound to a Telegram chat, or 0 if none
-func tgGetBoundGroup(chatID int64) int64 {
-    v, err := localdb.Get(tgBindKey(chatID), localdb.IgnoreNotFoundOpt())
-    if err != nil || v == "" {
-        return 0
-    }
-    if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-        return n
-    }
-    return 0
-}
-
-// tgSetBoundGroup sets or clears the binding between a Telegram chat and a QQ group
-func tgSetBoundGroup(chatID int64, groupCode int64) error {
-    key := tgBindKey(chatID)
-    if groupCode <= 0 {
-        _, err := localdb.Delete(key, localdb.IgnoreNotFoundOpt())
-        return err
-    }
-    return localdb.Set(key, strconv.FormatInt(groupCode, 10))
 }

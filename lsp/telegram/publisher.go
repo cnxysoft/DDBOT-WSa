@@ -1,22 +1,22 @@
 package telegram
 
 import (
-	"context"
-	"encoding/base64"
-	"net"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
-	"sync"
-	"time"
+    "context"
+    "encoding/base64"
+    "net"
+    "net/http"
+    "net/url"
+    "os"
+    "strings"
+    "sync"
+    "time"
 
-	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/sirupsen/logrus"
-	xproxy "golang.org/x/net/proxy"
+    "github.com/Mrs4s/MiraiGo/message"
+    "github.com/Sora233/MiraiGo-Template/config"
+    "github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+    "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+    "github.com/sirupsen/logrus"
+    xproxy "golang.org/x/net/proxy"
 )
 
 var (
@@ -25,55 +25,11 @@ var (
 	bot         *tgbotapi.BotAPI
 	enabled     bool
 	initErr     error
-	chatMap     map[int64][]int64 // qq group code -> telegram chat ids (legacy)
 	globalChats []int64           // independent telegram chat ids
 )
 
 // recvOnce ensures we only start one receiving loop
 var recvOnce sync.Once
-
-// BindGroupToChat dynamically binds a QQ group to a Telegram chat at runtime.
-// Subsequent calls to PublishGroup for this group will fan out to the chat.
-func BindGroupToChat(groupCode int64, chatID int64) {
-	if !ensureInit() {
-		return
-	}
-	if groupCode == 0 || chatID == 0 {
-		return
-	}
-	if chatMap == nil {
-		chatMap = make(map[int64][]int64)
-	}
-	// prevent duplicates
-	for _, id := range chatMap[groupCode] {
-		if id == chatID {
-			return
-		}
-	}
-	chatMap[groupCode] = append(chatMap[groupCode], chatID)
-}
-
-// PublishGroup fans out an MSG to mapped Telegram chats for the given QQ groupCode.
-// It is safe to call concurrently and will no-op when telegram is disabled or not configured.
-func PublishGroup(groupCode int64, m *mmsg.MSG) {
-	if m == nil {
-		return
-	}
-	if !ensureInit() {
-		return
-	}
-	chats := chatMap[groupCode]
-	if len(chats) == 0 {
-		return
-	}
-	// Convert DDBOT MSG to SendingMessage list and fan out to mapped chats
-	sms := m.ToMessage(mmsg.NewGroupTarget(groupCode))
-	for _, chatID := range chats {
-		for _, sm := range sms {
-			go sendToTelegram(chatID, sm)
-		}
-	}
-}
 
 // Publish sends MSG to globally configured Telegram chats (independent of QQ).
 func Publish(m *mmsg.MSG) {
@@ -106,29 +62,6 @@ func ensureInit() bool {
 			initErr = Err("telegram.token is empty")
 			return
 		}
-		// Parse mapping: telegram.groups: ["<qqGroupCode>:<tgChatID1>,<tgChatID2>"] (legacy)
-		chatMap = make(map[int64][]int64)
-		for _, entry := range config.GlobalConfig.GetStringSlice("telegram.groups") {
-			parts := strings.Split(entry, ":")
-			if len(parts) != 2 {
-				continue
-			}
-			qq := parseInt64(parts[0])
-			if qq == 0 {
-				continue
-			}
-			var chats []int64
-			for _, s := range strings.Split(parts[1], ",") {
-				id := parseInt64(strings.TrimSpace(s))
-				if id != 0 {
-					chats = append(chats, id)
-				}
-			}
-			if len(chats) > 0 {
-				chatMap[qq] = chats
-			}
-		}
-
 		// Parse global independent chats: telegram.chats: ["-1002003004005", "-1009998887777"]
 		globalChats = nil
 		for _, s := range config.GlobalConfig.GetStringSlice("telegram.chats") {
@@ -163,6 +96,27 @@ func ensureInit() bool {
 	return true
 }
 
+// reinitTelegram re-creates the Telegram bot client using current config.
+func reinitTelegram() error {
+    if !config.GlobalConfig.GetBool("telegram.enable") {
+        return Err("telegram disabled")
+    }
+    token := config.GlobalConfig.GetString("telegram.token")
+    if token == "" {
+        return Err("telegram.token is empty")
+    }
+    httpClient := buildTelegramHTTPClient()
+    endpoint := config.GlobalConfig.GetString("telegram.endpoint")
+    if endpoint == "" { endpoint = tgbotapi.APIEndpoint }
+    b, err := tgbotapi.NewBotAPIWithClient(token, endpoint, httpClient)
+    if err != nil {
+        return err
+    }
+    bot = b
+    log.Infof("telegram bot re-authorized as %s", bot.Self.UserName)
+    return nil
+}
+
 // SendToChat sends the given MSG to a specific Telegram chat.
 // It converts the MSG into one or more SendingMessage chunks and streams them out.
 func SendToChat(chatID int64, m *mmsg.MSG) {
@@ -190,16 +144,23 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 	}
 	recvOnce.Do(func() {
 		go func() {
+			log.Info("telegram receiving loop started")
 			var offset int = 0
 			var backoff time.Duration = 3 * time.Second
 			const maxBackoff = 60 * time.Second
+			consecutiveErrs := 0
 			for {
 				u := tgbotapi.NewUpdate(offset)
 				u.Timeout = 60
 				u.AllowedUpdates = []string{"message", "edited_message", "channel_post"}
 				updates, err := bot.GetUpdates(u)
 				if err != nil {
-					log.WithError(err).Debug("telegram getUpdates failed; retrying")
+					consecutiveErrs++
+					log.WithError(err).
+						WithField("offset", offset).
+						WithField("backoff", backoff.String()).
+						WithField("consecutive", consecutiveErrs).
+						Warn("telegram getUpdates failed; retrying")
 					time.Sleep(backoff)
 					if backoff < maxBackoff {
 						backoff *= 2
@@ -207,8 +168,19 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 							backoff = maxBackoff
 						}
 					}
+					if consecutiveErrs%5 == 0 {
+						if err := reinitTelegram(); err != nil {
+							log.WithError(err).Warn("telegram reinit failed")
+						} else {
+							log.Info("telegram reinitialized after errors")
+						}
+					}
 					continue
 				}
+				if len(updates) > 0 {
+					log.WithField("count", len(updates)).Debug("telegram updates received")
+				}
+				consecutiveErrs = 0
 				backoff = 3 * time.Second
 				for _, update := range updates {
 					if update.UpdateID >= offset {
@@ -221,6 +193,10 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 					if txt == "" {
 						continue
 					}
+					log.WithField("chat", update.Message.Chat.ID).
+						WithField("from", update.Message.From.ID).
+						WithField("offset", offset).
+						Debug("telegram incoming text")
 					onText(update.Message.Chat.ID, update.Message.From.ID, txt)
 				}
 			}

@@ -111,16 +111,11 @@ func (l *Lsp) ConcernNotify() {
 					lsptelegram.SendToChat(inotify.GetGroupCode(), m)
 					cfg.NotifyAfterCallback(inotify, nil)
 					return
-				} else {
-					// 发布到此 QQ 群组的映射 TG 群组（如果有）
-					lsptelegram.PublishGroup(inotify.GetGroupCode(), m)
 				}
 
 				msgs := l.GM(l.SendMsg(m, target))
 				if len(msgs) > 0 {
 					cfg.NotifyAfterCallback(inotify, msgs[0])
-				} else {
-					cfg.NotifyAfterCallback(inotify, nil)
 				}
 
 				if atBeforeHook.Pass {
