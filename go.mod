@@ -21,6 +21,7 @@ require (
 	github.com/ericpauley/go-quantize v0.0.0-20200331213906-ae555eb2afa4
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/ghodss/yaml v1.0.0
+	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/gofrs/flock v0.8.1
 	github.com/google/uuid v1.3.0
 	github.com/guonaihong/gout v0.3.7
@@ -55,7 +56,7 @@ require (
 	github.com/sagikazarmark/locafero v0.10.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	golang.org/x/image v0.30.0 // indirect
-	golang.org/x/net v0.11.0 // indirect
+	golang.org/x/net v0.11.0
 )
 
 require (

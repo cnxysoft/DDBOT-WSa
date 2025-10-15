@@ -9,6 +9,7 @@ import (
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	lsptelegram "github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/sirupsen/logrus"
@@ -52,6 +53,12 @@ func (l *Lsp) ConcernNotify() {
 
 			// 注意notify可能会缓存MSG
 			var m = l.NotifyMessage(inotify).Clone()
+
+			// 如果群id < 0, 则认为是TG聊群并忽略推送至QQ
+			if inotify.GetGroupCode() < 0 {
+				lsptelegram.SendToChat(inotify.GetGroupCode(), m)
+				continue
+			}
 
 			// atConfig
 			var atBeforeHook = cfg.AtBeforeHook(inotify)
@@ -99,12 +106,18 @@ func (l *Lsp) ConcernNotify() {
 							Errorf("notify panic recovered: %v", e)
 					}
 				}()
+				// 如果 groupCode < 0，则将其视为 Telegram 聊天 ID，并仅发送到 Telegram
+				if inotify.GetGroupCode() < 0 {
+					lsptelegram.SendToChat(inotify.GetGroupCode(), m)
+					cfg.NotifyAfterCallback(inotify, nil)
+					return
+				}
+
 				msgs := l.GM(l.SendMsg(m, target))
 				if len(msgs) > 0 {
 					cfg.NotifyAfterCallback(inotify, msgs[0])
-				} else {
-					cfg.NotifyAfterCallback(inotify, nil)
 				}
+
 				if atBeforeHook.Pass {
 					var atIdsOnce bool
 					for _, msg := range msgs {
