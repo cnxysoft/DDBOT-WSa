@@ -61,7 +61,7 @@ func (l *LatestTweetIds) GetLatestTweetId() string {
 }
 
 func (l *LatestTweetIds) SetLatestTweetId(tweetId string) {
-	if l == nil || tweetId == l.GetPinnedTweet() {
+	if l == nil {
 		return
 	}
 	po := l.HasTweetId(tweetId)
