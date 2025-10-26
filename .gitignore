@@ -9,3 +9,4 @@ DDBOT
 /version*.json
 /debug
 ddbot.exe
+/ffmpeg/ffmpeg-static/

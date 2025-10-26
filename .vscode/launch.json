@@ -15,8 +15,10 @@
             "env": {
                 "GOOS": "windows",
                 "GOARCH": "amd64",
+                "CGO_ENABLED": "1"
             },
             "console": "integratedTerminal",
+            "buildFlags": ["-v", "-ldflags=-extldflags=-static", "-tags=cgo"],
             "args": [
                 "--debug"
             ]

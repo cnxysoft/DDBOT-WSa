@@ -3,13 +3,13 @@ package twitter
 import (
 	"fmt"
 	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/google/uuid"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -297,9 +297,9 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + fileExt)
 
 	if IsGif {
-		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
 	} else {
-		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
 	}
 	if err != nil {
 		return "", err
@@ -317,36 +317,36 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	return filePath, nil
 }
 
-func convMediaWithProxy(Url, outputPath, proxyURL, Type string) error {
-	args := []string{
-		"-v", "error",
-		"-i", Url,
-		"-f", Type,
-		outputPath,
-	}
-
-	if Type == "mp4" {
-		args = []string{
-			"-v", "error",
-			"-i", Url,
-			"-c", "copy",
-			"-movflags",
-			"+faststart",
-			"-f", Type,
-			outputPath,
-		}
-	}
-
-	cmd := exec.Command("ffmpeg", args...)
-	if proxyURL != "" {
-		cmd.Env = append(os.Environ(), "http_proxy="+proxyURL, "https_proxy="+proxyURL, "rw_timeout=30000000")
-	}
-
-	cmd.Stdout = nil
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
-}
+//func convMediaWithProxy(Url, outputPath, proxyURL, Type string) error {
+//	args := []string{
+//		"-v", "error",
+//		"-i", Url,
+//		"-f", Type,
+//		outputPath,
+//	}
+//
+//	if Type == "mp4" {
+//		args = []string{
+//			"-v", "error",
+//			"-i", Url,
+//			"-c", "copy",
+//			"-movflags",
+//			"+faststart",
+//			"-f", Type,
+//			outputPath,
+//		}
+//	}
+//
+//	cmd := exec.Command("ffmpeg", args...)
+//	if proxyURL != "" {
+//		cmd.Env = append(os.Environ(), "http_proxy="+proxyURL, "https_proxy="+proxyURL, "rw_timeout=30000000")
+//	}
+//
+//	cmd.Stdout = nil
+//	cmd.Stderr = os.Stderr
+//
+//	return cmd.Run()
+//}
 
 func findNthIndex(s string, sep byte, n int) int {
 	count := 0
