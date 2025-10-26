@@ -10,7 +10,7 @@ package ffmpeg
 // macOS
 #cgo darwin LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
 #cgo darwin LDFLAGS: -lssl -lcrypto -lz -lm -lpthread
-#cgo darwin LDFLAGS: -framework CoreFoundation -framework Security
+#cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 
 // Linux
 #cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
@@ -60,6 +60,11 @@ static int make_buffer_sink(AVFilterGraph *g, AVFilterContext **sink,
     return avfilter_graph_create_filter(sink, buffersink, name, NULL, NULL, g);
 }
 
+// 声明 Go 导出的函数
+#ifndef _WIN32
+extern void goLogCallbackTagged(char* tag, char* msg);
+#endif
+
 // logging bridge
 static const char* lvl_tag(int level) {
     if (level <= AV_LOG_PANIC)   return "PANIC";
@@ -77,7 +82,7 @@ static void bridge_log_callback(void* ptr, int level, const char* fmt, va_list v
     vsnprintf(buf, sizeof(buf), fmt, vl);
     size_t n = strlen(buf);
     if (n && buf[n-1] == '\n') buf[n-1] = '\0';
-    goLogCallbackTagged(lvl_tag(level), buf);
+    goLogCallbackTagged((char*)lvl_tag(level), buf);
 }
 
 static void enable_ffmpeg_log_callback_with_level(int level) {
