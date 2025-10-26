@@ -225,7 +225,21 @@ jobs:
             fi
           fi
 
-          go build -v -trimpath -tags cgo -o "$BINARY_NAME" -ldflags="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+          if [ "$GOOS" = "darwin" ]; then
+            # macOS: 去掉 --gc-sections 和 -static
+            LDFLAGS="-s -w -linkmode external -extldflags '-Wl,-dead_strip' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'"
+          else
+            # Linux/Windows: 保留 --gc-sections 和 -static
+            LDFLAGS="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' \
+              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'"
+          fi
+
+          go build -v -trimpath -tags cgo -o "$BINARY_NAME" -ldflags="$LDFLAGS" github.com/cnxysoft/DDBOT-WSa/cmd
       
       - name: List build artifacts
         run: ls -la
