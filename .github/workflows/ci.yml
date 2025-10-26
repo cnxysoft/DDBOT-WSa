@@ -138,7 +138,24 @@ jobs:
             echo "Failed to download $PLATFORM_FILE"
             exit 1
           fi
-      
+
+          cd lib
+
+          for f in *.a *.dylib *.so 2>/dev/null; do
+            [ -f "$f" ] || continue
+            echo "=== $f ==="
+            if command -v lipo >/dev/null 2>&1; then
+              lipo -info "$f" || file "$f"
+            else
+              file "$f"
+            fi
+          done
+
+          mkdir -p /tmp/ffcheck
+          cd /tmp/ffcheck
+          ar -x /path/to/libavcodec.a        # 解出 .o 文件
+          file *.o | sed -n '1,10p'          # 查看头几行对象文件的架构描述
+
       - name: Setup LLVM-mingw toolchain
         if: matrix.goos == 'windows'
         run: |
@@ -174,7 +191,7 @@ jobs:
       
       - name: Set env
         run: |
-          echo BUILD_TIME=$(date --rfc-3339=seconds) >> ${GITHUB_ENV}
+          echo BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ${GITHUB_ENV}
           echo Tags=github >> ${GITHUB_ENV}
       
       - name: Build CLI version (no cgo)
@@ -194,53 +211,55 @@ jobs:
           CGO_ENABLED: 1
         run: |
           export BINARY_NAME="DDBOT"
-          if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cgo.exe"; else export BINARY_NAME="$BINARY_NAME-cgo"; fi
+          if [ "$GOOS" = "windows" ]; then BINARY_NAME="${BINARY_NAME}-cgo.exe"; else BINARY_NAME="${BINARY_NAME}-cgo"; fi
           echo "Building CGO version: $BINARY_NAME for $GOOS/$GOARCH"
-          
-          # 为Windows设置交叉编译环境
+
+          # set CC per target - use exact cross-compiler executable names (no extra flags in CC)
           if [ "$GOOS" = "windows" ]; then
-            if [ "$GOARCH" = "amd64" ]; then
-              export CC="x86_64-w64-mingw32-gcc"
-              export CXX="x86_64-w64-mingw32-g++"
-            elif [ "$GOARCH" = "386" ]; then
-              export CC="i686-w64-mingw32-gcc"
-              export CXX="i686-w64-mingw32-g++"
-            elif [ "$GOARCH" = "arm64" ]; then
-              export CC="aarch64-w64-mingw32-gcc"
-              export CXX="aarch64-w64-mingw32-g++"
-            elif [ "$GOARCH" = "arm" ]; then
-              export CC="armv7-w64-mingw32-gcc"
-              export CXX="armv7-w64-mingw32-g++"
-            fi
+            case "$GOARCH" in
+              amd64)  export CC="x86_64-w64-mingw32-gcc"; export CXX="x86_64-w64-mingw32-g++" ;;
+              386)    export CC="i686-w64-mingw32-gcc"; export CXX="i686-w64-mingw32-g++" ;;
+              arm64)  export CC="aarch64-w64-mingw32-gcc"; export CXX="aarch64-w64-mingw32-g++" ;;
+              arm)    # likely unsupported in many toolchains: fallback or error out
+                    echo "Warning: windows/arm cross-compiler may not be available; ensure toolchain exists"
+                    export CC="${CC:-armv7-w64-mingw32-gcc}"
+                    export CXX="${CXX:-armv7-w64-mingw32-g++}"
+                    ;;
+            esac
           fi
-          
-          # 为Linux设置交叉编译环境
+
           if [ "$GOOS" = "linux" ]; then
-            if [ "$GOARCH" = "386" ]; then
-              export CC="gcc -m32"
-            elif [ "$GOARCH" = "arm" ]; then
-              export CC="arm-linux-gnueabihf-gcc"
-            elif [ "$GOARCH" = "arm64" ]; then
-              export CC="aarch64-linux-gnu-gcc"
-            fi
+            case "$GOARCH" in
+              386)   export CC="${CC:-i686-linux-gnu-gcc}" ;;   # avoid "gcc -m32"
+              arm)   export CC="${CC:-arm-linux-gnueabihf-gcc}" ;;
+              arm64) export CC="${CC:-aarch64-linux-gnu-gcc}" ;;
+            esac
           fi
 
-          if [ "$GOOS" = "darwin" ]; then
-            # macOS: 去掉 --gc-sections 和 -static
-            LDFLAGS="-s -w -linkmode external -extldflags '-Wl,-dead_strip' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'"
-          else
-            # Linux/Windows: 保留 --gc-sections 和 -static
-            LDFLAGS="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' \
-              -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'"
-          fi
+          COMMON_XFLAGS="-X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${BUILD_TIME}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${GITHUB_SHA}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${Tags}'"
 
-          go build -v -trimpath -tags cgo -o "$BINARY_NAME" -ldflags="$LDFLAGS" github.com/cnxysoft/DDBOT-WSa/cmd
-      
+          case "${GOOS}_${GOARCH}" in
+            windows_arm|windows_386|windows_arm64)
+              # use internal link mode (no external extldflags) to avoid unsupported reloc on some windows/arm toolchains
+              GO_LDFLAGS="-s -w ${COMMON_XFLAGS}"
+              ;;
+            darwin_amd64|darwin_arm64)
+              # macOS: external link, but do not use -static; use dead_strip and ensure frameworks are added in #cgo LDFLAGS
+              GO_LDFLAGS="-linkmode external -s -w -extldflags \"-Wl,-dead_strip\" ${COMMON_XFLAGS}"
+              ;;
+            *)
+              # default: external link + static + gc-sections for platforms that support it
+              GO_LDFLAGS="-linkmode external -s -w -extldflags \"-Wl,--gc-sections -static\" ${COMMON_XFLAGS}"
+              ;;
+          esac
+
+          echo "CC=$CC"
+          echo "Using GO_LDFLAGS: $GO_LDFLAGS"
+
+          # use env form to avoid writing go env -w
+          env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED="$CGO_ENABLED" CC="$CC" \
+            go build -v -trimpath -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
+
       - name: List build artifacts
         run: ls -la
       
