@@ -3,6 +3,13 @@
 
 package ffmpeg
 
+import "C"
+import (
+	"fmt"
+	"os"
+	"unsafe"
+)
+
 /*
 #cgo CFLAGS: -I${SRCDIR}/ffmpeg-static/include
 #cgo LDFLAGS: -L${SRCDIR}/ffmpeg-static/lib
@@ -60,52 +67,24 @@ static int make_buffer_sink(AVFilterGraph *g, AVFilterContext **sink,
     return avfilter_graph_create_filter(sink, buffersink, name, NULL, NULL, g);
 }
 
-// 声明 Go 导出的函数
-#ifndef _WIN32
-extern void goLogCallbackTagged(char* tag, char* msg);
-#endif
-
-// logging bridge
-static const char* lvl_tag(int level) {
-    if (level <= AV_LOG_PANIC)   return "PANIC";
-    if (level <= AV_LOG_FATAL)   return "FATAL";
-    if (level <= AV_LOG_ERROR)   return "ERROR";
-    if (level <= AV_LOG_WARNING) return "WARN";
-    if (level <= AV_LOG_INFO)    return "INFO";
-    if (level <= AV_LOG_VERBOSE) return "VERB";
-    if (level <= AV_LOG_DEBUG)   return "DEBUG";
-    return "TRACE";
-}
-
-static void bridge_log_callback(void* ptr, int level, const char* fmt, va_list vl) {
-    char buf[1024];
-    vsnprintf(buf, sizeof(buf), fmt, vl);
-    size_t n = strlen(buf);
-    if (n && buf[n-1] == '\n') buf[n-1] = '\0';
-    goLogCallbackTagged((char*)lvl_tag(level), buf);
-}
-
-static void enable_ffmpeg_log_callback_with_level(int level) {
-    av_log_set_callback(bridge_log_callback);
-    av_log_set_flags(AV_LOG_SKIP_REPEATED);
-    av_log_set_level(level); // AV_LOG_INFO or AV_LOG_DEBUG
-}
+// 声明由 bridge.c 提供的 helper 函数，供 Go 侧通过 C.enable_ffmpeg_log_callback_with_level 调用
+void enable_ffmpeg_log_callback_with_level(int level);
 */
 import "C"
-import (
-	"fmt"
-	"os"
-	"unsafe"
-)
 
 //export goLogCallbackTagged
 func goLogCallbackTagged(tag, msg *C.char) {
 	fmt.Printf("[FF %s] %s\n", C.GoString(tag), C.GoString(msg))
 }
 
+// wrapper to call the C helper that sets the callback
+func EnableFFmpegLog(level int) {
+	C.enable_ffmpeg_log_callback_with_level(C.int(level))
+}
+
 func ConvMediaWithProxy(url, outputPath, proxyURL, mediaType string) error {
 	// Use INFO in normal runs; switch to DEBUG if investigating
-	C.enable_ffmpeg_log_callback_with_level(C.AV_LOG_INFO)
+	EnableFFmpegLog(C.AV_LOG_INFO)
 
 	cUrl := C.CString(url)
 	defer C.free(unsafe.Pointer(cUrl))
