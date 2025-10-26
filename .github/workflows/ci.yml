@@ -20,15 +20,23 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Setup FFMPEG
-        uses: AnimMouse/setup-ffmpeg@v1
-        with:
-          version: '7.1'
+      - name: Setup FFMPEG static library for tests
+        run: |
+          mkdir -p ffmpeg/ffmpeg-static
+          cd ffmpeg/ffmpeg-static
+          PLATFORM_FILE="ffmpeg-linux-amd64.zip"
+          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          unzip -o "$PLATFORM_FILE" -d .
+          ls -la
       - name: Setup Go environment
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go }}
-      - name: Run tests
+      - name: Run tests with cgo
+        env:
+          CGO_ENABLED: 1
+          CGO_CFLAGS: "-I${{ github.workspace }}/ffmpeg/ffmpeg-static/include"
+          CGO_LDFLAGS: "-L${{ github.workspace }}/ffmpeg/ffmpeg-static/lib"
         run: |
           go test -v -coverprofile=profile.cov ./...
       - name: go vet
@@ -46,29 +54,62 @@ jobs:
   build:
     needs: test
     name: Build binary CI
-    runs-on: ubuntu-latest
     env:
       RUNNER_TOOL_CACHE: /toolcache
     strategy:
       matrix:
-        go: [ '1.23.4' ]
-        goos: [ linux, windows, darwin ]
-        goarch: [ "386", amd64, arm, arm64 ]
-        exclude:
-          - goos: darwin
+        include:
+          # Linux amd64
+          - go: '1.23.4'
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: linux
+            goarch: 386
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: linux
             goarch: arm
-          - goos: darwin
-            goarch: "386"
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: windows
+            goarch: 386
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: windows
+            goarch: amd64
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: windows
+            goarch: arm
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: windows
+            goarch: arm64
+            runner: ubuntu-latest
+          - go: '1.23.4'
+            goos: darwin
+            goarch: amd64
+            runner: macos-latest
+          - go: '1.23.4'
+            goos: darwin
+            goarch: arm64
+            runner: macos-latest
       fail-fast: true
+    runs-on: ${{ matrix.runner }}
+
     steps:
       - uses: actions/checkout@v3
       
-      # 步骤1: 拉取当前平台对应的ffmpeg静态库并解压
       - name: Setup FFMPEG static library for current platform
         run: |
           # 创建ffmpeg-static和static目录
           mkdir -p ffmpeg/ffmpeg-static
-          mkdir -p ffmpeg/static
           cd ffmpeg/ffmpeg-static
           
           # 根据当前平台确定要下载的静态库文件名
@@ -82,13 +123,13 @@ jobs:
             echo "Successfully downloaded $PLATFORM_FILE"
             
             echo "Extracting $PLATFORM_FILE to ffmpeg/static directory..."
-            unzip "$PLATFORM_FILE" -d ../static
+            unzip -o "$PLATFORM_FILE" -d .
             
             echo "Verifying extraction..."
-            if [ -d "../static" ]; then
+            if [ -d "../ffmpeg-static" ]; then
               echo "Successfully extracted to ffmpeg/static directory"
               echo "Contents of ffmpeg/static directory:"
-              ls -la ../static
+              ls -la
             else
               echo "Failed to extract to ffmpeg/static directory"
               exit 1
@@ -98,20 +139,33 @@ jobs:
             exit 1
           fi
       
-      # 步骤2: 配置mingw-gcc编译环境
       - name: Setup LLVM-mingw toolchain
+        if: matrix.goos == 'windows'
         run: |
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            echo "Setting up LLVM-mingw for Windows build..."
-            mkdir -p /tmp/llvm-mingw
-            cd /tmp/llvm-mingw
-            curl -L -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20240820/llvm-mingw-20240820-ucrt-ubuntu-20.04-x86_64.tar.xz"
-            tar -xf llvm-mingw.tar.xz
-            export LLVM_MINGW_PATH=$(find /tmp/llvm-mingw -type d -name "llvm-mingw-*" -maxdepth 1)
-            echo "$LLVM_MINGW_PATH/bin" >> $GITHUB_PATH
-            echo "LLVM_MINGW_PATH=$LLVM_MINGW_PATH" >> $GITHUB_ENV
-          fi
-      
+          mkdir -p /tmp/llvm-mingw
+          cd /tmp/llvm-mingw
+          curl -L -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20240820/llvm-mingw-20240820-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          tar -xf llvm-mingw.tar.xz
+          export LLVM_MINGW_PATH=$(find /tmp/llvm-mingw -type d -name "llvm-mingw-*" -maxdepth 1)
+          echo "$LLVM_MINGW_PATH/bin" >> $GITHUB_PATH
+          echo "LLVM_MINGW_PATH=$LLVM_MINGW_PATH" >> $GITHUB_ENV
+
+      - name: Install cross toolchains for Linux targets
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          case "${{ matrix.goarch }}" in
+            386)
+              sudo apt-get install -y gcc-multilib g++-multilib
+              ;;
+            arm)
+              sudo apt-get install -y gcc-arm-linux-gnueabihf
+              ;;
+            arm64)
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+              ;;
+          esac
+
       - name: Setup Go environment
         uses: actions/setup-go@v4
         with:
@@ -123,7 +177,6 @@ jobs:
           echo BUILD_TIME=$(date --rfc-3339=seconds) >> ${GITHUB_ENV}
           echo Tags=github >> ${GITHUB_ENV}
       
-      # 步骤3a: 编译CLI版本（不使用cgo标签）
       - name: Build CLI version (no cgo)
         env:
           GOOS: ${{ matrix.goos }}
@@ -132,9 +185,8 @@ jobs:
           export BINARY_NAME="DDBOT"
           if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cli.exe"; else export BINARY_NAME="$BINARY_NAME-cli"; fi
           echo "Building CLI version: $BINARY_NAME for $GOOS/$GOARCH"
-          go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+          go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
       
-      # 步骤3b: 编译CGO版本（使用cgo标签）
       - name: Build CGO version
         env:
           GOOS: ${{ matrix.goos }}
@@ -162,6 +214,17 @@ jobs:
             fi
           fi
           
+          # 为Linux设置交叉编译环境
+          if [ "$GOOS" = "linux" ]; then
+            if [ "$GOARCH" = "386" ]; then
+              export CC="gcc -m32"
+            elif [ "$GOARCH" = "arm" ]; then
+              export CC="arm-linux-gnueabihf-gcc"
+            elif [ "$GOARCH" = "arm64" ]; then
+              export CC="aarch64-linux-gnu-gcc"
+            fi
+          fi
+
           go build -v -trimpath -tags cgo -o "$BINARY_NAME" -ldflags="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
       
       - name: List build artifacts
