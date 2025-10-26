@@ -41,12 +41,6 @@ jobs:
         with:
           name: coverage-report
           path: coverage.html
-#      - name: Send coverage
-#        uses: shogo82148/actions-goveralls@v1
-#        with:
-#          path-to-profile: profile.cov
-#          flag-name: Go-${{ matrix.go }}
-#          parallel: true
 
   # build binary
   build:
@@ -68,41 +62,115 @@ jobs:
       fail-fast: true
     steps:
       - uses: actions/checkout@v3
-      - name: Setup FFMPEG
-        uses: AnimMouse/setup-ffmpeg@v1
-        with:
-          version: '7.1'
+      
+      # 步骤1: 拉取当前平台对应的ffmpeg静态库并解压
+      - name: Setup FFMPEG static library for current platform
+        run: |
+          # 创建ffmpeg-static和static目录
+          mkdir -p ffmpeg/ffmpeg-static
+          mkdir -p ffmpeg/static
+          cd ffmpeg/ffmpeg-static
+          
+          # 根据当前平台确定要下载的静态库文件名
+          export PLATFORM_FILE="ffmpeg-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          
+          echo "Downloading $PLATFORM_FILE for ${{ matrix.goos }}/${{ matrix.goarch }}..."
+          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          
+          echo "Verifying $PLATFORM_FILE..."
+          if [ -f "$PLATFORM_FILE" ]; then
+            echo "Successfully downloaded $PLATFORM_FILE"
+            
+            echo "Extracting $PLATFORM_FILE to ffmpeg/static directory..."
+            unzip "$PLATFORM_FILE" -d ../static
+            
+            echo "Verifying extraction..."
+            if [ -d "../static" ]; then
+              echo "Successfully extracted to ffmpeg/static directory"
+              echo "Contents of ffmpeg/static directory:"
+              ls -la ../static
+            else
+              echo "Failed to extract to ffmpeg/static directory"
+              exit 1
+            fi
+          else
+            echo "Failed to download $PLATFORM_FILE"
+            exit 1
+          fi
+      
+      # 步骤2: 配置mingw-gcc编译环境
+      - name: Setup LLVM-mingw toolchain
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            echo "Setting up LLVM-mingw for Windows build..."
+            mkdir -p /tmp/llvm-mingw
+            cd /tmp/llvm-mingw
+            curl -L -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20240820/llvm-mingw-20240820-ucrt-ubuntu-20.04-x86_64.tar.xz"
+            tar -xf llvm-mingw.tar.xz
+            export LLVM_MINGW_PATH=$(find /tmp/llvm-mingw -type d -name "llvm-mingw-*" -maxdepth 1)
+            echo "$LLVM_MINGW_PATH/bin" >> $GITHUB_PATH
+            echo "LLVM_MINGW_PATH=$LLVM_MINGW_PATH" >> $GITHUB_ENV
+          fi
+      
       - name: Setup Go environment
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: "**/*.sum"
+      
       - name: Set env
         run: |
           echo BUILD_TIME=$(date --rfc-3339=seconds) >> ${GITHUB_ENV}
-      - name: Build binary file
+          echo Tags=github >> ${GITHUB_ENV}
+      
+      # 步骤3a: 编译CLI版本（不使用cgo标签）
+      - name: Build CLI version (no cgo)
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           export BINARY_NAME="DDBOT"
-          if [ $GOOS = "windows" ]; then export BINARY_NAME="$BINARY_NAME.exe"; fi
-          go build -o "$BINARY_NAME" -ldflags '-w -s -X "github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}" -X github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }} -X github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}' github.com/cnxysoft/DDBOT-WSa/cmd
-      - name: Upload artifact
+          if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cli.exe"; else export BINARY_NAME="$BINARY_NAME-cli"; fi
+          echo "Building CLI version: $BINARY_NAME for $GOOS/$GOARCH"
+          go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+      
+      # 步骤3b: 编译CGO版本（使用cgo标签）
+      - name: Build CGO version
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+        run: |
+          export BINARY_NAME="DDBOT"
+          if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cgo.exe"; else export BINARY_NAME="$BINARY_NAME-cgo"; fi
+          echo "Building CGO version: $BINARY_NAME for $GOOS/$GOARCH"
+          
+          # 为Windows设置交叉编译环境
+          if [ "$GOOS" = "windows" ]; then
+            if [ "$GOARCH" = "amd64" ]; then
+              export CC="x86_64-w64-mingw32-gcc"
+              export CXX="x86_64-w64-mingw32-g++"
+            elif [ "$GOARCH" = "386" ]; then
+              export CC="i686-w64-mingw32-gcc"
+              export CXX="i686-w64-mingw32-g++"
+            elif [ "$GOARCH" = "arm64" ]; then
+              export CC="aarch64-w64-mingw32-gcc"
+              export CXX="aarch64-w64-mingw32-g++"
+            elif [ "$GOARCH" = "arm" ]; then
+              export CC="armv7-w64-mingw32-gcc"
+              export CXX="armv7-w64-mingw32-g++"
+            fi
+          fi
+          
+          go build -v -trimpath -tags cgo -o "$BINARY_NAME" -ldflags="-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+      
+      - name: List build artifacts
+        run: ls -la
+      
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
-        if: ${{ !github.head_ref }}
         with:
           name: ${{ matrix.goos }}_${{ matrix.goarch }}
           path: |
-            ./DDBOT
-            ./DDBOT.exe
-
-
-  # notifies that all test jobs are finished.
-  # finish:
-  #   needs: test
-  #   runs-on: ubuntu-latest
-  #   steps:
-#      - uses: shogo82148/actions-goveralls@v1
-#        with:
-#          parallel-finished: true
+            ./DDBOT-cli*
+            ./DDBOT-cgo*
