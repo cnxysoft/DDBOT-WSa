@@ -16,16 +16,16 @@ import (
 
 // macOS
 #cgo darwin LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
-#cgo darwin LDFLAGS: -lssl -lcrypto -lz -lm -lpthread
+#cgo darwin LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 
 // Linux
 #cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
-#cgo linux LDFLAGS: -lssl -lcrypto -lz -lm -lpthread -ldl
+#cgo linux LDFLAGS: -lssl -lcrypto -lm -lpthread -ldl
 
 // Windows (static)
 #cgo windows LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
-#cgo windows LDFLAGS: -lssl -lcrypto -lz -lm -lpthread
+#cgo windows LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo windows LDFLAGS: -lws2_32 -lwinmm -lole32 -lshlwapi -lbcrypt -lcrypt32 -lkernel32 -luser32 -ladvapi32 -lmsvcrt -lucrtbase
 
 #include <libavformat/avformat.h>
