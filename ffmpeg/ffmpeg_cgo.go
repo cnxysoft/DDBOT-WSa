@@ -21,7 +21,7 @@ import (
 
 // Linux
 #cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
-#cgo linux LDFLAGS: -lssl -lcrypto -lm -lpthread -ldl
+#cgo linux LDFLAGS: -lssl -lcrypto -lpthread -ldl -lm
 
 // Windows (static)
 #cgo windows LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264

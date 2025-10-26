@@ -59,7 +59,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux amd64
           - go: '1.23.4'
             goos: linux
             goarch: amd64
@@ -188,6 +187,7 @@ jobs:
           go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
       
       - name: Build CGO version
+        if: ${{ !(matrix.goos == 'windows' && matrix.goarch == 'arm') }}
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -213,7 +213,11 @@ jobs:
 
           if [ "$GOOS" = "linux" ]; then
             case "$GOARCH" in
-              386)   export CC="${CC:-i686-linux-gnu-gcc}" ;;   # avoid "gcc -m32"
+              386)
+                export CC="${CC:-gcc}"
+                export CGO_CFLAGS="-m32"
+                export CGO_LDFLAGS="-m32"
+              ;;
               arm)   export CC="${CC:-arm-linux-gnueabihf-gcc}" ;;
               arm64) export CC="${CC:-aarch64-linux-gnu-gcc}" ;;
             esac
@@ -229,6 +233,9 @@ jobs:
             darwin_amd64|darwin_arm64)
               # macOS: external link, but do not use -static; use dead_strip and ensure frameworks are added in #cgo LDFLAGS
               GO_LDFLAGS="-linkmode external -s -w -extldflags \"-Wl,-dead_strip\" ${COMMON_XFLAGS}"
+              ;;
+            linux_386)
+              GO_LDFLAGS="-linkmode external -s -w -extldflags \"-m32 -Wl,--gc-sections -static-libgcc -static-libstdc++\" ${COMMON_XFLAGS}"
               ;;
             *)
               # default: external link + static + gc-sections for platforms that support it
