@@ -138,24 +138,7 @@ jobs:
             echo "Failed to download $PLATFORM_FILE"
             exit 1
           fi
-
-          cd lib
-
-          for f in *.a *.dylib *.so 2>/dev/null; do
-            [ -f "$f" ] || continue
-            echo "=== $f ==="
-            if command -v lipo >/dev/null 2>&1; then
-              lipo -info "$f" || file "$f"
-            else
-              file "$f"
-            fi
-          done
-
-          mkdir -p /tmp/ffcheck
-          cd /tmp/ffcheck
-          ar -x /path/to/libavcodec.a        # 解出 .o 文件
-          file *.o | sed -n '1,10p'          # 查看头几行对象文件的架构描述
-
+      
       - name: Setup LLVM-mingw toolchain
         if: matrix.goos == 'windows'
         run: |
