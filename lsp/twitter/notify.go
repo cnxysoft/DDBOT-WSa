@@ -2,12 +2,6 @@ package twitter
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
-	"github.com/google/uuid"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +9,13 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/google/uuid"
 )
 
 type ConcernNewsNotify struct {
@@ -131,9 +132,12 @@ func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *twitterConcern
 
 func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 	for _, m := range tweet.Media {
+		var err error
+		var Url *url.URL
+		// https://video.twimg.com/amplify_video/1978345183696781312/vid/avc1/2160x2880/BgoVYgPoqLbeir2E.mp4
 		unescape := m.Url
 		if strings.HasPrefix(unescape, "/") {
-			Url, err := setMirrorHost(tweet.MirrorHost, *m)
+			Url, err = setMirrorHost(tweet.MirrorHost, *m)
 			if err != nil {
 				logger.WithField("stack", string(debug.Stack())).
 					WithField("tweetId", tweet.ID).
@@ -150,112 +154,122 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 						continue
 					}
 				}
-				switch m.Type {
-				case "image":
-					if tweet.MirrorHost == XImgHost {
-						unescape = strings.TrimLeft(unescape, "/pic/")
-					}
-					fullURL, err := Url.Parse(unescape)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", tweet.ID).
-							Errorf("concern notify recoverd %v", err)
-					}
-					m.Url = fullURL.String()
-					addCut(message, nil)
-					message.Append(
-						mmsg.NewImageByUrl(m.Url,
-							requests.ProxyOption(proxy_pool.PreferOversea),
-							requests.AddUAOption(UserAgent),
-							requests.WithCookieJar(Cookie)))
-				case "video":
-					if strings.Contains(unescape, "video.twimg.com") {
-						idx := strings.Index(unescape, "video.twimg.com")
-						unescape, err = processMediaURL(unescape[idx:])
-						if err != nil {
-							logger.WithField("stack", string(debug.Stack())).
-								WithField("tweetId", tweet.ID).
-								Errorf("concern notify recoverd: %v", err)
-							continue
-						}
-						m.Url = unescape
-					}
-					if mainTweet {
-						addTweetUrl(message, tweet.Url, addedUrl)
-					}
-					message.Cut()
-					message.Append(
-						mmsg.NewVideoByUrl(m.Url,
-							requests.ProxyOption(proxy_pool.PreferOversea),
-							requests.AddUAOption(UserAgent),
-							requests.WithCookieJar(Cookie)))
-				case "gif":
-					if strings.Contains(unescape, "video.twimg.com") {
-						idx := strings.Index(unescape, "video.twimg.com")
-						unescape, err = processMediaURL(unescape[idx:])
-						if err != nil {
-							logger.WithField("stack", string(debug.Stack())).
-								WithField("tweetId", tweet.ID).
-								Errorf("concern notify recoverd: %v", err)
-							continue
-						}
-						m.Url = "https://" + unescape
-					}
-					// 下载并转码
-					filePath, err := downloadMedia(m.Url, true)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", tweet.ID).
-							Errorf("concern notify recoverd: %v", err)
-						continue
-					}
-					message.Append(mmsg.NewImageByLocal(filePath))
-				case "video(m3u8)":
-					var fullURL *url.URL
-					var err error
-					if tweet.MirrorHost == XVideoHost {
-						idx := findNthIndex(unescape, '/', 3)
-						if idx != -1 {
-							unescape = unescape[idx+1:]
-						}
-					} else if strings.Contains(unescape, "https%3A%2F%2Fvideo.twimg.com") {
-						idx := strings.Index(unescape, "https%3A%2F%2F")
-						unescape, err = processMediaURL(unescape[idx:])
-						if err != nil {
-							logger.WithField("stack", string(debug.Stack())).
-								WithField("tweetId", tweet.ID).
-								Errorf("concern notify recoverd: %v", err)
-							continue
-						}
-						idx = findNthIndex(unescape, '?', 1)
-						if idx != -1 {
-							unescape = unescape[:idx]
-						}
-						m.Url = unescape
-					} else {
-						fullURL, err = Url.Parse(unescape)
-						if err != nil {
-							logger.WithField("stack", string(debug.Stack())).
-								WithField("tweetId", tweet.ID).
-								Errorf("concern notify recoverd %v", err)
-						}
-						m.Url = fullURL.String()
-					}
-					// 下载并转码
-					filePath, err := downloadMedia(m.Url, false)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", tweet.ID).
-							Errorf("concern notify recoverd: %v", err)
-						continue
-					}
-					if mainTweet {
-						addTweetUrl(message, tweet.Url, addedUrl)
-					}
-					message.Cut()
-					message.Append(mmsg.NewVideoByLocal(filePath))
-				}
 			}
+		} else {
+			UrlStr, err := processMediaURL(unescape)
+			if err != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					WithField("tweetId", tweet.ID).
+					Errorf("concern notify recoverd: %v", err)
+				continue
+			}
+			Url, err = url.Parse(UrlStr)
+		}
+
+		switch m.Type {
+		case "image":
+			if tweet.MirrorHost == XImgHost {
+				unescape = strings.TrimLeft(unescape, "/pic/")
+			}
+			fullURL, err := Url.Parse(unescape)
+			if err != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					WithField("tweetId", tweet.ID).
+					Errorf("concern notify recoverd %v", err)
+			}
+			m.Url = fullURL.String()
+			addCut(message, nil)
+			message.Append(
+				mmsg.NewImageByUrl(m.Url,
+					requests.ProxyOption(proxy_pool.PreferOversea),
+					requests.AddUAOption(UserAgent),
+					requests.WithCookieJar(Cookie)))
+		case "video":
+			if strings.Contains(unescape, "video.twimg.com") {
+				idx := strings.Index(unescape, "video.twimg.com")
+				unescape, err = processMediaURL(unescape[idx:])
+				if err != nil {
+					logger.WithField("stack", string(debug.Stack())).
+						WithField("tweetId", tweet.ID).
+						Errorf("concern notify recoverd: %v", err)
+					continue
+				}
+				m.Url = unescape
+			}
+			if mainTweet {
+				addTweetUrl(message, tweet.Url, addedUrl)
+			}
+			message.Cut()
+			message.Append(
+				mmsg.NewVideoByUrl(m.Url,
+					requests.ProxyOption(proxy_pool.PreferOversea),
+					requests.AddUAOption(UserAgent),
+					requests.WithCookieJar(Cookie)))
+		case "gif":
+			if strings.Contains(unescape, "video.twimg.com") {
+				idx := strings.Index(unescape, "video.twimg.com")
+				unescape, err = processMediaURL(unescape[idx:])
+				if err != nil {
+					logger.WithField("stack", string(debug.Stack())).
+						WithField("tweetId", tweet.ID).
+						Errorf("concern notify recoverd: %v", err)
+					continue
+				}
+				m.Url = "https://" + unescape
+			}
+			// 下载并转码
+			filePath, err := downloadMedia(m.Url, true)
+			if err != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					WithField("tweetId", tweet.ID).
+					Errorf("concern notify recoverd: %v", err)
+				continue
+			}
+			message.Append(mmsg.NewImageByLocal(filePath))
+		case "video(m3u8)":
+			var fullURL *url.URL
+			var err error
+			if tweet.MirrorHost == XVideoHost {
+				idx := findNthIndex(unescape, '/', 3)
+				if idx != -1 {
+					unescape = unescape[idx+1:]
+				}
+			} else if strings.Contains(unescape, "https%3A%2F%2Fvideo.twimg.com") {
+				idx := strings.Index(unescape, "https%3A%2F%2F")
+				unescape, err = processMediaURL(unescape[idx:])
+				if err != nil {
+					logger.WithField("stack", string(debug.Stack())).
+						WithField("tweetId", tweet.ID).
+						Errorf("concern notify recoverd: %v", err)
+					continue
+				}
+				idx = findNthIndex(unescape, '?', 1)
+				if idx != -1 {
+					unescape = unescape[:idx]
+				}
+				m.Url = unescape
+			} else {
+				fullURL, err = Url.Parse(unescape)
+				if err != nil {
+					logger.WithField("stack", string(debug.Stack())).
+						WithField("tweetId", tweet.ID).
+						Errorf("concern notify recoverd %v", err)
+				}
+				m.Url = fullURL.String()
+			}
+			// 下载并转码
+			filePath, err := downloadMedia(m.Url, false)
+			if err != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					WithField("tweetId", tweet.ID).
+					Errorf("concern notify recoverd: %v", err)
+				continue
+			}
+			if mainTweet {
+				addTweetUrl(message, tweet.Url, addedUrl)
+			}
+			message.Cut()
+			message.Append(mmsg.NewVideoByLocal(filePath))
 		}
 	}
 }
@@ -361,7 +375,7 @@ func findNthIndex(s string, sep byte, n int) int {
 	return -1
 }
 
-func setMirrorHost(mirrorHost string, m Media) (url.URL, error) {
+func setMirrorHost(mirrorHost string, m Media) (*url.URL, error) {
 	if mirrorHost == "" || mirrorHost == XImgHost || mirrorHost == XVideoHost {
 		logger.WithField("mediaUrl", m.Url).
 			Trace("No MirrorHost was found, using the default Host of X.")
@@ -375,7 +389,7 @@ func setMirrorHost(mirrorHost string, m Media) (url.URL, error) {
 		Scheme: "https",
 		Host:   mirrorHost,
 	}
-	return Url, nil
+	return &Url, nil
 }
 
 // 检测是否包含URI编码特征

@@ -8,15 +8,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"math/rand"
 	"net/http"
 	"net/url"
+	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
 )
 
 type UserProfile struct {
@@ -165,17 +170,43 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		}
 		return nil, nil, result, nil
 	} else if strings.HasPrefix(title, "Verifying your browser") {
-		_, cookieVal := findI()
-		poastUrl, err := url.Parse("https://nitter.poast.org/")
+		// 获取挑战js
+		var fixedPrefix, cookieName, valuePrefix string
+		found := false
+		for _, script := range extractScripts(doc) {
+			fp, cn, vp, ok := findTriple(script)
+			if ok {
+				fixedPrefix, cookieName, valuePrefix = fp, cn, vp
+				logger.Debugf("found challenge triple: %s, %s, %s", fixedPrefix, cookieName, valuePrefix)
+				found = true
+				break
+			}
+		}
+
+		// 没找到，错误返回
+		if !found {
+			return nil, nil, nil, errors.New("failed to locate challenge triple (fixedPrefix, cookieName, valuePrefix)")
+		}
+
+		// 获取挑战字段
+		if strings.HasSuffix(cookieName, "=") {
+			cookieName = strings.TrimSuffix(cookieName, "=")
+		}
+
+		// 计算挑战
+		cookieValue, err := calcCookie(fixedPrefix)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		Cookie.SetCookies(poastUrl, []*http.Cookie{
+		logger.Debugf("poast final cookie value: %s", cookieValue)
+
+		// 设置cookie
+		Cookie.SetCookies(parsedURL, []*http.Cookie{
 			{
-				Name:     "res",
-				Value:    cookieVal,
+				Name:     cookieName,
+				Value:    cookieValue,
 				Path:     "/",
-				Domain:   poastUrl.Hostname(),
+				Domain:   parsedURL.Hostname(),
 				Secure:   true,
 				HttpOnly: false,
 			},
@@ -520,12 +551,92 @@ func FreshCookie(anubis *AnubisResult) {
 	}
 }
 
-func findI() (int, string) {
-	const prefix = "array"
-	for i := 0; ; i++ {
-		sum := sha1.Sum([]byte(prefix + strconv.Itoa(i)))
-		if sum[10] == 0xB0 && sum[11] == 0x0B {
-			return i, prefix + strconv.Itoa(i)
+// extractScripts collects inline <script> contents from a goquery document.
+func extractScripts(doc *goquery.Document) []string {
+	var scripts []string
+	doc.Find("script").Each(func(i int, s *goquery.Selection) {
+		// Only inline script text; ignore src= external scripts
+		if _, exists := s.Attr("src"); exists {
+			return
+		}
+		text := s.Text()
+		if strings.TrimSpace(text) != "" {
+			scripts = append(scripts, text)
+		}
+	})
+	return scripts
+}
+
+// findTriple scans a single script for any array literal assignment, parses elements,
+// and returns the one matching cookieName (ends with "=") and valuePrefix ("array").
+func findTriple(script string) (fixedPrefix, cookieName, valuePrefix string, ok bool) {
+	re := regexp.MustCompile(`const\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*=\s*\[\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*\]`)
+	// 注意：某些页面可能在数组后跟着 )（如立即执行函数里），上面允许可选 ) 但捕获组仍为方括号内部
+	matches := re.FindAllStringSubmatch(script, -1)
+	for _, m := range matches {
+		if len(m) < 4 {
+			continue
+		}
+		if strings.HasSuffix(m[2], "=") && m[3] == "array" {
+			return m[1], m[2], m[3], true
 		}
 	}
+	return "", "", "", false
+}
+
+// findI scans for i such that sha1(valuePrefix+itoa(i))[10]==0xB0 and [11]==0x0B.
+func calcCookie(fixedPrefix string) (result string, err error) {
+	firstChar := fixedPrefix[0]
+	n1, err := strconv.ParseInt(string(firstChar), 16, 64)
+	if err != nil {
+		return "", err
+	}
+
+	numWorkers := runtime.NumCPU()
+	batchSize := 100000
+
+	for startI := 0; ; startI += batchSize {
+		found := int32(0)
+		minI := int32(startI + batchSize)
+		var resultStr string
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+
+		endI := startI + batchSize
+
+		for worker := 0; worker < numWorkers; worker++ {
+			wg.Add(1)
+			go func(workerID int) {
+				defer wg.Done()
+
+				for i := startI + workerID; i < endI; i += numWorkers {
+					if atomic.LoadInt32(&found) == 1 {
+						return
+					}
+
+					input := fixedPrefix + strconv.Itoa(i)
+					hash := sha1.Sum([]byte(input))
+
+					if hash[n1] == 0xb0 && hash[n1+1] == 0x0b {
+						mu.Lock()
+						if int32(i) < minI {
+							minI = int32(i)
+							resultStr = input
+						}
+						mu.Unlock()
+						atomic.StoreInt32(&found, 1)
+						return
+					}
+				}
+			}(worker)
+		}
+
+		wg.Wait()
+
+		if atomic.LoadInt32(&found) == 1 {
+			result = resultStr
+			break
+		}
+	}
+	return
 }
