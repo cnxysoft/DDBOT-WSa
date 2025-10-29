@@ -1767,6 +1767,17 @@ func parseMarkdownElement(elements *[]message.IMessageElement) {
 	*elements = append(*elements, &message.TextElement{Content: text})
 }
 
+func parseDiceElement(contentMap map[string]interface{}, elements *[]message.IMessageElement) {
+	dice, ok := contentMap["data"].(map[string]interface{})
+	text := "[骰子"
+	if result, subOk := dice["result"]; ok && subOk && result != nil {
+		text += fmt.Sprintf(":%v]", result)
+	} else {
+		text += "]"
+	}
+	*elements = append(*elements, &message.TextElement{Content: text})
+}
+
 func handleMixMsg(contentArray []interface{}, miraiMsg any, isGroupMsg bool) []message.IMessageElement {
 	var elements []message.IMessageElement
 	for _, contentInterface := range contentArray {
@@ -1803,6 +1814,8 @@ func handleMixMsg(contentArray []interface{}, miraiMsg any, isGroupMsg bool) []m
 			parseVideoElement(contentMap, &elements)
 		case "markdown":
 			parseMarkdownElement(&elements)
+		case "dice":
+			parseDiceElement(contentMap, &elements)
 		default:
 			logger.Warnf("未知 内容 类型: %s", contentType)
 		}
