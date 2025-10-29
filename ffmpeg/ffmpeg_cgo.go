@@ -3,11 +3,12 @@
 
 package ffmpeg
 
-import "C"
 import (
 	"fmt"
 	"os"
 	"unsafe"
+
+	templUtils "github.com/Sora233/MiraiGo-Template/utils"
 )
 
 /*
@@ -72,9 +73,11 @@ void enable_ffmpeg_log_callback_with_level(int level);
 */
 import "C"
 
+var logger = templUtils.GetModuleLogger("ffmpeg")
+
 //export goLogCallbackTagged
 func goLogCallbackTagged(tag, msg *C.char) {
-	fmt.Printf("[FF %s] %s\n", C.GoString(tag), C.GoString(msg))
+	logger.Debugf("[FF %s] %s\n", C.GoString(tag), C.GoString(msg))
 }
 
 // wrapper to call the C helper that sets the callback
@@ -211,7 +214,7 @@ type RGBFrame struct {
 }
 
 func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
-	fmt.Println("[GIF] start transcode")
+	logger.Debug("[GIF] start transcode")
 
 	// Find video stream
 	var videoStream *C.AVStream
@@ -285,7 +288,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 	if ret := C.avformat_write_header(outFmt, nil); ret < 0 {
 		return fmt.Errorf("write header failed: %s", avErr2Str(ret))
 	}
-	fmt.Println("[GIF] header written OK")
+	logger.Debug("[GIF] header written OK")
 
 	// Decoder
 	dec := C.avcodec_find_decoder(videoStream.codecpar.codec_id)
@@ -300,7 +303,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 	var cachedFrames []RGBFrame
 
 	// Build single-pass filter graph
-	fmt.Println("[GIF] build single-pass graph")
+	logger.Debug("[GIF] build single-pass graph")
 	graph := C.avfilter_graph_alloc()
 	if graph == nil {
 		return fmt.Errorf("avfilter_graph_alloc failed")
@@ -353,7 +356,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 	}
 	C.avfilter_inout_free(&ins)
 	C.avfilter_inout_free(&outs)
-	fmt.Println("[GIF] graph ready")
+	logger.Debug("[GIF] graph ready")
 
 	// Decode → RGB → push
 	var pkt C.AVPacket
@@ -481,7 +484,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		C.av_frame_unref(frame)
 	}
 	C.av_buffersrc_add_frame_flags(srcCtx, nil, 0)
-	fmt.Println("[GIF] source flushed; drain and encode")
+	logger.Debug("[GIF] source flushed; drain and encode")
 
 	// Drain sink and encode
 	var passFrames, passPkts int
@@ -506,7 +509,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		out.pict_type = C.AV_PICTURE_TYPE_NONE
 
 		passFrames++
-		fmt.Println("[GIF] got PAL8 frame pts =", int64(out.pts))
+		logger.Debugf("[GIF] got PAL8 frame pts =", int64(out.pts))
 
 		if er := C.avcodec_send_frame(codecCtx, out); er < 0 {
 			C.av_frame_free(&out)
@@ -536,12 +539,12 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 			}
 			C.av_packet_unref(&encPkt)
 			passPkts++
-			fmt.Println("[GIF] packet written, total =", passPkts)
+			logger.Debug("[GIF] packet written, total =", passPkts)
 		}
 		C.av_frame_free(&out)
 	}
 
-	fmt.Printf("[GIF] done: frames=%d, packets=%d\n", passFrames, passPkts)
+	logger.Debug("[GIF] done: frames=%d, packets=%d\n", passFrames, passPkts)
 
 	// Flush encoder + trailer
 	C.avcodec_send_frame(codecCtx, nil)
@@ -570,6 +573,6 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		C.av_frame_free(&cf.frame)
 	}
 
-	fmt.Println("[GIF] transcode done")
+	logger.Debug("[GIF] transcode done")
 	return nil
 }

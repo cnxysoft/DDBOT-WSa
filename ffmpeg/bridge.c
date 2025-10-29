@@ -6,13 +6,13 @@
 
 // helper
 static const char* lvl_tag(int level) {
-    if (level <= AV_LOG_PANIC)   return "PANIC";
-    if (level <= AV_LOG_FATAL)   return "FATAL";
-    if (level <= AV_LOG_ERROR)   return "ERROR";
-    if (level <= AV_LOG_WARNING) return "WARN";
-    if (level <= AV_LOG_INFO)    return "INFO";
-    if (level <= AV_LOG_VERBOSE) return "VERB";
-    if (level <= AV_LOG_DEBUG)   return "DEBUG";
+    if (level >= AV_LOG_PANIC)   return "PANIC";
+    if (level >= AV_LOG_FATAL)   return "FATAL";
+    if (level >= AV_LOG_ERROR)   return "ERROR";
+    if (level >= AV_LOG_WARNING) return "WARN";
+    if (level >= AV_LOG_INFO)    return "INFO";
+    if (level >= AV_LOG_VERBOSE) return "VERB";
+    if (level >= AV_LOG_DEBUG)   return "DEBUG";
     return "TRACE";
 }
 
