@@ -509,7 +509,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		out.pict_type = C.AV_PICTURE_TYPE_NONE
 
 		passFrames++
-		logger.Debugf("[GIF] got PAL8 frame pts =", int64(out.pts))
+		logger.Debugf("[GIF] got PAL8 frame pts = %d", int64(out.pts))
 
 		if er := C.avcodec_send_frame(codecCtx, out); er < 0 {
 			C.av_frame_free(&out)
@@ -544,7 +544,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		C.av_frame_free(&out)
 	}
 
-	logger.Debug("[GIF] done: frames=%d, packets=%d\n", passFrames, passPkts)
+	logger.Debugf("[GIF] done: frames=%d, packets=%d\n", passFrames, passPkts)
 
 	// Flush encoder + trailer
 	C.avcodec_send_frame(codecCtx, nil)
