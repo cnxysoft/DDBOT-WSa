@@ -2,6 +2,7 @@ package twitter
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"math/rand"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -72,6 +74,11 @@ type AnubisChallengeSub struct {
 	RandomData string `json:"randomData"`
 }
 
+type Challenges struct {
+	Type   string
+	Anubis *AnubisResult
+}
+
 type AnubisResult struct {
 	Hash  string
 	Nonce int
@@ -104,7 +111,7 @@ func GetIdList(tweets []*Tweet) []string {
 	return idList
 }
 
-func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *AnubisResult, error) {
+func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challenges, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(htmlContent))
 	if err != nil {
 		return nil, nil, nil, err
@@ -144,14 +151,37 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *AnubisR
 			challengeTarget = challengeSub.RandomData
 		}
 		nonce, hash := ComputePoW(challengeTarget, challenge.Rules.Difficulty, challenge.Rules.Algorithm)
-		result := &AnubisResult{
-			Hash:  hash,
-			Nonce: nonce,
-			Time:  rand.Intn(100),
-			Host:  parsedURL.Hostname(),
+		result := &Challenges{
+			Type: "anubis",
+			Anubis: &AnubisResult{
+				Hash:  hash,
+				Nonce: nonce,
+				Time:  rand.Intn(100),
+				Host:  parsedURL.Hostname(),
+			},
 		}
 		if challengeSub != nil {
-			result.Id = challengeSub.Id
+			result.Anubis.Id = challengeSub.Id
+		}
+		return nil, nil, result, nil
+	} else if strings.HasPrefix(title, "Verifying your browser") {
+		_, cookieVal := findI()
+		poastUrl, err := url.Parse("https://nitter.poast.org/")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		Cookie.SetCookies(poastUrl, []*http.Cookie{
+			{
+				Name:     "res",
+				Value:    cookieVal,
+				Path:     "/",
+				Domain:   poastUrl.Hostname(),
+				Secure:   true,
+				HttpOnly: false,
+			},
+		})
+		result := &Challenges{
+			Type: "poast",
 		}
 		return nil, nil, result, nil
 	}
@@ -487,5 +517,15 @@ func FreshCookie(anubis *AnubisResult) {
 	err := requests.Get(path, nil, &resp, opts...)
 	if err != nil {
 		logger.Errorf("twitter: fresh %s cookie error %v", anubis.Host, err)
+	}
+}
+
+func findI() (int, string) {
+	const prefix = "array"
+	for i := 0; ; i++ {
+		sum := sha1.Sum([]byte(prefix + strconv.Itoa(i)))
+		if sum[10] == 0xB0 && sum[11] == 0x0B {
+			return i, prefix + strconv.Itoa(i)
+		}
 	}
 }

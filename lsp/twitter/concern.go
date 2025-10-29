@@ -44,7 +44,8 @@ const (
 	//BaseURL = "https://lightbrd.com/"
 	//alt1BaseURL = "https://nitter.privacydev.net/%s/rss"
 	//TweetAPI = "https://cdn.syndication.twimg.com/tweet-result?id=%s&token=%s"
-	ErrNotFound = "not found"
+	ErrNotFound    = "not found"
+	ErrUnavailable = "http code error 503"
 
 	CompactExpireTime = time.Minute * 60
 )
@@ -144,8 +145,10 @@ retry:
 		var resp bytes.Buffer
 		var respHeaders requests.RespHeader
 		if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-			logger.WithField("Mirror", Url.Hostname()).Errorf("查找用户失败：%v", err)
-			return nil, err
+			if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
+				logger.WithField("Mirror", Url.Hostname()).Errorf("查找用户失败：%v", err)
+				return nil, err
+			}
 		}
 
 		// 解压缩HTML
@@ -157,11 +160,14 @@ retry:
 		}
 
 		// 解析用户信息
-		profile, _, anubis, err := ParseResp(body, Url.String())
+		profile, _, challenge, err := ParseResp(body, Url.String())
 		if err != nil {
 			return nil, err
-		} else if anubis != nil {
-			FreshCookie(anubis)
+		} else if challenge != nil && challenge.Type == "anubis" {
+			FreshCookie(challenge.Anubis)
+			goto retry
+		} else if challenge != nil && challenge.Type == "poast" {
+			time.Sleep(time.Second * 3)
 			goto retry
 		} else if profile == nil {
 			return nil, errors.New("用户不存在或返回结果为空")
@@ -552,8 +558,10 @@ retry:
 	var resp bytes.Buffer
 	var respHeaders requests.RespHeader
 	if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-		logger.WithField("Mirror", Url.Hostname()).WithField("userId", id).Errorf("获取推文列表失败：%v", err)
-		return nil, err
+		if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
+			logger.WithField("Mirror", Url.Hostname()).WithField("userId", id).Errorf("获取推文列表失败：%v", err)
+			return nil, err
+		}
 	}
 
 	// 解压缩HTML
@@ -565,13 +573,16 @@ retry:
 	}
 
 	// 解析解压后的数据
-	_, tweets, anubis, err := ParseResp(body, Url.String())
+	_, tweets, challenge, err := ParseResp(body, Url.String())
 	if err != nil {
 		logger.WithField("Mirror", Url.Hostname()).
 			WithField("userId", id).Errorf("解析HTML失败：%v", err)
 		return nil, err
-	} else if anubis != nil {
-		FreshCookie(anubis)
+	} else if challenge != nil && challenge.Type == "anubis" {
+		FreshCookie(challenge.Anubis)
+		goto retry
+	} else if challenge != nil && challenge.Type == "poast" {
+		time.Sleep(time.Second * 3)
 		goto retry
 	} else if tweets == nil {
 		logger.WithField("Mirror", Url.Hostname()).
