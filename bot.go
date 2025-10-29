@@ -212,6 +212,7 @@ twitter:
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
+	- "https://nitter.poast.org/"
   interval: 300s # 查询间隔，过快可能导致ip被暂时封禁
   userAgent: 
 
