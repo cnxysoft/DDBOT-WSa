@@ -135,6 +135,7 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"live_time":        l.LiveTime,
 			"extend_notify":    l.ExtendNotify,
 			"group_code":       l.GroupCode,
+			"title_changed":    l.liveTitleChanged,
 		}
 		var err error
 		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
