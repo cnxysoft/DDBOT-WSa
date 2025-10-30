@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/tidwall/buntdb"
@@ -13,10 +15,12 @@ import (
 	"time"
 )
 
+var online bool
 var logger = utils.GetModuleLogger("weibo-concern")
 
 type Concern struct {
 	*StateManager
+	cacheStartTs int64
 }
 
 func (c *Concern) Site() string {
@@ -53,6 +57,18 @@ func (c *Concern) Start() error {
 		return nil, nil
 	}))
 	c.StateManager.UseNotifyGeneratorFunc(c.notifyGenerator())
+	go func() {
+		for msg := range eventbus.BusObj.Subscribe("bot_online") {
+			if m, ok := msg.(bool); ok {
+				if !online && m {
+					c.cacheStartTs = time.Now().Unix()
+					logger.Info("BOT已上线，刷新微博订阅模块启动时间")
+				}
+				online = m
+			}
+			logger.Debugf("模块 WEIBO 收到：bot_online: %v", msg)
+		}
+	}()
 	return c.StateManager.Start()
 }
 
@@ -171,25 +187,11 @@ func (c *Concern) freshNews(uid int64) (*NewsInfo, error) {
 		lastTs = oldNewsInfo.LatestNewsTs
 		newsInfo.LatestNewsTs = lastTs
 	}
-	var replaced bool
 	for _, card := range cardResp.GetData().GetList() {
-		id := strconv.FormatInt(card.GetId(), 10)
-		replaced, err = c.MarkMblogId(id)
-		if err != nil || replaced {
-			if err != nil {
-				log.WithField("mblogId", card.GetId()).
-					Errorf("MarkMblogId error %v", err)
-			}
-			continue
-		}
-		if t, err := time.Parse(time.RubyDate, card.GetCreatedAt()); err != nil {
-			log.WithField("time_string", card.GetCreatedAt()).
-				Errorf("can not parse Mblog.CreatedAt %v", err)
-			continue
-		} else if lastTs > 0 && t.Unix() > lastTs {
+		if pass, t := c.filterCard(card, lastTs); pass {
 			newsInfo.Cards = append(newsInfo.Cards, card)
-			if t.Unix() > newsInfo.LatestNewsTs {
-				newsInfo.LatestNewsTs = t.Unix()
+			if t > newsInfo.LatestNewsTs {
+				newsInfo.LatestNewsTs = t
 			}
 		}
 	}
@@ -199,6 +201,38 @@ func (c *Concern) freshNews(uid int64) (*NewsInfo, error) {
 		return nil, err
 	}
 	return newsInfo, nil
+}
+
+func (c *Concern) filterCard(card *Card, lastTs int64) (bool, int64) {
+	uid := card.GetUser().GetId()
+	// 应该用dynamic_id_str
+	// 但好像已经没法保持向后兼容同时改动了
+	// 只能相信概率论了，出问题的概率应该比较小，出问题会导致推送丢失
+	replaced, err := c.MarkMblogId(strconv.FormatInt(card.GetId(), 10))
+	if err != nil {
+		logger.WithField("uid", uid).
+			WithField("MblogId", card.GetId()).
+			Errorf("MarkDynamicId error %v", err)
+		return false, 0
+	}
+	if replaced {
+		return false, 0
+	}
+	var tsLimit int64
+	if cfg.GetWeiboOnlyOnlineNotify() {
+		tsLimit = c.cacheStartTs
+	} else {
+		tsLimit = 0
+	}
+	t, err := time.Parse(time.RubyDate, card.GetCreatedAt())
+	if err != nil {
+		logger.WithField("time_string", card.GetCreatedAt()).
+			Errorf("can not parse Mblog.CreatedAt %v", err)
+		return false, 0
+	} else if lastTs < 0 || t.Unix() < lastTs || t.Unix() < tsLimit {
+		return false, 0
+	}
+	return true, t.Unix()
 }
 
 func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {

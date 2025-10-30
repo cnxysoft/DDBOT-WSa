@@ -159,6 +159,14 @@ func GetBilibiliOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("bilibili.onlyOnlineNotify")
 }
 
+func GetWeiboOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("weibo.onlyOnlineNotify")
+}
+
+func GetYoutubeOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("youtube.onlyOnlineNotify")
+}
+
 func GetDouyinOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("douyin.onlyOnlineNotify")
 }

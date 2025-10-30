@@ -53,8 +53,6 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var Debug = false
 
-var online = false
-
 type Lsp struct {
 	pool          image_pool.Pool
 	concernNotify <-chan concern.Notify

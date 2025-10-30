@@ -90,6 +90,8 @@ func (c *LspPrivateCommand) Execute() {
 		c.ListCommand()
 	case SysinfoCommand:
 		c.SysinfoCommand()
+	case StatusCommand:
+		c.StatusCommand()
 	case ConfigCommand:
 		c.ConfigCommand()
 	case WhosyourdaddyCommand:
@@ -1297,6 +1299,45 @@ func (c *LspPrivateCommand) HelpCommand() {
 }
 
 func (c *LspPrivateCommand) SysinfoCommand() {
+	log := c.DefaultLoggerWithCommand(c.CommandName())
+	log.Infof("run %v command", c.CommandName())
+	defer func() { log.Infof("%v command end", c.CommandName()) }()
+
+	_, output := c.parseCommandSyntax(&struct{}{}, c.CommandName())
+	if output != "" {
+		c.textReply(output)
+	}
+	if c.exit {
+		return
+	}
+
+	if !c.l.PermissionStateManager.RequireAny(permission.AdminRoleRequireOption(c.uin())) {
+		c.noPermission()
+		return
+	}
+
+	m := mmsg.NewMSG()
+	m.Textf("当前好友数：%v\n", len(c.bot.GetFriendList()))
+	m.Textf("当前群组数：%v\n", len(c.bot.GetGroupList()))
+	for index, cm := range concern.ListConcern() {
+		_, ids, ctypes, err := cm.GetStateManager().ListConcernState(
+			func(groupCode int64, id interface{}, p concern_type.Type) bool {
+				return true
+			})
+		if index > 0 {
+			m.Text("\n")
+		}
+		ids, ctypes, err = cm.GetStateManager().GroupTypeById(ids, ctypes)
+		if err != nil {
+			m.Textf("当前%v订阅数：获取失败", cm.Site())
+		} else {
+			m.Textf("当前%v订阅数：%v", cm.Site(), len(ids))
+		}
+	}
+	c.send(m)
+}
+
+func (c *LspPrivateCommand) StatusCommand() {
 	log := c.DefaultLoggerWithCommand(c.CommandName())
 	log.Infof("run %v command", c.CommandName())
 	defer func() { log.Infof("%v command end", c.CommandName()) }()

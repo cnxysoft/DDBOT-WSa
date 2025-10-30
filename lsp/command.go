@@ -63,6 +63,7 @@ const (
 	LogCommand           = "log"
 	BlockCommand         = "block"
 	SysinfoCommand       = "sysinfo"
+	StatusCommand        = "status"
 	WhosyourdaddyCommand = "whosyourdaddy"
 	QuitCommand          = "quit"
 	ModeCommand          = "mode"

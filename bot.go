@@ -227,6 +227,12 @@ douyin:
   interval: 30s
   onlyOnlineNotify: false
 
+weibo:
+  onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+
+youtube:
+  onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+
 concern:
   emitInterval: 5s
 

@@ -4,16 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"time"
 )
 
+var online bool
 var logger = utils.GetModuleLogger("youtube")
 
 type Concern struct {
 	*StateManager
+	cacheStartTs int64
 }
 
 func (c *Concern) Site() string {
@@ -85,6 +90,18 @@ func (c *Concern) Start() error {
 	c.UseEmitQueue()
 	c.UseFreshFunc(c.fresh())
 	c.UseNotifyGeneratorFunc(c.notifyGenerator())
+	go func() {
+		for msg := range eventbus.BusObj.Subscribe("bot_online") {
+			if m, ok := msg.(bool); ok {
+				if !online && m {
+					c.cacheStartTs = time.Now().Unix()
+					logger.Info("BOT已上线，刷新油管订阅模块启动时间")
+				}
+				online = m
+			}
+			logger.Debugf("模块 YOUTUBE 收到：bot_online: %v", msg)
+		}
+	}()
 	return c.StateManager.Start()
 }
 
@@ -141,6 +158,19 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 	}
 }
 
+func (c *Concern) filterCard(card *VideoInfo) bool {
+	var tsLimit int64
+	if cfg.GetYoutubeOnlyOnlineNotify() {
+		tsLimit = c.cacheStartTs
+	} else {
+		tsLimit = 0
+	}
+	if card.VideoTimestamp < tsLimit {
+		return false
+	}
+	return true
+}
+
 func (c *Concern) freshInfo(channelId string) (result []*VideoInfo, err error) {
 	log := logger.WithField("channel_id", channelId)
 	oldInfo, _ := c.FindInfo(channelId, false, false)
@@ -190,7 +220,13 @@ func (c *Concern) freshInfo(channelId string) (result []*VideoInfo, err error) {
 					if newV.IsLive() && newV.IsLiving() {
 						newV.liveStatusChanged = true
 					}
-					result = append(result, newV)
+					if newV.IsVideo() {
+						if c.filterCard(newV) {
+							result = append(result, newV)
+						}
+					} else {
+						result = append(result, newV)
+					}
 					notifyCount += 1
 					// notify video most once
 				}
