@@ -2,20 +2,17 @@ package twitter
 
 import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
-	"github.com/mmcdole/gofeed"
 	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// 这里面可以定义推送中使用的结构
+const MaxLatestWteetIds = 20
 
 type NewsInfo struct {
 	*UserInfo
-	Tweet         Tweet
-	LatestNewsTs  time.Time
-	LatestTweetId string
+	Tweet *Tweet
 }
 
 func (e *NewsInfo) Site() string {
@@ -39,19 +36,89 @@ func (e *NewsInfo) Logger() *logrus.Entry {
 	})
 }
 
-func (e *NewsInfo) GetLatestTweetTs() time.Time {
-	ts, err := ParseSnowflakeTimestamp(e.LatestTweetId)
-	if err != nil {
-		e.Logger().WithError(err).Error("ParseSnowflakeTimestamp")
-		return time.Time{}
+type LatestTweetIds struct {
+	TweetId  []string
+	PinnedId string
+}
+
+func (l *LatestTweetIds) GetLatestTweetTs() *time.Time {
+	if len(l.TweetId) == 0 {
+		return nil
 	}
-	return ts
+	ts, err := ParseSnowflakeTimestamp(l.TweetId[0])
+	if err != nil {
+		logger.WithError(err).Error("ParseSnowflakeTimestamp")
+		return &time.Time{}
+	}
+	return &ts
+}
+
+func (l *LatestTweetIds) GetLatestTweetId() string {
+	if l == nil || len(l.TweetId) == 0 {
+		return ""
+	}
+	return l.TweetId[len(l.TweetId)-1]
+}
+
+func (l *LatestTweetIds) SetLatestTweetId(tweetId string) {
+	if l == nil {
+		return
+	}
+	po := l.HasTweetId(tweetId)
+	if po != -1 {
+		var tmpLatestTweetId []string
+		for i := range l.TweetId {
+			if i == po {
+				continue
+			}
+			tmpLatestTweetId = append(tmpLatestTweetId, l.TweetId[i])
+		}
+		l.SetLatestTweetIds(tmpLatestTweetId)
+	}
+	if len(l.TweetId) >= MaxLatestWteetIds {
+		l.TweetId = l.TweetId[1:len(l.TweetId)]
+	}
+	l.TweetId = append(l.TweetId, tweetId)
+}
+
+func (l *LatestTweetIds) SetLatestTweetIds(tweets []string) {
+	if l == nil {
+		return
+	}
+	l.TweetId = tweets
+}
+
+func (l *LatestTweetIds) HasTweetId(tweetId string) int {
+	if l == nil {
+		return -1
+	}
+	for i, TweetId := range l.TweetId {
+		if TweetId == tweetId {
+			return i
+		}
+	}
+	return -1
+}
+
+func (l *LatestTweetIds) SetPinnedTweet(tweetId string) bool {
+	if l == nil || tweetId == "" {
+		logger.Debug("SetPinnedTweet failed: Empty tweetId")
+		return false
+	}
+	l.PinnedId = tweetId
+	return true
+}
+
+func (l *LatestTweetIds) GetPinnedTweet() string {
+	if l == nil {
+		return ""
+	}
+	return l.PinnedId
 }
 
 type UserInfo struct {
-	Id              string
-	Name            string
-	ProfileImageUrl string
+	Id   string
+	Name string
 }
 
 func (u *UserInfo) GetUid() interface{} {
@@ -60,16 +127,6 @@ func (u *UserInfo) GetUid() interface{} {
 
 func (u *UserInfo) GetName() string {
 	return u.Name
-}
-
-func GetShortName(feed *gofeed.Feed) string {
-	//if strings.HasPrefix(feed.Title, "twitter ") {
-	//	return strings.Split(feed.Title, " ")[1]
-	//}
-	if idx := strings.LastIndex(feed.Title, "/ @"); idx != -1 {
-		return strings.TrimSpace(feed.Title[:idx])
-	}
-	return feed.Title
 }
 
 const (

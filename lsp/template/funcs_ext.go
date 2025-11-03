@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -478,6 +479,34 @@ func cooldown(ttlUnit string, keys ...interface{}) bool {
 	return true
 }
 
+func setCooldown(ttlUnit string, keys ...interface{}) bool {
+	ttl, err := time.ParseDuration(ttlUnit)
+	if err != nil {
+		panic(fmt.Sprintf("ParseDuration: can not parse <%v>: %v", ttlUnit, err))
+	}
+	key := localdb.NamedKey("TemplateCooldown", keys)
+	var Overwrite bool
+
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+
+	err = localdb.Set(key, "",
+		localdb.SetExpireOpt(ttl),
+		localdb.SetGetIsOverwriteOpt(&Overwrite),
+	)
+	if err == localdb.ErrRollback {
+		return false
+	} else if err != nil {
+		logger.Errorf("localdb.Set: cooldown set <%v> error %v", key, err)
+		panic(fmt.Sprintf("INTERNAL: db error"))
+	}
+	if Overwrite {
+		logger.Debugf("template: cooldown set <%v> overwrite", key)
+	}
+	return true
+}
+
 func openFile(path string) []byte {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -506,6 +535,24 @@ func writeFile(path string, data string) error {
 	err := os.WriteFile(path, []byte(data), 0644)
 	if err != nil {
 		logger.Errorf("template: writeFile <%v> error %v", path, err)
+		return err
+	}
+	return nil
+}
+
+func delFile(path string) error {
+	err := os.Remove(path)
+	if err != nil {
+		logger.Errorf("template: delFile <%v> error %v", path, err)
+		return err
+	}
+	return nil
+}
+
+func renameFile(path string, newPath string) error {
+	err := os.Rename(path, newPath)
+	if err != nil {
+		logger.Errorf("template: renameFile <%v> error %v", path, err)
 		return err
 	}
 	return nil
@@ -561,26 +608,44 @@ func getTimeStamp(t string) int64 {
 
 func getTime(s interface{}, f string) string {
 	var t time.Time
-	if _, ok := s.(time.Time); ok {
-		t = s.(time.Time)
-	} else if _, ok := s.(string); ok {
-		if s.(string) == "now" {
+
+	switch v := s.(type) {
+	case time.Time:
+		t = v
+	case string:
+		if v == "now" {
 			t = time.Now()
 		} else {
-			tmp, err := time.Parse(time.DateTime, s.(string))
+			tmp, err := time.ParseInLocation(time.DateTime, v, time.Local)
 			if err != nil {
 				return "parse time error"
 			}
 			t = tmp
 		}
+	case int:
+		t = time.Unix(int64(v), 0).In(time.Local)
+	case int64:
+		t = time.Unix(v, 0).In(time.Local)
+	default:
+		panic("template: getTime with invalid s")
 	}
-	if f == "dateonly" {
+
+	switch f {
+	case "dateonly":
 		return t.Format(time.DateOnly)
-	} else if f == "timeonly" {
+	case "timeonly":
 		return t.Format(time.TimeOnly)
-	} else if f == "stamp" {
+	case "stamp":
 		return t.Format(time.Stamp)
-	} else {
+	case "unix":
+		return strconv.FormatInt(t.Unix(), 10)
+	case "elapsed":
+		dur := time.Since(t)
+		h := int64(dur.Hours())
+		m := int64(dur.Minutes()) % 60
+		s := int64(dur.Seconds()) % 60
+		return fmt.Sprintf("%d小时%d分%d秒", h, m, s)
+	default:
 		return t.Format(time.DateTime)
 	}
 }
@@ -1048,4 +1113,33 @@ func getEleType(v interface{}) string {
 	default:
 		return "unknown"
 	}
+}
+
+func reCall(msg interface{}) bool {
+	if msg == nil {
+		logger.Warn("未提供需要撤回的消息")
+		return false
+	}
+	bot := localutils.GetBot()
+	if bot == nil {
+		logger.Error("bot 实例未找到")
+		return false
+	}
+	var msgId int32
+	switch e := msg.(type) {
+	case *message.GroupMessage:
+
+		msgId = e.Id
+	case *message.PrivateMessage:
+
+		msgId = e.Id
+	default:
+		panic(fmt.Sprintf("需要撤回的消息类型无法解析: %v", msg))
+	}
+	err := (*bot.Bot).QQClient.RecallMsg(msgId)
+	if err != nil {
+		logger.Errorf("撤回消息失败: %v", err)
+		return false
+	}
+	return true
 }

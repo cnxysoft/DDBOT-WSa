@@ -32,6 +32,7 @@ func initLsp(t *testing.T) {
 	test.InitBuntdb(t)
 	Instance.PermissionStateManager = permission.NewStateManager()
 	Instance.LspStateManager = NewStateManager()
+	localutils.GetBot().TESTSet()
 }
 
 func closeLsp(t *testing.T) {

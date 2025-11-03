@@ -62,3 +62,19 @@ func (s *StateManager) MarkMblogId(mblogId string) (replaced bool, err error) {
 		localdb.SetExpireOpt(time.Hour*120), localdb.SetGetIsOverwriteOpt(&replaced))
 	return
 }
+
+func (s *StateManager) RemoveUserInfo(uid int64) error {
+	_, err := s.Delete(s.UserInfoKey(uid))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *StateManager) RemoveNewsInfo(uid int64) error {
+	_, err := s.Delete(s.NewsInfoKey(uid))
+	if err != nil {
+		return err
+	}
+	return nil
+}

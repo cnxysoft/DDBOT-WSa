@@ -61,7 +61,8 @@ type FriendFileElement struct {
 }
 
 type ReplyElement struct {
-	ReplySeq int32 `json:"id"`
+	ReplySeq int32
+	Id       string `json:"id"`
 	Sender   int64
 	GroupID  int64 // 私聊回复群聊时
 	Time     int32
@@ -227,6 +228,7 @@ func AtAll() *AtElement {
 func NewReply(m *GroupMessage) *ReplyElement {
 	return &ReplyElement{
 		ReplySeq: m.Id,
+		Id:       strconv.Itoa(int(m.Id)),
 		Sender:   m.Sender.Uin,
 		Time:     m.Time,
 		// original: m.OriginalElements,
@@ -237,6 +239,7 @@ func NewReply(m *GroupMessage) *ReplyElement {
 func NewPrivateReply(m *PrivateMessage) *ReplyElement {
 	return &ReplyElement{
 		ReplySeq: m.Id,
+		Id:       strconv.Itoa(int(m.Id)),
 		Sender:   m.Sender.Uin,
 		Time:     m.Time,
 		Elements: m.Elements,

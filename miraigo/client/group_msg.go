@@ -110,18 +110,22 @@ func (c *QQClient) RealSendMSG(groupCode int64, m *message.SendingMessage, newst
 		return nil, errors.New("消息或图片长度超限，取消本次发送")
 	}
 	expTime := 120.00
-	tmpMsg := ""
-	if len(newstr) > 75 {
-		tmpMsg = newstr[:75] + "..."
-	} else {
-		tmpMsg = newstr
+	group := c.FindGroup(groupCode)
+	if group == nil {
+		group = new(GroupInfo)
+		group.Name = "未知群聊"
+		group.Code = groupCode
+		group.Client = c
 	}
-	logger.Infof("发送 群消息 给 %s(%v): %s", c.FindGroup(groupCode).Name, finalGroupID, tmpMsg)
+	logger.Infof("发送 群消息 给 %s(%v): %s", group.Name, finalGroupID, SliceMessage(newstr))
 	data, err := c.SendApi("send_group_msg", map[string]any{
 		"group_id": finalGroupID,
 		"message":  messages,
 	}, expTime)
 	if err != nil {
+		if GetSendFailureReminder() {
+			c.handleSendFailed(true, newstr, 0, groupCode)
+		}
 		return nil, errors.Wrap(err, "发送群消息失败")
 	}
 	t, err := json.Marshal(data)
@@ -149,7 +153,20 @@ func (c *QQClient) RealSendMSG(groupCode int64, m *message.SendingMessage, newst
 	if g := c.FindGroup(groupCode); g != nil {
 		retMsg.GroupName = g.Name
 	}
+	if GetSendFailureReminder() {
+		c.handleSendFailed(false, "", 0, groupCode)
+	}
 	return &retMsg, nil
+}
+
+func SliceMessage(str string) string {
+	tmpMsg := ""
+	if len(str) > 75 {
+		tmpMsg = str[:75] + "..."
+	} else {
+		tmpMsg = str
+	}
+	return tmpMsg
 }
 
 // SendGroupForwardMessage 发送群合并转发消息

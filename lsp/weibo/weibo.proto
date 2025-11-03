@@ -77,6 +77,32 @@ message Card {
         string url = 2;
       }
       Large large = 5;
+      string type = 6; // video、livephoto
+      string videoSrc = 7;
+      float duration = 8;
+    }
+    message PageInfo {
+      message PagePic {
+        string source = 1;
+        string is_self_cover = 2;
+        string type = 3;
+        string url = 4;
+      }
+      message MediaInfo {
+        string stream_url = 1;
+        string stream_url_hd = 2;
+        float duration = 3;
+      }
+      string type = 1; // video、topic（超话）
+      string url_ori = 2;
+      PagePic page_pic = 3;
+      MediaInfo media_info = 4;
+      string page_title = 5;
+      string title = 6;
+      string content1 = 7;
+      string content2 = 8;
+      string video_orientation = 9;
+      string play_count = 10;
     }
     Visible visible = 1;
     // 可以用 time.RubyDate 解析
@@ -91,6 +117,8 @@ message Card {
     int32 isTop = 10;
     Mblog retweeted_status = 11;
     string raw_text = 12;
+    string bid = 13;
+    PageInfo page_info = 14;
   }
   CardType card_type = 1;
   string itemId = 2;

@@ -53,7 +53,17 @@ type (
 		Receiver int64
 	}
 
+	BotOnlineEvent struct {
+	}
+
 	BotOfflineEvent struct {
+	}
+
+	BotSendFailedEvent struct {
+		Message    string
+		TargetUin  int64
+		TargetType int
+		Times      int
 	}
 )
 

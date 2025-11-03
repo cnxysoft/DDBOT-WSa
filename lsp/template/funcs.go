@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/google/uuid"
@@ -79,6 +80,7 @@ func builtins() FuncMap {
 		"remoteDownloadFile": remoteDownloadFile,
 		"getMsg":             getMsg,
 		"getFileUrl":         getFileUrl,
+		"reCall":             reCall,
 
 		// DDBOT common
 		"hour":          hour,
@@ -93,6 +95,7 @@ func builtins() FuncMap {
 		"getTime":       getTime,
 		"getUnixTime":   getUnixTime,
 		"cooldown":      cooldown,
+		"setCooldown":   setCooldown,
 		"openFile":      openFile,
 		"readLine":      readLine,
 		"findReadLine":  findReadLine,
@@ -100,6 +103,8 @@ func builtins() FuncMap {
 		"writeLine":     writeLine,
 		"updateFile":    updateFile,
 		"writeFile":     writeFile,
+		"delFile":       delFile,
+		"renameFile":    renameFile,
 		"abort":         abort,
 		"fin":           fin,
 		"uriEncode":     uriEncode,
@@ -107,6 +112,15 @@ func builtins() FuncMap {
 		"loop":          loop,
 		"lsDir":         lsDir,
 		"getEleType":    getEleType,
+		"sleep": func(s string) bool {
+			t, e := time.ParseDuration(s)
+			if e != nil {
+				logger.WithField("sleep", e).Error("无效的时间格式")
+				return false
+			}
+			time.Sleep(t)
+			return true
+		},
 
 		// cast
 		"float64": toFloat64,
@@ -221,10 +235,12 @@ func builtins() FuncMap {
 		"delStrSlice": delStrSlice,
 
 		// http
-		"httpGet":      httpGet,
-		"httpPostJson": httpPostJson,
-		"httpPostForm": httpPostForm,
-		"downloadFile": downloadFile,
+		"httpGet":       httpGet,
+		"httpHead":      httpHead,
+		"httpPostJson":  httpPostJson,
+		"httpPostForm":  httpPostForm,
+		"downloadFile":  downloadFile,
+		"parseBiliPost": getBiliPost,
 
 		// json
 		"toGJson": toGJson,

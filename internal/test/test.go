@@ -8,6 +8,7 @@ import (
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/stretchr/testify/assert"
+	"net/http/cookiejar"
 	"testing"
 )
 
@@ -97,4 +98,12 @@ func InitMirai() {
 
 func CloseMirai() {
 	bot.Instance = nil
+}
+
+func NewJar() (*cookiejar.Jar, error) {
+	return cookiejar.New(nil)
+}
+
+func DestroyJar(CookieJar *cookiejar.Jar) {
+	CookieJar = nil
 }

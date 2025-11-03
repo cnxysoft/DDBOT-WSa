@@ -78,13 +78,23 @@ func (c *QQClient) SendPrivateMessage(target int64, m *message.SendingMessage, n
 	} else {
 		tmpMsg = newstr
 	}
-	logger.Infof("发送 私聊消息 给 %s(%v): %s", c.FindFriend(target).Nickname, finalUserID, tmpMsg)
+	member := c.FindFriend(target)
+	if member == nil {
+		member = new(FriendInfo)
+		member.Nickname = "临时会话"
+		member.Uin = target
+		member.client = c
+	}
+	logger.Infof("发送 私聊消息 给 %s(%v): %s", member.Nickname, finalUserID, tmpMsg)
 
 	data, err := c.SendApi("send_private_msg", map[string]any{
 		"user_id": finalUserID,
 		"message": messages,
 	}, expTime)
 	if err != nil {
+		if GetSendFailureReminder() {
+			c.handleSendFailed(true, newstr, 1, target)
+		}
 		logger.Errorf("发送私聊消息失败: %v", err)
 		return nil
 	}
@@ -113,6 +123,9 @@ func (c *QQClient) SendPrivateMessage(target int64, m *message.SendingMessage, n
 		Elements: m.Elements,
 	}
 	go c.SelfPrivateMessageEvent.dispatch(c, retMsg)
+	if GetSendFailureReminder() {
+		c.handleSendFailed(false, "", 1, target)
+	}
 	return retMsg
 }
 

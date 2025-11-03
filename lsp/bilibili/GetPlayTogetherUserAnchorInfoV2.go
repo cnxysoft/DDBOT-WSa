@@ -40,13 +40,13 @@ func GetPlayTogetherUserAnchorInfoV2(mid int64) (*GetPlayTogetherUserAnchorInfoV
 }
 
 func (i *GetPlayTogetherUserAnchorInfoV2Response) GetName() string {
-	return i.Data.UserAnchorInfoBase.AnchorNickname
+	return i.GetData().GetUserAnchorInfoBase().GetAnchorNickname()
 }
 
 func (i *GetPlayTogetherUserAnchorInfoV2Response) GetUser() *UserAnchorInfoBase {
-	return i.Data.UserAnchorInfoBase
+	return i.GetData().GetUserAnchorInfoBase()
 }
 
 func (i *GetPlayTogetherUserAnchorInfoV2Response) GetUid() int64 {
-	return i.Data.UserAnchorInfoBase.Uid
+	return i.GetData().GetUserAnchorInfoBase().GetUid()
 }

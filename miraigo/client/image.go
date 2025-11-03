@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"strings"
@@ -43,12 +44,16 @@ type imageUploadResponse struct {
 	IsExists      bool
 }
 
-func (c *QQClient) UploadImage(target message.Source, img io.ReadSeeker) (message.IMessageElement, error) {
+func (c *QQClient) UploadImage(target message.Source, img []byte) (message.IMessageElement, error) {
 	switch target.SourceType {
 	case message.SourceGroup, message.SourceGuildChannel, message.SourceGuildDirect:
-		return c.uploadGroupOrGuildImage(target, img)
+		b64 := base64.StdEncoding.EncodeToString(img)
+		return message.NewImage("base64://" + b64), nil
+		//return c.uploadGroupOrGuildImage(target, img)
 	case message.SourcePrivate:
-		return c.uploadPrivateImage(target.PrimaryID, img, 0)
+		b64 := base64.StdEncoding.EncodeToString(img)
+		return message.NewImage("base64://" + b64), nil
+		//return c.uploadPrivateImage(target.PrimaryID, img, 0)
 	default:
 		return nil, errors.New("unsupported target type")
 	}

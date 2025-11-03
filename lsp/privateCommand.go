@@ -813,7 +813,7 @@ func (c *LspPrivateCommand) QuitCommand() {
 			return
 		}
 	} else {
-		gi.Quit((*(*(*(*(*(c)).Runtime).bot).Bot)).QQClient)
+		gi.Quit()
 		log.Debugf("已退出群【%v】", displayName)
 		c.textSend(fmt.Sprintf("已退出群【%v】", displayName))
 	}

@@ -5,6 +5,7 @@ import (
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"os"
 	"strings"
 )
 
@@ -25,12 +26,23 @@ func NewVideo(url string, Buf ...any) *VideoElement {
 	return v
 }
 
+func NewVideoByLocal(path string) *VideoElement {
+	v := &VideoElement{}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		v.Buf = b
+	} else {
+		logger.WithField("filepath", path).Errorf("ReadFile error %v", err)
+	}
+	return v
+}
+
 func NewVideoByUrl(url string, opts ...requests.Option) *VideoElement {
 	var v = NewVideo("")
 	// 使用LRU缓存
-	//b, hd, err := utils.FileGet(url, opts...)
+	b, hd, err := utils.FileGet(url, opts...)
 	// 不使用LRU缓存
-	b, hd, err := utils.FileGetWithoutCache(url, opts...)
+	//b, hd, err := utils.FileGetWithoutCache(url, opts...)
 	if err == nil && hd != nil {
 		v.Buf = b
 	} else {
@@ -60,7 +72,9 @@ func (v *VideoElement) PackToElement(target Target) message.IMessageElement {
 		}
 		return m
 	} else if v.Buf == nil {
-		logger.Debugf("TargetPrivate %v nil video buf", target.TargetCode())
+		logger.WithField("Target", target.TargetCode()).
+			WithField("TargetType", target.TargetType()).
+			Debug("PackToElement failed: nil video buf")
 		return nil
 	}
 	logger.Debugf("转换base64视频")

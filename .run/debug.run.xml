@@ -2,6 +2,7 @@
   <configuration default="false" name="debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$/debug" />
+    <parameters value="--debug" />
     <envs>
       <env name="GOOS" value="windows" />
       <env name="GOARCH" value="amd64" />

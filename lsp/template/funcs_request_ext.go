@@ -2,6 +2,7 @@ package template
 
 import (
 	"bytes"
+	"github.com/PuerkitoBio/goquery"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/google/uuid"
@@ -23,6 +24,11 @@ const (
 	DDBOT_REQ_TIMEOUT    = "DDBOT_REQ_TIMEOUT"
 	DDBOT_REQ_RETRY      = "DDBOT_REQ_RETRY"
 )
+
+type PostElement struct {
+	Ele  string
+	Type string
+}
 
 func preProcess(oParams []map[string]interface{}) (map[string]interface{}, []requests.Option) {
 	var params map[string]interface{}
@@ -174,6 +180,15 @@ func httpGet(url string, oParams ...map[string]interface{}) (body []byte) {
 	return
 }
 
+func httpHead(url string, oParams ...map[string]interface{}) (headers requests.RespHeader) {
+	params, opts := preProcess(oParams)
+	err := requests.Head(url, params, &headers, opts...)
+	if err != nil {
+		logger.Errorf("template: httpHead error %v", err)
+	}
+	return
+}
+
 func httpPostJson(url string, oParams ...map[string]interface{}) (body []byte) {
 	params, opts := preProcess(oParams)
 	err := requests.PostJson(url, params, &body, opts...)
@@ -278,4 +293,64 @@ func extractFilename(urlStr string) (string, bool) {
 	}
 
 	return base, true
+}
+
+func getBiliPost(Url string) []PostElement {
+	opts := []requests.Option{
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.RetryOption(3),
+	}
+	var body bytes.Buffer
+	err := requests.Get(Url, nil, &body, opts...)
+	if err != nil {
+		return nil
+	}
+	return parseBiliPostContent(body.Bytes())
+}
+
+func parseBiliPostContent(data []byte) []PostElement {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	var content []PostElement
+	doc.Find(".opus-module-content").Each(func(i int, s *goquery.Selection) {
+		s.Children().Each(func(_ int, e *goquery.Selection) {
+			var ele PostElement
+			switch goquery.NodeName(e) {
+			case "p":
+				text := strings.TrimSpace(e.Text())
+				if text != "" {
+					ele.Ele = text
+					ele.Type = "text"
+				}
+				content = append(content, ele)
+			case "div":
+				if e.HasClass("opus-para-pic") {
+					img := e.Find("img")
+					if src, exists := img.Attr("src"); exists {
+						fullUrl := toAbsoluteURL(src)
+						if fullUrl != "" {
+							ele.Type = "image"
+							ele.Ele = fullUrl
+						}
+					}
+				}
+				content = append(content, ele)
+			}
+		})
+	})
+	return content
+}
+
+func toAbsoluteURL(rel string) string {
+	base := "https://i0.hdslb.com"
+	if strings.HasPrefix(rel, "//") {
+		return "https:" + rel
+	}
+	if strings.HasPrefix(rel, "/") {
+		return base + rel
+	}
+	return rel
 }

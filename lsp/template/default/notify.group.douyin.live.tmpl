@@ -1,0 +1,6 @@
+{{ if .living -}}
+Douyin-{{ .name }}正在直播
+{{ .url -}}
+{{- else -}}
+Douyin-{{ .name }}直播结束了
+{{- end -}}

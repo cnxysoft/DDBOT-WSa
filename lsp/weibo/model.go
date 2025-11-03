@@ -1,6 +1,8 @@
 package weibo
 
 import (
+	"html"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,36 +130,82 @@ func (c *CacheCard) prepare() {
 	}
 	switch c.Card.GetCardType() {
 	case CardType_Normal:
+		var firstVideoPic bool
 		if len(c.Card.GetMblog().GetRawText()) > 0 {
-			m.Textf("\n%v", localutils.RemoveHtmlTag(c.Card.GetMblog().GetRawText()))
+			rawText := parseHTML(c.Card.GetMblog().GetRawText())
+			m.Textf("\n%v", localutils.RemoveHtmlTag(rawText))
 		} else {
-			m.Textf("\n%v", localutils.RemoveHtmlTag(c.Card.GetMblog().GetText()))
+			Text := parseHTML(c.Card.GetMblog().GetText())
+			m.Textf("\n%v", localutils.RemoveHtmlTag(Text))
 		}
 		for _, pic := range c.Card.GetMblog().GetPics() {
+			if pic.GetType() == "video" && !firstVideoPic {
+				firstVideoPic = true
+				continue
+			}
 			m.ImageByUrl(pic.GetLarge().GetUrl(), "")
+		}
+		if c.Card.GetMblog().GetPageInfo() != nil {
+			m.ImageByUrl(c.Card.GetMblog().GetPageInfo().GetPagePic().GetUrl(), "")
+			switch c.Card.GetMblog().GetPageInfo().GetType() {
+			case "video":
+				m.Textf("%s - %s\n", c.Card.GetMblog().GetPageInfo().GetContent1(),
+					c.Card.GetMblog().GetPageInfo().GetPlayCount())
+			case "article":
+				m.Textf("%s\n", c.Card.GetMblog().GetPageInfo().GetContent1())
+			default:
+				logger.WithField("Type", c.Card.GetMblog().GetPageInfo().GetType()).
+					Debugf("found new page_info_type")
+			}
 		}
 		if c.Card.GetMblog().GetRetweetedStatus() != nil {
 			if len(c.Card.GetMblog().GetRetweetedStatus().GetRawText()) > 0 {
-				m.Textf("\n\n原微博：\n%v", localutils.RemoveHtmlTag(c.Card.GetMblog().GetRetweetedStatus().GetRawText()))
+				rawText := parseHTML(c.Card.GetMblog().GetRetweetedStatus().GetRawText())
+				m.Textf("\n\n原微博：\n%v", localutils.RemoveHtmlTag(rawText))
 			} else {
-				m.Textf("\n\n原微博：\n%v", localutils.RemoveHtmlTag(c.Card.GetMblog().GetRetweetedStatus().GetText()))
+				Text := parseHTML(c.Card.GetMblog().GetRetweetedStatus().GetText())
+				m.Textf("\n\n原微博：\n%v", localutils.RemoveHtmlTag(Text))
 			}
 			for _, pic := range c.Card.GetMblog().GetRetweetedStatus().GetPics() {
+				if pic.GetType() == "video" && !firstVideoPic {
+					firstVideoPic = true
+					continue
+				}
 				m.ImageByUrl(pic.GetLarge().GetUrl(), "")
+			}
+			if c.Card.GetMblog().GetRetweetedStatus().GetPageInfo() != nil {
+				m.ImageByUrl(c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetPagePic().GetUrl(), "")
+				switch c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetType() {
+				case "video":
+					m.Textf("%s - %s\n", c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetContent1(),
+						c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetPlayCount())
+				case "article":
+					m.Textf("%s\n", c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetContent1())
+				default:
+					logger.WithField("Type", c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetType()).
+						Debugf("found new page_info_type")
+				}
 			}
 		}
 	default:
 		logger.WithField("Type", c.CardType.String()).Debug("found new card_types")
 	}
-	if idx := strings.Index(c.Card.GetScheme(), "?"); idx > 0 {
-		m.Textf("\n%v", c.Card.GetScheme()[:idx])
-	} else {
-		m.Textf("\n%v", c.Card.GetScheme())
-	}
+	m.Textf("\n%s", createWeiboUrl(c.Card.GetMblog().GetUser().GetId(), c.Card.GetMblog().GetBid()))
 	c.msgCache = m
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(c.prepare)
 	return c.msgCache
+}
+
+func parseHTML(text string) string {
+	text = strings.ReplaceAll(text, "<br />", "\n")
+	text = html.UnescapeString(text)
+	return text
+}
+
+func createWeiboUrl(uid int64, bid string) string {
+	Uid := strconv.FormatInt(uid, 10)
+	return "https://weibo.com/" + Uid + "/" + bid
 }

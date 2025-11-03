@@ -2,12 +2,11 @@ package twitter
 
 import (
 	"fmt"
+	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,27 +17,20 @@ import (
 	"time"
 )
 
-type NewNotify struct {
-	groupCode int64
+type ConcernNewsNotify struct {
+	GroupCode int64 `json:"group_code"`
 	*NewsInfo
+
+	shouldCompact bool
+	compactKey    string
+	concern       *twitterConcern
 }
 
-func (n *NewNotify) GetGroupCode() int64 {
-	return n.groupCode
+func (n *ConcernNewsNotify) GetGroupCode() int64 {
+	return n.GroupCode
 }
 
-func (n *NewNotify) ToMessage() *mmsg.MSG {
-	//t := n.GetTweetContent(n.Tweet.GetId())
-	//if t.XTypename == "TweetTombstone" {
-	//	logger.WithField("TweetId", n.Tweet.GetId()).
-	//		Warnf("tweet to tombstone: %s", t.Tombstone.Text.Text)
-	//	return &mmsg.MSG{}
-	//}
-	//var reTweetNotify *NewNotify
-	//if n.Tweet.Type == RETWEET {
-	//	reTweetNotify = n
-	//}
-	//message := t.GetTweetMessage(reTweetNotify)
+func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	defer func() {
 		if err := recover(); err != nil {
 			logger.WithField("stack", string(debug.Stack())).
@@ -46,43 +38,105 @@ func (n *NewNotify) ToMessage() *mmsg.MSG {
 				Errorf("concern notify recoverd %v", err)
 		}
 	}()
-	// 构造消息
-	message := mmsg.NewMSG()
-	if n.Tweet.ID == "" {
-		return message
-	}
-	location, _ := time.LoadLocation("Asia/Shanghai")
-	var CreatedAt time.Time
-	if n.Tweet.IsRetweet {
-		CreatedAt = n.LatestNewsTs
-		message.Textf(fmt.Sprintf("X-%s转发了%s的推文：\n",
-			n.Name, n.Tweet.OrgUser.Name))
+	m = mmsg.NewMSG()
+	var addedUrl bool
+	if n.shouldCompact {
+		// 通过回复之前消息的方式简化推送
+		msg, _ := n.concern.GetNotifyMsg(n.GroupCode, n.compactKey)
+		if msg != nil {
+			m.Append(message.NewReply(msg))
+		}
+		logger.WithField("compact_key", n.compactKey).Debug("compact notify")
+		Tips := "转发"
+		var OrgUserName string
+		if n.Tweet.QuoteTweet != nil {
+			OrgUserName = n.Tweet.QuoteTweet.OrgUser.Name
+			Tips = "引用"
+		} else {
+			OrgUserName = n.Tweet.OrgUser.Name
+		}
+		m.Textf("X-%s%s了%s的推文：\n%s\n%s\n",
+			n.Name,
+			Tips,
+			OrgUserName,
+			CSTTime(time.Now().UTC()).Format(time.DateTime),
+			n.Tweet.Content,
+		)
+		addTweetUrl(m, n.Tweet.Url, &addedUrl)
 	} else {
-		CreatedAt = n.Tweet.CreatedAt
-		message.Textf(fmt.Sprintf("X-%s发布了新推文：\n", n.Name))
+		// 构造消息
+		if n.Tweet.ID == "" {
+			return
+		}
+		var CreatedAt time.Time
+		if n.Tweet.RtType() == RETWEET {
+			CreatedAt = time.Now().UTC()
+			m.Textf("X-%s转发了%s的推文：\n",
+				n.Name, n.Tweet.OrgUser.Name)
+		} else {
+			CreatedAt = n.Tweet.CreatedAt
+			m.Textf("X-%s发布了新推文：\n", n.Name)
+		}
+		m.Text(CSTTime(CreatedAt).Format(time.DateTime) + "\n")
+		// msg加入推文
+		if n.Tweet.Content != "" {
+			content := n.Tweet.Content
+			if n.Tweet.Media != nil || content[len(content)-1] != '\n' {
+				content += "\n"
+			}
+			m.Text(content)
+		}
+		// msg加入媒体
+		addMedia(n.Tweet, m, true, &addedUrl)
+		// msg加入被引用推文
+		if QuoteTweet := n.Tweet.QuoteTweet; QuoteTweet != nil {
+			var CreatedAt time.Time
+			quoteTxt := "\n%v引用了%v的推文：\n"
+			CreatedAt = QuoteTweet.CreatedAt
+			// 检查是否需要插入cut
+			addCut(m, &quoteTxt)
+			m.Textf(quoteTxt, n.Tweet.OrgUser.Name, QuoteTweet.OrgUser.Name)
+			m.Text(CSTTime(CreatedAt).Format(time.DateTime) + "\n")
+			// msg加入推文
+			if QuoteTweet.Content != "" {
+				m.Text(QuoteTweet.Content + "\n")
+			}
+			// msg加入媒体
+			addMedia(QuoteTweet, m, false, &addedUrl)
+		}
+		addTweetUrl(m, n.Tweet.Url, &addedUrl)
 	}
-	message.Text(CSTTime(CreatedAt).In(location).Format(time.DateTime) + "\n")
-	//// 提取URL
-	//urlRegex := regexp.MustCompile(`\s+(https?://\S+)$`)
-	//matches := urlRegex.FindStringSubmatch(t.Text)
-	//// 删除推文中的URL
-	//var extractedURL string
-	//if len(matches) > 1 {
-	//	t.Text = strings.TrimSuffix(t.Text, matches[1])
-	//	extractedURL = matches[1]
-	//}
-	// msg加入推文
-	if n.Tweet.Content != "" {
-		message.Text(n.Tweet.Content + "\n")
+	return
+}
+
+func (n *ConcernNewsNotify) IsLive() bool {
+	return false
+}
+
+func (n *ConcernNewsNotify) Living() bool {
+	return false
+}
+
+func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *twitterConcern) *ConcernNewsNotify {
+	if newsInfo == nil {
+		return nil
 	}
-	// msg加入媒体
-	for _, m := range n.Tweet.Media {
+	var result = &ConcernNewsNotify{
+		GroupCode: groupCode,
+		NewsInfo:  newsInfo,
+		concern:   c,
+	}
+	return result
+}
+
+func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
+	for _, m := range tweet.Media {
 		unescape := m.Url
 		if strings.HasPrefix(unescape, "/") {
-			Url, err := setMirrorHost(*n, *m)
+			Url, err := setMirrorHost(tweet.MirrorHost, *m)
 			if err != nil {
 				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", n.Tweet.ID).
+					WithField("tweetId", tweet.ID).
 					Errorf("concern notify recoverd %v", err)
 				continue
 			}
@@ -91,97 +145,201 @@ func (n *NewNotify) ToMessage() *mmsg.MSG {
 					unescape, err = processMediaURL(m.Url)
 					if err != nil {
 						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", n.Tweet.ID).
+							WithField("tweetId", tweet.ID).
 							Errorf("concern notify recoverd: %v", err)
 						continue
 					}
 				}
 				switch m.Type {
 				case "image":
-					if n.Tweet.MirrorHost == XImgHost {
+					if tweet.MirrorHost == XImgHost {
 						unescape = strings.TrimLeft(unescape, "/pic/")
 					}
 					fullURL, err := Url.Parse(unescape)
 					if err != nil {
 						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", n.Tweet.ID).
+							WithField("tweetId", tweet.ID).
 							Errorf("concern notify recoverd %v", err)
 					}
 					m.Url = fullURL.String()
+					addCut(message, nil)
 					message.Append(
 						mmsg.NewImageByUrl(m.Url,
-							requests.TimeoutOption(time.Second*10),
-							requests.RetryOption(3),
-							requests.ProxyOption(proxy_pool.PreferOversea)))
-					message.Text(n.Tweet.Url + "\n")
-				case "video", "gif":
-					message.Text(n.Tweet.Url + "\n")
+							requests.ProxyOption(proxy_pool.PreferOversea),
+							requests.AddUAOption(UserAgent),
+							requests.WithCookieJar(Cookie)))
+				case "video":
+					if strings.Contains(unescape, "video.twimg.com") {
+						idx := strings.Index(unescape, "video.twimg.com")
+						unescape, err = processMediaURL(unescape[idx:])
+						if err != nil {
+							logger.WithField("stack", string(debug.Stack())).
+								WithField("tweetId", tweet.ID).
+								Errorf("concern notify recoverd: %v", err)
+							continue
+						}
+						m.Url = unescape
+					}
+					if mainTweet {
+						addTweetUrl(message, tweet.Url, addedUrl)
+					}
 					message.Cut()
 					message.Append(
 						mmsg.NewVideoByUrl(m.Url,
-							requests.TimeoutOption(time.Second*10),
-							requests.RetryOption(3),
-							requests.ProxyOption(proxy_pool.PreferOversea)))
+							requests.ProxyOption(proxy_pool.PreferOversea),
+							requests.AddUAOption(UserAgent),
+							requests.WithCookieJar(Cookie)))
+				case "gif":
+					if strings.Contains(unescape, "video.twimg.com") {
+						idx := strings.Index(unescape, "video.twimg.com")
+						unescape, err = processMediaURL(unescape[idx:])
+						if err != nil {
+							logger.WithField("stack", string(debug.Stack())).
+								WithField("tweetId", tweet.ID).
+								Errorf("concern notify recoverd: %v", err)
+							continue
+						}
+						m.Url = "https://" + unescape
+					}
+					// 下载并转码
+					filePath, err := downloadMedia(m.Url, true)
+					if err != nil {
+						logger.WithField("stack", string(debug.Stack())).
+							WithField("tweetId", tweet.ID).
+							Errorf("concern notify recoverd: %v", err)
+						continue
+					}
+					message.Append(mmsg.NewImageByLocal(filePath))
 				case "video(m3u8)":
-					if n.Tweet.MirrorHost == XVideoHost {
+					var fullURL *url.URL
+					var err error
+					if tweet.MirrorHost == XVideoHost {
 						idx := findNthIndex(unescape, '/', 3)
 						if idx != -1 {
 							unescape = unescape[idx+1:]
 						}
-					}
-					fullURL, err := Url.Parse(unescape)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", n.Tweet.ID).
-							Errorf("concern notify recoverd %v", err)
-					}
-					m.Url = fullURL.String()
-					var proxyStr string
-					proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
-					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", n.Tweet.ID).
-							Warnf("concern notify recoverd: proxy setting failed: %v", err)
-					} else {
-						proxyStr = proxy.ProxyString()
-					}
-					if _, err = os.Stat("./res"); os.IsNotExist(err) {
-						if err = os.MkdirAll("./res", 0755); err != nil {
-							logger.Error("创建下载目录失败")
+					} else if strings.Contains(unescape, "https%3A%2F%2Fvideo.twimg.com") {
+						idx := strings.Index(unescape, "https%3A%2F%2F")
+						unescape, err = processMediaURL(unescape[idx:])
+						if err != nil {
+							logger.WithField("stack", string(debug.Stack())).
+								WithField("tweetId", tweet.ID).
+								Errorf("concern notify recoverd: %v", err)
 							continue
 						}
+						idx = findNthIndex(unescape, '?', 1)
+						if idx != -1 {
+							unescape = unescape[:idx]
+						}
+						m.Url = unescape
+					} else {
+						fullURL, err = Url.Parse(unescape)
+						if err != nil {
+							logger.WithField("stack", string(debug.Stack())).
+								WithField("tweetId", tweet.ID).
+								Errorf("concern notify recoverd %v", err)
+						}
+						m.Url = fullURL.String()
 					}
-					filePath, _ := filepath.Abs("./res/" + uuid.New().String() + ".mp4")
-					err = convertWithProxy(m.Url, filePath, proxyStr)
+					// 下载并转码
+					filePath, err := downloadMedia(m.Url, false)
 					if err != nil {
 						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", n.Tweet.ID).
-							Errorf("concern notify recoverd: convertWithProxy failed: %v", err)
+							WithField("tweetId", tweet.ID).
+							Errorf("concern notify recoverd: %v", err)
 						continue
 					}
-					message.Text(n.Tweet.Url + "\n")
+					if mainTweet {
+						addTweetUrl(message, tweet.Url, addedUrl)
+					}
 					message.Cut()
-					message.Append(mmsg.NewVideo(filePath))
-					go func(path string) {
-						time.Sleep(time.Second * 180)
-						os.Remove(path)
-					}(filePath)
+					message.Append(mmsg.NewVideoByLocal(filePath))
 				}
 			}
 		}
 	}
-	return message
 }
 
-func convertWithProxy(m3u8URL, outputPath, proxyURL string) error {
-	cmd := exec.Command("ffmpeg",
+func addCut(msg *mmsg.MSG, quo *string) {
+	ele := msg.Elements()
+	if ele[len(ele)-1].Type() == mmsg.Video {
+		msg.Cut()
+		if quo != nil {
+			*quo = strings.TrimPrefix(*quo, "\n")
+		}
+	}
+}
+
+func addTweetUrl(msg *mmsg.MSG, url string, added *bool) {
+	if !*added {
+		*added = true
+		msg.Text(url + "\n")
+	}
+}
+
+func downloadMedia(Url string, IsGif bool) (string, error) {
+	var proxyStr string
+	proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
+	if err != nil {
+		return "", err
+	} else {
+		proxyStr = proxy.ProxyString()
+	}
+	if _, err = os.Stat("./res"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./res", 0755); err != nil {
+			return "", err
+		}
+	}
+	fileExt := "mp4"
+	if IsGif {
+		fileExt = "gif"
+	}
+	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + fileExt)
+
+	if IsGif {
+		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	} else {
+		err = convMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	}
+	if err != nil {
+		return "", err
+	}
+	go func(path string) {
+		time.Sleep(time.Second * 180)
+		logger.Debugf("Delete temporary files: %s", path)
+		err := os.Remove(path)
+		if err != nil {
+			logger.WithField("stack", string(debug.Stack())).
+				WithField("filePath", path).
+				Errorf("Delete temporary files error: %v", err)
+		}
+	}(filePath)
+	return filePath, nil
+}
+
+func convMediaWithProxy(Url, outputPath, proxyURL, Type string) error {
+	args := []string{
 		"-v", "error",
-		"-i", m3u8URL,
-		"-c", "copy",
-		"-f", "mp4",
-		outputPath)
+		"-i", Url,
+		"-f", Type,
+		outputPath,
+	}
+
+	if Type == "mp4" {
+		args = []string{
+			"-v", "error",
+			"-i", Url,
+			"-c", "copy",
+			"-movflags",
+			"+faststart",
+			"-f", Type,
+			outputPath,
+		}
+	}
+
+	cmd := exec.Command("ffmpeg", args...)
 	if proxyURL != "" {
-		cmd.Env = append(os.Environ(), "http_proxy="+proxyURL, "https_proxy="+proxyURL)
+		cmd.Env = append(os.Environ(), "http_proxy="+proxyURL, "https_proxy="+proxyURL, "rw_timeout=30000000")
 	}
 
 	cmd.Stdout = nil
@@ -203,26 +361,21 @@ func findNthIndex(s string, sep byte, n int) int {
 	return -1
 }
 
-func setMirrorHost(n NewNotify, m Media) (url.URL, error) {
-	if n.Tweet.MirrorHost == "" || n.Tweet.MirrorHost == XImgHost || n.Tweet.MirrorHost == XVideoHost {
-		logger.WithField("tweetId", n.Tweet.ID).
-			WithField("mediaUrl", m.Url).
+func setMirrorHost(mirrorHost string, m Media) (url.URL, error) {
+	if mirrorHost == "" || mirrorHost == XImgHost || mirrorHost == XVideoHost {
+		logger.WithField("mediaUrl", m.Url).
 			Trace("No MirrorHost was found, using the default Host of X.")
 		if m.Type == "image" {
-			n.Tweet.MirrorHost = XImgHost
+			mirrorHost = XImgHost
 		} else {
-			n.Tweet.MirrorHost = XVideoHost
+			mirrorHost = XVideoHost
 		}
 	}
 	Url := url.URL{
 		Scheme: "https",
-		Host:   n.Tweet.MirrorHost,
+		Host:   mirrorHost,
 	}
 	return Url, nil
-}
-
-func (n *NewNotify) Logger() *logrus.Entry {
-	return n.NewsInfo.Logger().WithFields(localutils.GroupLogFields(n.groupCode))
 }
 
 // 检测是否包含URI编码特征
@@ -264,191 +417,3 @@ func safeDecodeURIComponent(s string) (string, error) {
 	}
 	return decoded, nil
 }
-
-//// Base36Chars 定义了用于 36 进制表示的字符集。
-//const Base36Chars = "0123456789abcdefghijklmnopqrstuvwxyz"
-
-//// floatToBase36 将 float64 转换为其 36 进制字符串表示形式，
-//// 尝试模拟 JavaScript 的 Number.prototype.toString(36)。
-//// 注意：由于 JS 引擎内部实现的差异，精确的复制可能有所不同。
-//// precision 参数控制小数部分转换的最大位数。
-//func floatToBase36(val float64, precision int) string {
-//	// 单独处理零值
-//	if val == 0 {
-//		return "0"
-//	}
-//
-//	// 处理 NaN 和 Inf
-//	// JS 的 toString(36) 会返回 "NaN" 或 "Infinity"
-//	// 后续的替换操作将应用于这些字符串。
-//	if math.IsNaN(val) {
-//		return "NaN"
-//	}
-//	if math.IsInf(val, 1) {
-//		return "Infinity"
-//	}
-//	if math.IsInf(val, -1) {
-//		// JS 中 Number 类型没有负无穷的概念，但 Go float64 有
-//		// 为完整起见，进行处理，尽管原始 JS 代码可能不会产生负无穷
-//		return "-Infinity"
-//	}
-//
-//	// 处理负数
-//	sign := ""
-//	if val < 0 {
-//		sign = "-"
-//		val = -val // 取绝对值进行转换
-//	}
-//
-//	// 分离整数和小数部分
-//	intPart := int64(val) // 直接截断取整
-//	fracPart := val - float64(intPart)
-//
-//	// 转换整数部分
-//	intStr := strconv.FormatInt(intPart, 36)
-//
-//	// 转换小数部分
-//	var fracStrBuilder strings.Builder
-//	// 使用一个小的 epsilon 来比较浮点数，避免精度问题
-//	const epsilon = 1e-9 // 容差值
-//	if fracPart > epsilon {
-//		for i := 0; i < precision && fracPart > epsilon; i++ {
-//			// 将小数部分乘以 36
-//			fracPart *= 36
-//			// 取整数部分作为当前位的数字 (0-35)
-//			digit := int(fracPart)
-//
-//			// 健壮性检查：确保 digit 在有效范围内
-//			if digit < 0 || digit >= 36 {
-//				// 这通常表示浮点精度问题或计算错误
-//				// 在这里停止处理小数部分是安全的
-//				fmt.Printf("警告：在转换小数部分的 36 进制时遇到无效数字 %d。\n", digit)
-//				break
-//			}
-//			// 将数字转换为对应的 36 进制字符并追加
-//			fracStrBuilder.WriteByte(Base36Chars[digit])
-//			// 减去整数部分，继续处理剩余的小数
-//			fracPart -= float64(digit)
-//		}
-//	}
-//
-//	// 如果存在小数部分转换结果，则用 "." 连接整数和小数部分
-//	if fracStrBuilder.Len() > 0 {
-//		return sign + intStr + "." + fracStrBuilder.String()
-//	}
-//	// 否则只返回整数部分的转换结果
-//	return sign + intStr
-//}
-//
-//// GetToken 将 JavaScript 的 getToken 函数移植到 Go。
-//// 它接收一个 ID 字符串，执行计算，转换为 36 进制，并移除 '0' 和 '.'。
-//func (n *NewNotify) getToken(id string) (string, error) {
-//	// 1. 将 id 字符串转换为 float64
-//	f, err := strconv.ParseFloat(id, 64)
-//	if err != nil {
-//		// 返回中文错误信息
-//		return "", fmt.Errorf("无法将 ID '%s' 解析为数字: %w", id, err)
-//	}
-//
-//	// 2. 执行计算: (Number(id) / 1e15) * Math.PI
-//	val := (f / 1e15) * math.Pi
-//
-//	// 3. 将结果转换为 36 进制字符串
-//	// 为小数部分使用一个合理的精度（例如 15 位），与 float64 的精度限制类似
-//	base36Str := floatToBase36(val, 15)
-//
-//	// 4. 移除所有 '.' 字符，然后移除所有 '0' 字符
-//	// 这与 JS 正则表达式 /(0+|\.)/g 的行为相匹配
-//	// (先移除点，再移除零，效果等同于移除点和所有零)
-//	result := strings.ReplaceAll(base36Str, ".", "")
-//	result = strings.ReplaceAll(result, "0", "")
-//
-//	// 处理 NaN/Infinity 转换后的结果
-//	// JS: "NaN".replace(/(0+|\.)/g, '') -> "NaN"
-//	// JS: "Infinity".replace(/(0+|\.)/g, '') -> "Infinity"
-//	// Go 的替换逻辑对这些特定字符串也能得到相同结果。
-//
-//	return result, nil
-//}
-
-//func (n *NewNotify) GetTweetContent(tid string) *TweetMessage {
-//	token, err := n.getToken(tid)
-//	if err != nil {
-//		n.Logger().WithField("GetToken:", tid).
-//			Errorf("get token failed: %v", err)
-//	}
-//	getTweetUrl := fmt.Sprintf(TweetAPI, tid, token)
-//	opts := []requests.Option{
-//		requests.ProxyOption(proxy_pool.PreferOversea),
-//		requests.RetryOption(3),
-//		requests.TimeoutOption(time.Second * 10),
-//	}
-//	resp := new(TweetMessage)
-//	err = requests.Get(getTweetUrl, nil, resp, opts...)
-//	if err != nil {
-//		n.Logger().WithField("GeTweet:", tid).
-//			Errorf("get tweet content failed: %v", err)
-//		return &TweetMessage{}
-//	}
-//	return resp
-//}
-
-//func (t *TweetMessage) GetTweetMessage(reTweetNotify *NewNotify) *mmsg.MSG {
-//	defer func() {
-//		if err := recover(); err != nil {
-//			logger.WithField("stack", string(debug.Stack())).
-//				WithField("tweet", t).
-//				Errorf("concern notify recoverd %v", err)
-//		}
-//	}()
-//	// 构造消息
-//	message := mmsg.NewMSG()
-//	if t == nil {
-//		return message
-//	}
-//	location, _ := time.LoadLocation("Asia/Shanghai")
-//	var CreatedAt time.Time
-//	if reTweetNotify != nil {
-//		CreatedAt = reTweetNotify.LatestNewsTs
-//		message.Textf(fmt.Sprintf("X-%s转发了%s的%s：\n",
-//			reTweetNotify.Tweet.Author.Name, t.User.Name, t.XTypename))
-//	} else {
-//		CreatedAt, _ = time.Parse(time.RFC3339, t.CreatedAt)
-//		message.Textf(fmt.Sprintf("X-%s发布了新%s：\n", t.User.Name, t.XTypename))
-//	}
-//
-//	message.Text(CSTTime(CreatedAt).In(location).Format(time.DateTime) + "\n")
-//	// 提取URL
-//	urlRegex := regexp.MustCompile(`\s+(https?://\S+)$`)
-//	matches := urlRegex.FindStringSubmatch(t.Text)
-//	// 删除推文中的URL
-//	var extractedURL string
-//	if len(matches) > 1 {
-//		t.Text = strings.TrimSuffix(t.Text, matches[1])
-//		extractedURL = matches[1]
-//	}
-//	// msg加入推文
-//	message.Text(t.Text + "\n")
-//	// msg加入图片
-//	for _, p := range t.Photos {
-//		message.Append(
-//			mmsg.NewImageByUrl(p.Url,
-//				requests.ProxyOption(proxy_pool.PreferOversea),
-//				requests.TimeoutOption(time.Second*10),
-//				requests.RetryOption(3)))
-//	}
-//	// msg加入url
-//	if extractedURL != "" {
-//		message.Text(extractedURL + "\n")
-//	}
-//	// msg加入视频
-//	for _, v := range t.MediaDetails {
-//		message.Cut()
-//		message.Append(
-//			mmsg.NewVideoByUrl(v.VideoInfo.Variants[1].Url,
-//				requests.ProxyOption(proxy_pool.PreferOversea),
-//				requests.TimeoutOption(time.Second*10),
-//				requests.RetryOption(3)))
-//	}
-//	return message
-//}

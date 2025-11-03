@@ -37,8 +37,10 @@ func getWbi() (imgKey string, subKey string) {
 		key := strings.Split(path, ".")[0]
 		return key
 	}
-	imgKey = getKey(wbi.ImgUrl)
-	subKey = getKey(wbi.SubUrl)
+	if wbi != nil {
+		imgKey = getKey(wbi.ImgUrl)
+		subKey = getKey(wbi.SubUrl)
+	}
 	return
 }
 func getMixinKey(orig string) string {
@@ -53,6 +55,10 @@ func getMixinKey(orig string) string {
 
 func signWbi(params map[string]string) map[string]string {
 	imgKey, subKey := getWbi()
+	if imgKey == "" && subKey == "" {
+		logger.Errorf("bilibili: get wbi fail")
+		return params
+	}
 	mixinKey := getMixinKey(imgKey + subKey)
 	currTime := strconv.FormatInt(time.Now().Unix(), 10)
 	params["wts"] = currTime

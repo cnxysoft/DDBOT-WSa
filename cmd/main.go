@@ -15,6 +15,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyin"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"

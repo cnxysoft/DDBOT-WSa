@@ -15,9 +15,13 @@ import (
 )
 
 type RespHeader struct {
-	ContentDisposition string `header:"Content-Disposition"`
-	ContentLength      string `header:"Content-Length"`
-	ContentEncoding    string `header:"Content-Encoding"`
+	Server             string `header:"Server" json:"server"`
+	Date               string `header:"Date" json:"date"`
+	ContentDisposition string `header:"Content-Disposition" json:"content_disposition"`
+	ContentLength      string `header:"Content-Length" json:"content_length"`
+	ContentEncoding    string `header:"Content-Encoding" json:"content_encoding"`
+	ContentType        string `header:"Content-Type" json:"content_type"`
+	Connection         string `header:"Connection" json:"connection"`
 }
 
 var logger = utils.GetModuleLogger("request")

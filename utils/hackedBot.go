@@ -10,11 +10,12 @@ type HackedBot struct {
 	Bot        **miraiBot.Bot
 	testGroups []*client.GroupInfo
 	testUin    int64
+	testMode   bool
 }
 
 func (h *HackedBot) valid() bool {
 	result := true // 默认设置为 true
-	if h == nil || h.Bot == nil || *h.Bot == nil || !(*h.Bot).Online.Load() {
+	if h == nil || h.Bot == nil || *h.Bot == nil || h.testMode {
 		result = false
 	}
 	return result
@@ -126,4 +127,10 @@ func (h *HackedBot) TESTAddMember(groupCode int64, uin int64, permission client.
 func (h *HackedBot) TESTReset() {
 	h.testGroups = nil
 	h.testUin = 0
+	h.testMode = false
+}
+
+// TESTReset 仅可用于测试
+func (h *HackedBot) TESTSet() {
+	h.testMode = true
 }

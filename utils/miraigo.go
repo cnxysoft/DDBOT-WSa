@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bytes"
 	"errors"
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/bot"
@@ -14,7 +13,7 @@ func MessageFilter(msg []message.IMessageElement, filter func(message.IMessageEl
 	})
 }
 
-func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*message.GroupImageElement, error) {
+func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*message.ImageElement, error) {
 	img, err := ImageGet(url)
 	if err != nil {
 		return nil, err
@@ -22,7 +21,7 @@ func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*message.G
 	return UploadGroupImage(groupCode, img, isNorm)
 }
 
-func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.GroupImageElement, err error) {
+func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.ImageElement, err error) {
 	if isNorm {
 		img, err = ImageNormSize(img)
 		if err != nil {
@@ -32,14 +31,14 @@ func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourceGroup, PrimaryID: groupCode}, bytes.NewReader(img))
+	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourceGroup, PrimaryID: groupCode}, img)
 	if err != nil {
 		return nil, err
 	}
-	return e.(*message.GroupImageElement), nil
+	return e.(*message.ImageElement), nil
 }
 
-func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.FriendImageElement, error) {
+func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageElement, error) {
 	var err error
 	if isNorm {
 		img, err = ImageNormSize(img)
@@ -50,11 +49,11 @@ func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.FriendImag
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourcePrivate, PrimaryID: uin}, bytes.NewReader(img))
+	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourcePrivate, PrimaryID: uin}, img)
 	if err != nil {
 		return nil, err
 	}
-	return e.(*message.FriendImageElement), nil
+	return e.(*message.ImageElement), nil
 }
 
 const (

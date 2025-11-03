@@ -81,7 +81,9 @@ func (f *FileElement) PackToElement(target Target) message.IMessageElement {
 		m.Name = f.name
 		return m
 	} else if f.Buf == nil {
-		logger.Debugf("TargetPrivate %v nil file buf", target.TargetCode())
+		logger.WithField("Target", target.TargetCode()).
+			WithField("TargetType", target.TargetType()).
+			Debug("PackToElement failed: nil file buf")
 		return nil
 	}
 	logger.Debugf("转换base64文件")

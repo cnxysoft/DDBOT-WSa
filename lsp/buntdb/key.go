@@ -167,12 +167,27 @@ func WeiboMarkMblogIdKey(keys ...interface{}) string {
 func TwitterUserInfoKey(keys ...interface{}) string {
 	return NamedKey("TwitterUserInfo", keys)
 }
-func TwitterFreshKey(keys ...interface{}) string { return NamedKey("TwitterFresh", keys) }
-func TwitterNewsInfoKey(keys ...interface{}) string {
-	return NamedKey("TwitterNewsInfo", keys)
+func TwitterTweetListKey(keys ...interface{}) string { return NamedKey("TwitterTweetList", keys) }
+func LatestTweetIdsKey(keys ...interface{}) string {
+	return NamedKey("TwitterLatestTweetIds", keys)
 }
 func TwitterLastFreshKey(keys ...interface{}) string {
 	return NamedKey("TwitterLastFresh", keys)
+}
+func TwitterCompactMarkKey(keys ...interface{}) string {
+	return NamedKey("TwitterCompactMark", keys)
+}
+func TwitterNotifyMsgKey(keys ...interface{}) string {
+	return NamedKey("TwitterNotifyMsg", keys)
+}
+func DouyinUserInfoKey(keys ...interface{}) string {
+	return NamedKey("DouyinUserInfo", keys)
+}
+func DouyinFreshKey(keys ...interface{}) string {
+	return NamedKey("DouyinFresh", keys)
+}
+func DouyinCurrentLiveKey(keys ...interface{}) string {
+	return NamedKey("DouyinCurrentLive", keys)
 }
 
 func PermissionKey(keys ...interface{}) string {

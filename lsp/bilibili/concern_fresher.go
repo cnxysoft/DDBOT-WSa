@@ -7,6 +7,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
 	"go.uber.org/atomic"
@@ -88,6 +89,13 @@ func (c *Concern) fresh() concern.FreshFunc {
 				}
 
 				sendLiveInfo := func(info *LiveInfo) {
+					if info.Status == LiveStatus_Living {
+						resp, err := GetRoomInfo(info.RoomId)
+						if err != nil {
+							logger.WithField("mid", info.Mid).Errorf("GetRoomInfo error %v", err)
+						}
+						info.LiveTime = ParseLiveTime(resp.GetData().GetLiveTime())
+					}
 					addLiveInfoErr := c.AddLiveInfo(info)
 					if addLiveInfoErr != nil {
 						// 如果因为系统原因add失败，会造成重复推送
@@ -130,6 +138,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 							resp.GetTitle(),
 							resp.GetCover(),
 							resp.GetLiveStatus(),
+							ParseLiveTime(resp.GetData().GetLiveTime()),
 						)
 						selfLiveInfo.SetAreaData(
 							resp.Data.GetAreaId(),
@@ -219,7 +228,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 								continue
 							}
 							newInfo = NewLiveInfo(&oldInfo.UserInfo, resp.GetTitle(),
-								resp.GetCover(), LiveStatus_NoLiving)
+								resp.GetCover(), LiveStatus_NoLiving, oldInfo.LiveTime)
 							newInfo.SetAreaData(
 								resp.Data.GetAreaId(),
 								resp.Data.GetAreaName(),
@@ -396,6 +405,7 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 				l.GetTitle(),
 				l.GetPic(),
 				LiveStatus_Living,
+				0,
 			)
 			ParentArea := c.AreaData.GetSubArea(l.GetParentAreaId())
 			Aria := ParentArea.GetSubCategory(l.GetAreaId())
@@ -444,4 +454,12 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 		"LiveInfo Size": len(liveInfo),
 	}).Tracef("freshLive done")
 	return liveInfo, nil
+}
+
+func ParseLiveTime(liveTime string) int64 {
+	t, err := utils.ParseTime(liveTime)
+	if err != nil {
+		return 0
+	}
+	return t.Unix()
 }

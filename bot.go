@@ -111,7 +111,7 @@ func Run() {
 
 	// 初始化 Modules
 	bot.StartService()
-	fmt.Println("运行完了bot.StartService()")
+	//fmt.Println("运行完了bot.StartService()")
 	// 登录 跳过登录
 	//bot.Login()
 
@@ -120,7 +120,7 @@ func Run() {
 	// bot.RefreshList()
 
 	lsp.Instance.PostStart(bot.Instance)
-	fmt.Println("运行完了lsp.Instance.PostStart(bot.Instance)")
+	//fmt.Println("运行完了lsp.Instance.PostStart(bot.Instance)")
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
@@ -133,7 +133,13 @@ var exampleConfig = func() string {
 ### 注意，填写时请把井号及后面的内容删除，并且冒号后需要加一个空格
 bot:
   onJoinGroup: 
-    rename: "【bot】"  # BOT进群后自动改名，默认改名为“【bot】”，如果留空则不自动改名
+    rename: "【bot】"   # BOT进群后自动改名，默认改名为“【bot】”，如果留空则不自动改名
+  sendFailureReminder: # 失败提醒: 发送失败达到一定次数后触发notify.bot.send_failed.tmpl模板
+    enable: false      # 是否启用失败提醒
+    times: 3           # 失败次数阈值
+  offlineQueue:   # 离线缓存: BOT离线时暂存要发送的消息，上线后重新发送（期间不能重启DDBOT）
+    enable: false # 是否启用离线缓存
+    expire: 30m   # 离线消息有效期
 
 # 初次运行时将不使用b站帐号方便进行测试
 # 如果不使用b站帐号，则推荐订阅数不要超过5个，否则推送延迟将上升
@@ -155,18 +161,27 @@ bilibili:
   minFollowerCap: 0        # 设置订阅的b站用户需要满足至少有多少个粉丝，默认为0，设为-1表示无限制
   disableSub: false        # 禁止ddbot去b站关注帐号，这意味着只能订阅帐号已关注的用户，或者在b站手动关注
   onlyOnlineNotify: false  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+  autoParsePosts: false    # 自动解析专栏，将发送专栏动态改为发送专栏内容
 
 # 支持使用多个nitter镜像，默认使用官方镜像（第三方镜像可能有额外校验）
 # 使用lightbrd镜像请自行先访问https://lightbrd.com/进行cookies的获取
 # 填入你访问网站时提交的user_agent，可在浏览器中查看
 # 填入你访问网站后得到的cf_clearance，可在浏览器中查看
 twitter:
-  baseurl:
+  baseUrl:
     - "https://nitter.net/"
+    - "https://nitter.privacyredirect.com/"
+    - "https://nitter.tiekoetter.com/"
   interval: 300s # 查询间隔，过快可能导致ip被暂时封禁
-  useragent:
-  cfclearance:
+  userAgent: 
 
+# 抖音直播推送（测试）
+# 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce两个cookies和你的浏览器UA
+douyin:
+  interval: 30s
+  userAgent: 
+  acSignature: 
+  acNonce: 
 
 concern:
   emitInterval: 5s

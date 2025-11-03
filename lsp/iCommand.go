@@ -51,6 +51,8 @@ type ilistData struct {
 	Weibo    siteData `json:"Weibo"`
 	Youtube  siteData `json:"Youtube"`
 	Acfun    siteData `json:"Acfun"`
+	Twitter  siteData `json:"Twitter"`
+	Douyin   siteData `json:"Douyin"`
 }
 
 type siteData struct {
@@ -149,6 +151,10 @@ func IList(c *MessageContext, groupCode int64, site string, opts ...any) []byte 
 						iList.Youtube = tmpData
 					case "acfun":
 						iList.Acfun = tmpData
+					case "twitter":
+						iList.Twitter = tmpData
+					case "douyin":
+						iList.Douyin = tmpData
 					}
 
 				} else {

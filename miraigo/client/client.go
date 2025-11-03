@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/netip"
-	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -17,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 
 	"github.com/pkg/errors"
 
@@ -47,6 +48,7 @@ type QQClient struct {
 
 	// account info
 	Online        atomic.Bool
+	oldOnline     atomic.Bool
 	Nickname      string
 	Age           uint16
 	Gender        uint16
@@ -117,7 +119,9 @@ type QQClient struct {
 	GroupDisbandEvent                 EventHandle[*GroupDisbandEvent]
 	DeleteFriendEvent                 EventHandle[*DeleteFriendEvent]
 	GroupUploadNotifyEvent            EventHandle[*GroupUploadNotifyEvent]
+	BotOnlineEvent                    EventHandle[*BotOnlineEvent]
 	BotOfflineEvent                   EventHandle[*BotOfflineEvent]
+	BotSendFailedEvent                EventHandle[*BotSendFailedEvent]
 
 	// message state
 	msgSvcCache            *utils.Cache[unit]
@@ -274,7 +278,7 @@ type StrangerInfo struct {
 	Age        int    `json:"age"`
 	QQLevel    int    `json:"qqLevel"`
 	Level      int    `json:"level"`
-	Status     int    `json:"status"`
+	Status     any    `json:"status"`
 	IsVip      bool   `json:"is_vip"`
 	IsYearsVip bool   `json:"is_years_vip"`
 	VipLevel   int    `json:"vip_level"`
@@ -562,12 +566,14 @@ type SendMsg struct {
 	Message    *message.SendingMessage
 	NewStr     string
 	ResultChan chan SendResp
+	CreatedAt  time.Time
 }
 
 var sendMessageQueue = make(chan SendMsg, 128)
 var messageQueue = make(chan []byte, 128)
 var md5Int64Mapping = make(map[int64]string)
 var md5Int64MappingLock sync.Mutex
+var offlineQueue []SendMsg
 
 type DynamicInt64 int64
 
@@ -576,24 +582,34 @@ type MessageContent struct {
 	Data message.IMessageElement `json:"data"`
 }
 
+type BotVer struct {
+	AppName         string `json:"app_name"`
+	ProtocolVersion string `json:"protocol_version"`
+	AppVersion      string `json:"app_version"`
+	NtProtocol      string `json:"nt_protocol"`
+}
+
+type Status struct {
+	Online bool        `json:"online"`
+	Good   bool        `json:"good"`
+	Stat   interface{} `json:"stat"`
+}
+
 type WebSocketMessage struct {
 	PostType      string       `json:"post_type"`
 	MetaEventType string       `json:"meta_event_type"`
 	NoticeType    string       `json:"notice_type"`
 	OperatorId    DynamicInt64 `json:"operator_id"`
-	Status        struct {
-		Online bool `json:"online"`
-		Good   bool `json:"good"`
-	} `json:"status"`
-	RequestType string       `json:"request_type"`
-	Comment     string       `json:"comment"`
-	Flag        string       `json:"flag"`
-	Interval    int          `json:"interval"`
-	MessageType string       `json:"message_type"`
-	Time        DynamicInt64 `json:"time"`
-	SelfID      DynamicInt64 `json:"self_id"`
-	SubType     string       `json:"sub_type"`
-	Sender      struct {
+	Status        Status       `json:"status"`
+	RequestType   string       `json:"request_type"`
+	Comment       string       `json:"comment"`
+	Flag          string       `json:"flag"`
+	Interval      int          `json:"interval"`
+	MessageType   string       `json:"message_type"`
+	Time          DynamicInt64 `json:"time"`
+	SelfID        DynamicInt64 `json:"self_id"`
+	SubType       string       `json:"sub_type"`
+	Sender        struct {
 		Age      int          `json:"age"`
 		Card     string       `json:"card"`
 		Nickname string       `json:"nickname"`
@@ -678,27 +694,6 @@ func originalStringFromInt64(n int64) (string, bool) {
 
 	originalString, exists := md5Int64Mapping[n]
 	return originalString, exists
-}
-
-// 假设 wsmsg.Message 是一个字符串，包含了形如 [CQ:at=xxxx] 的数据
-func extractAtElements(str string) []*message.AtElement {
-	re := regexp.MustCompile(`\[CQ:at=(\d+)\]`) // 正则表达式匹配[CQ:at=xxxx]其中xxxx是数字
-	matches := re.FindAllStringSubmatch(str, -1)
-
-	var elements []*message.AtElement
-	for _, match := range matches {
-		if len(match) == 2 {
-			target, err := strconv.ParseInt(match[1], 10, 64) // 转化xxxx为int64
-			if err != nil {
-				continue // 如果转化失败，跳过此次循环
-			}
-			elements = append(elements, &message.AtElement{
-				Target: target,
-				// 如果有 Display 和 SubType 的信息，也可以在这里赋值
-			})
-		}
-	}
-	return elements
 }
 
 func parseEcho(echo string) (string, string) {
@@ -807,23 +802,18 @@ func (c *QQClient) handleGroupAdminNotice(wsmsg WebSocketMessage) (bool, error) 
 	group := c.FindGroup(wsmsg.GroupID.ToInt64())
 	member := group.FindMember(wsmsg.UserID.ToInt64())
 	if member != nil {
-		var permission MemberPermission
+		var oldPermission, permission MemberPermission
 		if wsmsg.SubType == "set" {
 			permission = Administrator
 		} else if wsmsg.SubType == "unset" {
 			permission = Member
 		}
-		// 群名片更新入库
-		for _, m := range group.Members {
-			if m.Uin == member.Uin {
-				m.Permission = permission
-				break
-			}
-		}
+		oldPermission = member.Permission
+		member.Permission = permission
 		c.GroupMemberPermissionChangedEvent.dispatch(c, &MemberPermissionChangedEvent{
 			Group:         group,
 			Member:        member,
-			OldPermission: member.Permission,
+			OldPermission: oldPermission,
 			NewPermission: permission,
 		})
 	} else {
@@ -954,13 +944,11 @@ func (c *QQClient) handleGroupCardNotice(wsmsg WebSocketMessage) (bool, error) {
 	var err error
 	member, err := c.GetGroupMemberInfo(wsmsg.GroupID.ToInt64(), wsmsg.UserID.ToInt64())
 	if err == nil && member.Group != nil {
-		// 群成员名片更新
-		for _, m := range member.Group.Members {
-			if m.Uin == member.Uin {
-				m.CardName = member.CardName
-				break
-			}
+		m, err := c.FindMemberByUin(wsmsg.GroupID.ToInt64(), wsmsg.UserID.ToInt64())
+		if err != nil {
+			needSync = true
 		}
+		m.CardName = member.CardName
 		c.MemberCardUpdatedEvent.dispatch(c, &MemberCardUpdatedEvent{
 			Group:   member.Group,
 			OldCard: wsmsg.CardOld,
@@ -1009,9 +997,6 @@ func (c *QQClient) handleGroupBanNotice(wsmsg WebSocketMessage) (bool, error) {
 				member.ShutUpTimestamp = time.Now().Add(time.Second * time.Duration(wsmsg.Duration)).Unix()
 			} else {
 				member.ShutUpTimestamp = 0
-			}
-			if wsmsg.Duration == -1 {
-				wsmsg.Duration = 268435455
 			}
 			c.GroupMuteEvent.dispatch(c, &GroupMuteEvent{
 				GroupCode:   wsmsg.GroupID.ToInt64(),
@@ -1147,18 +1132,81 @@ func (c *QQClient) handleRequestEvent(wsmsg WebSocketMessage) {
 
 func (c *QQClient) handleMetaEvent(wsmsg WebSocketMessage) {
 	switch wsmsg.MetaEventType {
-	case "lifecycle", "heartbeat":
+	case "lifecycle":
+		ver := c.getBotVer()
+		logger.Infof("BOT实现：%v，版本：%v，协议版本：%v", ver.AppName, ver.AppVersion, ver.ProtocolVersion)
 		if wsmsg.MetaEventType == "lifecycle" {
 			c.Uin = int64(wsmsg.SelfID)
 		}
+		stat := c.getStatus()
+		c.Online.Store(stat.Online)
+		c.oldOnline.Store(stat.Online)
+		c.alive = stat.Good
+		// BOT状态广播
+		go func() {
+			time.Sleep(time.Second * 5)
+			eventbus.BusObj.Publish("bot_online", c.Online.Load())
+		}()
+		if c.Online.Load() && len(offlineQueue) > 0 {
+			c.OnReconnect()
+		}
+	case "heartbeat":
+		logger.Tracef("收到心跳，BOT是否在线：%v", wsmsg.Status.Online)
+		c.oldOnline.Store(c.Online.Load())
 		c.Online.Store(wsmsg.Status.Online)
 		c.alive = wsmsg.Status.Good
-		if !wsmsg.Status.Online {
+		// 触发上线事件
+		if c.Online.Load() && !c.oldOnline.Load() {
+			c.BotOnlineEvent.dispatch(c, &BotOnlineEvent{})
+		}
+		// BOT状态广播
+		eventbus.BusObj.Publish("bot_online", c.Online.Load())
+		if !c.Online.Load() {
 			c.BotOfflineEvent.dispatch(c, &BotOfflineEvent{})
 		}
 	default:
 		logger.Warnf("未知 元事件 类型: %s", wsmsg.MetaEventType)
 	}
+}
+
+func (c *QQClient) handleBotOfflineNotice(_ WebSocketMessage) (bool, error) {
+	c.Online.Store(false)
+	c.BotOfflineEvent.dispatch(c, &BotOfflineEvent{})
+	return false, nil
+}
+
+func (c *QQClient) getBotVer() BotVer {
+	var resp BotVer
+	data, err := c.SendApi("get_version_info", nil)
+	if err != nil {
+		logger.Warnf("获取BOT实现版本失败: %v", err)
+	}
+	t, err := json.Marshal(data)
+	if err != nil {
+		logger.Warnf("解析BOT实现版本失败: %v", err)
+	}
+	err = json.Unmarshal(t, &resp)
+	if err != nil {
+		logger.Warnf("解析BOT实现版本失败: %v", err)
+	}
+	return resp
+}
+
+func (c *QQClient) getStatus() Status {
+	var stat Status
+	resp, err := c.SendApi("get_status", nil)
+	if err != nil {
+		logger.Warnf("获取BOT状态失败: %v", err)
+	}
+	t, err := json.Marshal(resp)
+	if err != nil {
+		logger.Warnf("解析BOT状态信息失败: %v", err)
+	}
+	err = json.Unmarshal(t, &stat)
+	if err != nil {
+		logger.Warnf("解析BOT状态信息失败: %v", err)
+	}
+	return stat
 }
 
 func (c *QQClient) handleGroupEssence(wsmsg WebSocketMessage) (bool, error) {
@@ -1218,6 +1266,14 @@ func (c *QQClient) GetMsg(msgId int32) (interface{}, error) {
 	}
 }
 
+func (c *QQClient) RecallMsg(msgId int32) error {
+	_, err := c.SendApi("delete_msg", map[string]any{"message_id": msgId})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *QQClient) GetFileUrl(groupCode int64, fileId string) string {
 	data, err := c.SendApi("get_group_file_url", map[string]any{
 		"group_id": groupCode,
@@ -1254,6 +1310,7 @@ func (c *QQClient) handleNoticeEvent(wsmsg WebSocketMessage) {
 		"group_recall":   c.handleGroupRecallNotice,
 		"essence":        c.handleGroupEssence,
 		"group_upload":   c.handleGroupUploadNotice,
+		"bot_offline":    c.handleBotOfflineNotice,
 	}
 	needSync := false
 	var err error
@@ -1306,18 +1363,6 @@ func (c *QQClient) handleMessage(wsmsg WebSocketMessage) {
 		default:
 			logger.Warnf("未知 上报 类型: %s", wsmsg.NoticeType)
 		}
-	}
-}
-
-func handleMsgContent(MessageContent string, elements []message.IMessageElement) {
-	// 替换字符串中的"\/"为"/"
-	MessageContent = strings.Replace(MessageContent, "\\/", "/", -1)
-	// 使用extractAtElements函数从wsmsg.Message中提取At元素
-	atElements := extractAtElements(MessageContent)
-	// 将提取的At元素和文本元素都添加到g.Elements
-	elements = append(elements, &message.TextElement{Content: MessageContent})
-	for _, elem := range atElements {
-		elements = append(elements, elem)
 	}
 }
 
@@ -1586,10 +1631,26 @@ func parseJsonContent(meta map[string]interface{}, elements *[]message.IMessageE
 		if channel, ok := metaData["channel_info"].(map[string]interface{}); ok {
 			needDec = false
 			feedTitle := "未知"
-			if feedTitle, ok = metaData["feed"].(map[string]interface{})["title"].(map[string]interface{})["contents"].([]interface{})[0].(map[string]interface{})["text_content"].(map[string]interface{})["text"].(string); !ok {
-				logger.Warnf("Failed to parse feed title")
+			if feed, ok := metaData["feed"].(map[string]interface{}); ok {
+				if titleMap, ok := feed["title"].(map[string]interface{}); ok {
+					if contents, ok := titleMap["contents"].([]interface{}); ok && len(contents) > 0 {
+						if first, ok := contents[0].(map[string]interface{}); ok {
+							if textContent, ok := first["text_content"].(map[string]interface{}); ok {
+								if txt, ok := textContent["text"].(string); ok {
+									feedTitle = txt
+								}
+							}
+						}
+					} else {
+						logger.Warnf("Card feed title missing contents: %+v", metaData)
+					}
+				}
 			}
-			metaMap.Title = channel["channel_name"].(string)
+			guildName := "未知"
+			if name, ok := channel["guild_name"].(string); ok {
+				guildName = name
+			}
+			metaMap.Title = guildName
 			metaMap.Desc = feedTitle
 			metaMap.Tag = "频道"
 		}
@@ -1627,7 +1688,7 @@ func parseFileElement(contentMap map[string]interface{}, elements *[]message.IMe
 	file, ok := contentMap["data"].(map[string]interface{})
 	if ok {
 		var fileSize int64 = 0
-		fileName := ""
+		var fileName, url string
 		if file["file"] != nil {
 			fileName = file["file"].(string)
 		} else if file["file_name"] != nil {
@@ -1641,23 +1702,22 @@ func parseFileElement(contentMap map[string]interface{}, elements *[]message.IMe
 				fileSize = file["file_size"].(int64)
 			}
 		}
+		if file["url"] != nil {
+			url = file["url"].(string)
+		}
 		if isGroupMsg {
 			*elements = append(*elements, &message.GroupFileElement{
 				Name: fileName,
 				Size: fileSize,
 				Id:   file["file_id"].(string),
-				Url:  file["url"].(string),
+				Url:  url,
 			})
 		} else {
-			fileUrl := ""
-			if file["url"] != nil {
-				fileUrl = file["url"].(string)
-			}
 			*elements = append(*elements, &message.FriendFileElement{
 				Name: fileName,
 				Size: fileSize,
 				Id:   file["file_id"].(string),
-				Url:  fileUrl,
+				Url:  url,
 			})
 		}
 	}
@@ -1755,8 +1815,6 @@ func (c *QQClient) ChatMsgHandler(wsmsg WebSocketMessage, miraiMsg any) any {
 		}
 	}()
 	switch wsmsg.MessageContent.(type) {
-	case string:
-		handleMsgContent(wsmsg.MessageContent.(string), elements)
 	case []interface{}:
 		elements = handleMixMsg(wsmsg.MessageContent.([]interface{}), miraiMsg, isGroupMsg)
 	default:
@@ -2083,6 +2141,19 @@ func (c *QQClient) wsInit(ws *websocket.Conn, mode string) {
 	go c.RefreshList()
 	go c.SendLimit()
 	go c.processMessage()
+	if getOfflineQueueEnable() {
+		go func() {
+			time.Sleep(time.Second * 5)
+			for msg := range eventbus.BusObj.Subscribe("bot_online") {
+				if m, ok := msg.(bool); ok {
+					if !c.oldOnline.Load() && m && len(offlineQueue) > 0 {
+						c.OnReconnect()
+					}
+				}
+				logger.Debugf("模块 离线缓存 收到：bot_online: %v", msg)
+			}
+		}()
+	}
 	if mode == "ws-server" {
 		c.handleConnection(ws)
 	} else {
@@ -2123,7 +2194,7 @@ func (c *QQClient) RefreshList() {
 		if memberCount > 0 {
 			logger.Infof("已加载 %d 个群成员", memberCount)
 		} else {
-			logger.Info("群成员加载失败")
+			logger.Error("群成员加载失败")
 		}
 	}
 }
@@ -2144,6 +2215,17 @@ func (c *QQClient) ReloadGroupMembers() (int, error) {
 }
 
 func (c *QQClient) SendGroupMessage(groupCode int64, m *message.SendingMessage, newstr string) SendResp {
+	if getOfflineQueueEnable() && (c == nil || !c.Online.Load()) {
+		logger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", SliceMessage(newstr))
+		// 暂存消息
+		saveOfflineMsg(SendMsg{
+			GroupCode: groupCode,
+			Message:   m,
+			NewStr:    newstr,
+			CreatedAt: time.Now(),
+		})
+		return SendResp{RetMSG: &message.GroupMessage{Id: -1, Elements: m.Elements}}
+	}
 	resultChan := make(chan SendResp)
 	sendMsg := SendMsg{
 		GroupCode:  groupCode,
@@ -2153,6 +2235,44 @@ func (c *QQClient) SendGroupMessage(groupCode int64, m *message.SendingMessage, 
 	}
 	sendMessageQueue <- sendMsg
 	return <-resultChan
+}
+
+func saveOfflineMsg(MSG SendMsg) {
+	offlineQueue = append(offlineQueue, MSG)
+}
+
+func (c *QQClient) OnReconnect() {
+	msgs := loadOfflineMsgs()
+	expire := getOfflineQueueExpire()
+	now := time.Now()
+	logger.Infof("BOT已上线，开始重发缓存的 %d 条离线消息", len(msgs))
+
+	for _, msg := range msgs {
+		if now.Sub(msg.CreatedAt) <= expire {
+			sendMessageQueue <- msg
+		} else {
+			logger.Infof("丢弃过期离线消息: %v", msg.NewStr)
+		}
+	}
+	clearOfflineMsgs()
+}
+
+func loadOfflineMsgs() []SendMsg {
+	return offlineQueue
+}
+
+func clearOfflineMsgs() {
+	offlineQueue = nil
+}
+
+func getOfflineQueueEnable() bool {
+	return config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+}
+
+func getOfflineQueueExpire() time.Duration {
+	timeStr := config.GlobalConfig.GetString("bot.offlineQueue.expire")
+	t, _ := time.ParseDuration(timeStr)
+	return t
 }
 
 func (c *QQClient) sendToWebSocketClient(ws *websocket.Conn, message []byte) {
@@ -2575,7 +2695,7 @@ func (c *QQClient) GetGroupList() ([]*GroupInfo, error) {
 			GroupLevel:      uint32(group.GroupLevel),
 			MemberCount:     uint16(group.MemberCount),
 			MaxMemberCount:  uint16(group.MaxMemberCount),
-			client:          c,
+			Client:          c,
 		}
 	}
 	return groups, nil
@@ -2892,4 +3012,31 @@ func (c *QQClient) GetStrangerInfo(uid int64) (StrangerInfo, error) {
 		return StrangerInfo{}, err
 	}
 	return resp, nil
+}
+
+func (c *QQClient) handleSendFailed(add bool, msg string, targetType int, targetId int64) {
+	if add {
+		c.retryTimes++
+		logger.Debugf("检测到消息发送失败，增加失败计数，当前失败次数：%d", c.retryTimes)
+	} else {
+		c.retryTimes = 0
+		logger.Debugf("检测到消息发送成功，清空失败计数，当前失败次数：%d", c.retryTimes)
+	}
+	if c.retryTimes == GetSendFailureReminderTimes() {
+		logger.Warnf("累计发送消息失败 %d 次，触发 BotSendFailedEvent 事件", c.retryTimes)
+		c.BotSendFailedEvent.dispatch(c, &BotSendFailedEvent{
+			msg,
+			targetId,
+			targetType,
+			c.retryTimes,
+		})
+	}
+}
+
+func GetSendFailureReminder() bool {
+	return config.GlobalConfig.GetBool("bot.sendFailureReminder.enable")
+}
+
+func GetSendFailureReminderTimes() int {
+	return config.GlobalConfig.GetInt("bot.sendFailureReminder.times")
 }

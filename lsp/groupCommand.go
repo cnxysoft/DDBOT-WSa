@@ -278,7 +278,7 @@ func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
 	var (
 		imgsBytes   = make([][]byte, len(imgs))
 		errs        = make([]error, len(imgs))
-		groupImages = make([]*message.GroupImageElement, len(imgs))
+		groupImages = make([]*message.ImageElement, len(imgs))
 		wg          = new(sync.WaitGroup)
 	)
 

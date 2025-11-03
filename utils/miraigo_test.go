@@ -70,6 +70,6 @@ func TestUploadPrivateImage(t *testing.T) {
 	img, err := ImageGet(imageUrl)
 	assert.Nil(t, err)
 	e, err = UploadPrivateImage(1, img, true)
-	assert.NotNil(t, err)
-	assert.Nil(t, e)
+	assert.Nil(t, err)
+	assert.NotNil(t, e)
 }

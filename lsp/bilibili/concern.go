@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
+
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
@@ -25,6 +27,8 @@ const (
 	Live concern_type.Type = "live"
 	News concern_type.Type = "news"
 )
+
+var online bool
 
 type Concern struct {
 	*StateManager
@@ -124,6 +128,18 @@ func (c *Concern) Start() error {
 			}
 		}()
 	}
+	go func() {
+		for msg := range eventbus.BusObj.Subscribe("bot_online") {
+			if m, ok := msg.(bool); ok {
+				if !online && m {
+					c.cacheStartTs = time.Now().Unix()
+					logger.Infof("BOT已上线，刷新B站订阅模块启动时间")
+				}
+				online = m
+			}
+			logger.Debugf("模块 BILIBILI 收到：bot_online: %v", msg)
+		}
+	}()
 	return c.StateManager.Start()
 }
 
@@ -339,10 +355,24 @@ func (c *Concern) FindUser(mid int64, load bool) (*UserInfo, error) {
 			resp.GetData().GetName(),
 			resp.GetData().GetLiveRoom().GetUrl(),
 		)
+		var liveTime int64
+		if resp.GetData().GetLiveRoom().GetLiveStatus() == LiveStatus_Living {
+			var liveTimeStr string
+			respRoom, err := GetRoomInfo(resp.GetData().GetLiveRoom().GetRoomid())
+			if err != nil {
+				logger.Warnf("GetRoomInfo error %v", err)
+			} else {
+				liveTimeStr = respRoom.GetData().GetLiveTime()
+			}
+			if liveTimeStr != "" {
+				liveTime = ParseLiveTime(liveTimeStr)
+			}
+		}
 		newLiveInfo := NewLiveInfo(newUserInfo,
 			resp.GetData().GetLiveRoom().GetTitle(),
 			resp.GetData().GetLiveRoom().GetCover(),
 			resp.GetData().GetLiveRoom().GetLiveStatus(),
+			liveTime,
 		)
 		// AddLiveInfo 会顺便添加UserInfo
 		err = c.StateManager.AddLiveInfo(newLiveInfo)

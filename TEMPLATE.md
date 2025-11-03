@@ -839,7 +839,6 @@ abort也支持图片参数
 {{ abort (pic "https://i2.hdslb.com/bfs/face/0bd7082c8c9a14ef460e64d5f74ee439c16c0e88.jpg" ) }}
 ```
 
-
 - 结束处理当前模板`fin`
 
 退出当前模板并且发送已经产生的内容，未被处理的模板代码将被跳过
@@ -848,6 +847,300 @@ abort也支持图片参数
 这句话会输出
 {{- fin -}}
 这句话不会输出
+```
+
+*以下为DDBOT-WSa新增*
+
+- 获取Unix时间戳 `{{ getUnixTime 1640995200 "2006-01-02 15:04:05" }}`
+
+将Unix时间戳转换为指定格式的时间字符串
+
+- 获取时间戳 `{{ getTimeStamp "2022-01-01 12:00:00" }}`
+
+将指定格式的时间字符串转换为Unix时间戳
+
+- 获取格式化时间 `{{ getTime "now" "2006-01-02" }}`
+
+获取格式化后的时间，第一个参数可以是time.Time类型或字符串（"now"表示当前时间），第二个参数是格式化字符串
+
+- 文件操作函数
+
+一组用于文件操作的函数：
+
+`readLine` - 读取文件指定行内容
+```
+{{ readLine "path/myfile.txt" 3 }}
+```
+
+`findReadLine` - 在文件中查找包含指定字符串的行
+```
+{{ findReadLine "path/myfile.txt" "keyword" }}
+```
+
+`findWriteLine` - 在文件中查找并替换包含指定字符串的行
+```
+{{ findWriteLine "path/myfile.txt" "old_content" "new_content" }}
+```
+
+`writeLine` - 在文件指定行写入内容
+```
+{{ writeLine "path/myfile.txt" 3 "new_content" }}
+```
+
+`updateFile` - 追加内容到文件末尾
+```
+{{ updateFile "path/myfile.txt" "append_content" }}
+```
+
+`writeFile` - 覆盖写入文件内容
+```
+{{ writeFile "path/myfile.txt" "new_content" }}
+```
+
+`delFile` - 删除文件
+```
+{{ delFile "path/myfile.txt" }}
+```
+
+`renameFile` - 重命名文件
+```
+{{ renameFile "path/old_name.txt" "path/new_name.txt" }}
+```
+
+- URI编解码函数
+
+`uriEncode` - URI编码
+```
+{{ uriEncode "hello world" }}
+```
+
+`uriDecode` - URI解码
+```
+{{ uriDecode "hello%20world" }}
+```
+
+- 循环函数 `loop`
+
+创建一个从from到to的循环
+```
+{{ range $i := loop 1 5 }}{{ $i }}{{ end }}
+```
+
+- 列出目录内容 `lsDir`
+
+列出指定目录的内容
+```
+{{ lsDir "path/mydir" true }}
+```
+第二个参数表示是否递归列出子目录
+
+- 获取元素类型 `getEleType`
+
+获取消息元素的类型
+```
+{{ getEleType .element }}
+```
+
+- 撤回消息 `reCall`
+
+撤回指定的消息
+```
+{{ reCall .msg }}
+```
+
+- 视频、语音、文件发送函数
+
+`video` - 发送视频
+```
+{{ video "path/myvideo.mp4" }}
+```
+
+`record` - 发送语音
+```
+{{ record "path/myaudio.mp3" }}
+```
+
+`file` - 发送文件
+```
+{{ file "path/myfile.txt" }}
+```
+
+- 远程下载文件 `remoteDownloadFile`
+
+从远程URL下载文件
+```
+{{ remoteDownloadFile "https://example.com/file.txt" }}
+```
+
+- 获取文件URL `getFileUrl`
+
+获取群文件的下载URL
+```
+{{ getFileUrl .group_code .file_id }}
+```
+
+- 获取消息 `getMsg`
+
+根据消息ID获取消息内容
+```
+{{ getMsg .msg_id }}
+```
+
+- 成员列表 `member_list`
+
+获取群成员列表
+```
+{{ member_list .group_code }}
+```
+
+- 分数管理函数
+
+一组用于管理用户分数的函数：
+
+`getScore` - 获取用户分数
+```
+{{ getScore .member_code .group_code }}
+```
+
+`addScore` - 增加用户分数
+```
+{{ addScore .member_code .group_code 10 }}
+```
+
+`subScore` - 减少用户分数
+```
+{{ subScore .member_code .group_code 5 }}
+```
+
+`setScore` - 设置用户分数
+```
+{{ setScore .member_code .group_code 100 }}
+```
+
+- 权限检查 `isAdmin`
+
+检查用户是否为管理员
+```
+{{ isAdmin .member_code .group_code }}
+```
+
+- JSON处理增强
+
+`jsonToDictOrArray` - 将JSON字节转换为字典或数组
+```
+{{ jsonToDictOrArray $jsonBytes true }}
+```
+第二个参数为true表示转换为数组，false表示转换为字典
+
+- 列表处理函数
+
+`getIListJson` - 获取列表JSON数据
+```
+{{ getIListJson .group_code "site" .msg_context }}
+```
+
+`outputIList` - 输出列表
+```
+{{ outputIList .msg_context .group_code "site" }}
+```
+
+- 字符串处理增强
+
+新增以下字符串处理函数：
+
+`reTrunc` - 从字符串末尾截取指定长度
+```
+{{ reTrunc "hello world" 5 }}
+```
+
+`trimAll` - 去掉字符串两端指定字符
+```
+{{ trimAll "abc" "abcHelloabc" }}
+```
+
+`replace` - 替换字符串中第一次出现的子串
+```
+{{ replace "hello" "hi" "hello world" }}
+```
+
+`replaceAll` - 替换字符串中所有出现的子串
+```
+{{ replaceAll "l" "L" "hello world" }}
+```
+
+`find` - 查找子串第一次出现的位置
+```
+{{ find "world" "hello world" }}
+```
+
+`findLast` - 查找子串最后一次出现的位置
+```
+{{ findLast "l" "hello world" }}
+```
+
+`count` - 统计子串出现次数
+```
+{{ count "l" "hello world" }}
+```
+
+`kebabcase` - 转换为短横线命名法
+```
+{{ kebabcase "FirstName" }}
+```
+
+- 字典处理增强
+
+新增以下字典处理函数：
+
+`pluck` - 从多个字典中提取指定键的值
+```
+{{ pluck "name" $dict1 $dict2 }}
+```
+
+`keys` - 获取字典的所有键
+```
+{{ keys $dict }}
+```
+
+`omit` - 从字典中排除指定键
+```
+{{ omit $dict "key1" "key2" }}
+```
+
+`mustMerge` - 合并字典（带错误处理）
+```
+{{ mustMerge $dict1 $dict2 }}
+```
+
+`mustMergeOverwrite` - 覆盖合并字典（带错误处理）
+```
+{{ mustMergeOverwrite $dict1 $dict2 }}
+```
+
+`values` - 获取字典的所有值
+```
+{{ values $dict }}
+```
+
+- 深拷贝 `deepCopy`
+
+深度拷贝对象
+```
+{{ deepCopy $obj }}
+```
+
+- 字典查找 `dig`
+
+在嵌套字典中查找值
+```
+{{ dig "key1" "key2" "default" $dict }}
+```
+
+- 睡眠函数 `sleep`
+
+暂停指定时间
+```
+{{ sleep "1s" }}
 ```
 
 ## 当前支持的命令模板

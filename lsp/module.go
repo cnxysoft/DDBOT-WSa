@@ -3,10 +3,13 @@ package lsp
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/robfig/cron/v3"
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
@@ -31,7 +34,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/fsnotify/fsnotify"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/robfig/cron/v3"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
 	"go.uber.org/atomic"
@@ -40,11 +42,18 @@ import (
 
 const ModuleName = "me.sora233.Lsp"
 
+const (
+	TargetTypeGroup = iota
+	TargetTypeFriend
+)
+
 var logger = logrus.WithField("module", ModuleName)
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var Debug = false
+
+var online = false
 
 type Lsp struct {
 	pool          image_pool.Pool
@@ -375,11 +384,14 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 				return
 			}
 		}
+		var botMode string
 		switch l.LspStateManager.GetCurrentMode() {
 		case PrivateMode:
+			botMode = string(PrivateMode)
 			log.Info("收到好友申请，当前BOT处于私有模式，将拒绝好友申请")
 			request.Reject()
 		case ProtectMode:
+			botMode = string(ProtectMode)
 			if err := l.LspStateManager.SaveNewFriendRequest(request); err != nil {
 				log.Errorf("收到好友申请，但记录申请失败，将拒绝该申请，请将该问题反馈给开发者 - error %v", err)
 				request.Reject()
@@ -387,12 +399,24 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 				log.Info("收到好友申请，当前BOT处于审核模式，将保留好友申请")
 			}
 		case PublicMode:
+			botMode = string(PublicMode)
 			log.Info("收到好友申请，当前BOT处于公开模式，将通过好友申请")
 			request.Accept()
 		default:
+			botMode = "unknown"
 			// impossible
 			log.Errorf("收到好友申请，当前BOT处于未知模式，将拒绝好友申请，请将该问题反馈给开发者")
 			request.Reject()
+		}
+		data := map[string]interface{}{
+			"request_id":  request.RequestId,
+			"member_name": request.RequesterNick,
+			"member_code": request.RequesterUin,
+			"bot_mode":    botMode,
+		}
+		m, _ := template.LoadAndExec("trigger.bot.new_friend_request.tmpl", data)
+		if m != nil {
+			l.SendMsgToAdmin(m)
 		}
 	})
 
@@ -552,8 +576,11 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if Debug {
 			cmd.Debug()
 		}
-		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin) {
+		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin) ||
+			l.PermissionStateManager.CheckGroupAdministrator(msg.GroupCode, bot.Uin) {
 			go cmd.Execute()
+		} else {
+			logger.Debug("BOT被禁言无法响应群指令")
 		}
 	})
 
@@ -588,11 +615,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			}
 			m, _ := template.LoadAndExec("trigger.group.bot_mute.tmpl", data)
 			if m != nil {
-				if admin := l.PermissionStateManager.ListAdmin(); len(admin) > 0 {
-					l.SendMsg(m, mmsg.NewPrivateTarget(admin[0]))
-				} else {
-					logger.Warn("未设置管理员，取消提示")
-				}
+				l.SendMsgToAdmin(m)
 			}
 		}
 	})
@@ -699,14 +722,55 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 	})
 
+	bot.BotOnlineEvent.Subscribe(func(qqClient *client.QQClient, event *client.BotOnlineEvent) {
+		templateName := "notify.bot.online.tmpl"
+		data := map[string]interface{}{
+			"template_name": templateName,
+		}
+		logger.Debug("BOT已上线，尝试触发上线提醒模板")
+		_, _ = template.LoadAndExec(templateName, data)
+	})
+
 	bot.BotOfflineEvent.Subscribe(func(qqClient *client.QQClient, event *client.BotOfflineEvent) {
 		templateName := "notify.bot.offline.tmpl"
 		data := map[string]interface{}{
 			"template_name": templateName,
 		}
+		logger.Debug("BOT已离线，尝试触发离线提醒模板")
 		_, _ = template.LoadAndExec(templateName, data)
 	})
 
+	bot.BotSendFailedEvent.Subscribe(func(qqClient *client.QQClient, event *client.BotSendFailedEvent) {
+		logger.Debugf("消息已 %d 次发送失败，尝试触发提醒模板", event.Times)
+		templateName := "notify.bot.send_failed.tmpl"
+		data := map[string]interface{}{
+			"message":     event.Message,
+			"target_id":   event.TargetUin,
+			"target_type": event.TargetType,
+			"times":       event.Times,
+		}
+		switch event.TargetType {
+		case TargetTypeGroup:
+			if gi := localutils.GetBot().FindGroup(event.TargetUin); gi != nil {
+				data["target_name"] = gi.Name
+			}
+		case TargetTypeFriend:
+			if fi := localutils.GetBot().FindFriend(event.TargetUin); fi != nil {
+				data["target_name"] = fi.Nickname
+			}
+		}
+		logger.Debug("消息多次发送失败，尝试触发提醒模板")
+		_, _ = template.LoadAndExec(templateName, data)
+	})
+
+}
+
+func (l *Lsp) SendMsgToAdmin(m *mmsg.MSG) {
+	if admin := l.PermissionStateManager.ListAdmin(); len(admin) > 0 {
+		l.SendMsg(m, mmsg.NewPrivateTarget(admin[0]))
+	} else {
+		logger.Warn("未设置管理员，取消提示")
+	}
 }
 
 func (l *Lsp) PostStart(bot *bot.Bot) {
@@ -853,10 +917,9 @@ func (l *Lsp) SendMsg(m *mmsg.MSG, target mmsg.Target) (res []interface{}) {
 	for idx, msg := range msgs {
 		r := l.send(msg, target)
 		res = append(res, r)
-		// 原本的发送返回值已经无效，故直接无视
-		// if reflect.ValueOf(r).Elem().FieldByName("Id").Int() == -1 {
-		// 	break
-		// }
+		if reflect.ValueOf(r).Elem().FieldByName("Id").Int() == -1 {
+			break
+		}
 		if idx > 1 {
 			time.Sleep(time.Millisecond * 300)
 		}
@@ -881,9 +944,9 @@ func (l *Lsp) PM(res []interface{}) []*message.PrivateMessage {
 }
 
 func (l *Lsp) sendPrivateMessage(uin int64, msg *message.SendingMessage) (res *message.PrivateMessage) {
-	// if bot.Instance == nil || !bot.Instance.Online.Load() {
-	// 	return &message.PrivateMessage{Id: -1, Elements: msg.Elements}
-	// }
+	if bot.Instance == nil || !bot.Instance.Online.Load() {
+		return &message.PrivateMessage{Id: -1, Elements: msg.Elements}
+	}
 	if msg == nil {
 		logger.WithFields(localutils.FriendLogFields(uin)).Debug("send with nil private message")
 		return &message.PrivateMessage{Id: -1}
@@ -928,10 +991,11 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, rec
 			}
 		}
 	}()
-	if bot.Instance == nil || !bot.Instance.Online.Load() {
+	if bot.Instance == nil {
 		return &message.GroupMessage{Id: -1, Elements: msg.Elements}
 	}
-	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin) {
+	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin) &&
+		!l.PermissionStateManager.CheckGroupAdministrator(groupCode, bot.Instance.Uin) {
 		logger.WithField("content", msgstringer.MsgToString(msg.Elements)).
 			WithFields(localutils.GroupLogFields(groupCode)).
 			Debug("BOT被禁言无法发送群消息")
@@ -963,17 +1027,6 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, rec
 		logger.WithField("content", msgStr).
 			WithFields(localutils.GroupLogFields(groupCode)).
 			Error(err)
-		// if msg.Count(func(e message.IMessageElement) bool {
-		// 	return e.Type() == message.At && e.(*message.AtElement).Target == 0
-		// }) > 0 {
-		// 	logger.WithField("content", msgStr).
-		// 		WithFields(localutils.GroupLogFields(groupCode)).
-		// 		Errorf("发送群消息失败，可能是@全员次数用尽")
-		// } else {
-		// 	logger.WithField("content", msgStr).
-		// 		WithFields(localutils.GroupLogFields(groupCode)).
-		// 		Errorf("发送群消息失败，可能是被禁言或者账号被风控")
-		// }
 	}
 	if res == nil {
 		logger.WithFields(localutils.GroupLogFields(groupCode)).Debug("failed to send message")

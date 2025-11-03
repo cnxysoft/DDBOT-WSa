@@ -148,7 +148,9 @@ func (i *ImageBytesElement) PackToElement(target Target) message.IMessageElement
 		if target.TargetType() == TargetGroup && target.TargetCode() == 0 {
 			return message.NewText("test\n")
 		}
-		logger.Debugf("TargetPrivate %v nil image buf", target.TargetCode())
+		logger.WithField("Target", target.TargetCode()).
+			WithField("TargetType", target.TargetType()).
+			Debug("PackToElement failed: nil image buf")
 		return nil
 	}
 	logger.Debugf("转换base64图片")
