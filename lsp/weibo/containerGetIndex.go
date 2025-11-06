@@ -1,12 +1,13 @@
 package weibo
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/guonaihong/gout"
-	"strconv"
-	"time"
 )
 
 const (
@@ -63,9 +64,16 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 
 func CreateParam(uid int64) gout.H {
 	return gout.H{
-		"uid":  strconv.FormatInt(uid, 10),
-		"page": "1",
+		"uid":          strconv.FormatInt(uid, 10),
+		"page":         "1",
+		"x-xsrf-token": getXsrfToken(CookieOption()),
 	}
+}
+
+// getXsrfToken 从options中提取XSRF-TOKEN cookie值
+func getXsrfToken(opts []requests.Option) string {
+	// 使用我们新添加的ExtractCookieOption函数来提取XSRF-TOKEN
+	return requests.ExtractCookieOption(opts, "XSRF-TOKEN")
 }
 
 func CreateReferer(uid int64) string {

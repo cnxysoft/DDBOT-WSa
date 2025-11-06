@@ -2,20 +2,22 @@ package weibo
 
 import (
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/guonaihong/gout"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/guonaihong/gout"
+	"github.com/sirupsen/logrus"
 )
 
 const (
+	pathWeibo              = "https://weibo.com"
 	pathPassportGenvisitor = "https://passport.weibo.com/visitor/genvisitor2"
 )
 
@@ -59,6 +61,15 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	return resp, err
 }
 
+func refreshXsrfToken(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeibo, nil, nil,
+		requests.WithCookieJar(jar),
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.TimeoutOption(time.Second*10),
+	)
+}
+
 func FreshCookie() ([]*http.Cookie, error) {
 	jar, _ := cookiejar.New(nil)
 	genVisitorResp, err := genvisitor(requests.WithCookieJar(jar))
@@ -75,9 +86,16 @@ func FreshCookie() ([]*http.Cookie, error) {
 			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
 	}
 
-	cookieUrl, err := url.Parse(pathPassportGenvisitor)
+	err = refreshXsrfToken(jar)
 	if err != nil {
-		panic(fmt.Sprintf("path %v url parse error", pathPassportGenvisitor))
+		logger.Errorf("refreshXsrfToken error %v", err)
+		return nil, err
 	}
-	return jar.Cookies(cookieUrl), nil
+
+	baseUrl, err := url.Parse(pathWeibo)
+	if err != nil {
+		panic(fmt.Sprintf("path %v url parse error", pathWeibo))
+	}
+	cookies := jar.Cookies(baseUrl)
+	return cookies, nil
 }

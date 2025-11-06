@@ -209,6 +209,26 @@ func GetResponseCookieOption(cookies *[]*http.Cookie) Option {
 	))
 }
 
+// ExtractCookieOption 提供一种从Option中提取Cookie的方法
+func ExtractCookieOption(opts []Option, cookieName string) string {
+	// 创建一个临时的option实例
+	tempOpt := &option{}
+	
+	// 应用所有选项到临时实例
+	for _, opt := range opts {
+		opt(tempOpt)
+	}
+	
+	// 查找指定名称的cookie
+	for _, cookie := range tempOpt.Cookies {
+		if cookie.Name == cookieName {
+			return cookie.Value
+		}
+	}
+	
+	return ""
+}
+
 func Do(f func(*gout.Client) *dataflow.DataFlow, out interface{}, options ...Option) error {
 	var (
 		opt  = new(option)
