@@ -1,11 +1,12 @@
 package weibo
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"strconv"
-	"time"
 )
 
 const (
@@ -25,6 +26,7 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 		requests.ProxyOption(proxy_pool.PreferNone),
 		requests.AddUAOption(),
 		requests.TimeoutOption(time.Second*10),
+		requests.RequestAutoRefererOption(),
 	)
 	opts = append(opts, CookieOption()...)
 	profileResp := new(ApiContainerGetIndexProfileResponse)
@@ -47,6 +49,7 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 		requests.ProxyOption(proxy_pool.PreferNone),
 		requests.AddUAOption(),
 		requests.TimeoutOption(time.Second*10),
+		requests.RequestAutoRefererOption(),
 	)
 	opts = append(opts, CookieOption()...)
 	profileResp := new(ApiContainerGetIndexCardsResponse)

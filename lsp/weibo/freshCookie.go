@@ -2,23 +2,23 @@ package weibo
 
 import (
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/guonaihong/gout"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/guonaihong/gout"
+	"github.com/sirupsen/logrus"
 )
 
 const (
-	pathPassportGenvisitor = "https://passport.weibo.com/visitor/genvisitor"
-	pathPassportVisitor    = "https://passport.weibo.com/visitor/visitor"
-	pathLoginVisitor       = "https://login.sina.com.cn/visitor/visitor"
+	pathWeiboMobile        = "https://m.weibo.cn/"
+	pathPassportGenvisitor = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
 )
 
 var (
@@ -33,7 +33,6 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	}()
 	params := gout.H{
 		"cb": "gen_callback",
-		"fp": `{"os":"1","browser":"Gecko60,0,0,0","fonts":"undefined","screenInfo":"1536*864*24","plugins":""}`,
 	}
 	var opts = []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferNone),
@@ -60,35 +59,10 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	return resp, err
 }
 
-func passportVisitor(params gout.H, externalOpts ...requests.Option) (*VisitorIncarnateResponse, error) {
-	st := time.Now()
-	defer func() {
-		ed := time.Now()
-		logger.WithField("FuncName", utils.FuncName()).Tracef("cost %v", ed.Sub(st))
-	}()
-	var opts = []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferNone),
-		requests.AddUAOption(),
-		requests.TimeoutOption(time.Second * 10),
-	}
-	opts = append(opts, externalOpts...)
-	var result string
-	err := requests.Get(pathPassportVisitor, params, &result, opts...)
-	if err != nil {
-		return nil, err
-	}
-	submatch := genvisitorRegex.FindStringSubmatch(result)
-	if len(submatch) < 2 {
-		logger.Errorf("passportVisitor submatch not found")
-		return nil, fmt.Errorf("passportVisitor response regex extract failed")
-	}
-	var resp = new(VisitorIncarnateResponse)
-	err = json.Unmarshal([]byte(submatch[1]), resp)
-	if err != nil {
-		logger.WithField("Content", submatch[1]).Errorf("passportVisitor data unmarshal error %v", err)
-		resp = nil
-	}
-	return resp, err
+func refreshXsrfToken(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeiboMobile, nil, nil,
+		requests.WithCookieJar(jar),
+	)
 }
 
 func FreshCookie() ([]*http.Cookie, error) {
@@ -107,49 +81,15 @@ func FreshCookie() ([]*http.Cookie, error) {
 			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
 	}
 
-	incarnateParams := gout.H{
-		"a":    "incarnate",
-		"t":    url.QueryEscape(genVisitorResp.GetData().GetTid()),
-		"gc":   "",
-		"cb":   "cross_domain",
-		"from": "weibo",
-	}
-	if genVisitorResp.GetData().GetNewTid() {
-		incarnateParams["w"] = "3"
-	} else {
-		incarnateParams["w"] = "2"
-	}
-	incarnateParams["c"] = fmt.Sprintf("%03d", genVisitorResp.GetData().GetConfidence())
-	incarnateResp, err := passportVisitor(incarnateParams, requests.WithCookieJar(jar))
+	err = refreshXsrfToken(jar)
 	if err != nil {
-		logger.Errorf("passportVisitor error %v", err)
-		return nil, err
-	}
-	if incarnateResp.GetRetcode() != 20000000 || !strings.Contains(incarnateResp.GetMsg(), "succ") {
-		logger.WithFields(logrus.Fields{
-			"Msg":     incarnateResp.GetMsg(),
-			"Retcode": incarnateResp.GetRetcode(),
-		}).Errorf("incarnateResp error")
-		return nil, fmt.Errorf("passportVisitor response error %v - %v",
-			incarnateResp.GetRetcode(), incarnateResp.GetMsg())
-	}
-
-	crossdomainParams := gout.H{
-		"a":    "crossdomain",
-		"cb":   "return_back",
-		"s":    incarnateResp.GetData().GetSub(),
-		"sp":   incarnateResp.GetData().GetSubp(),
-		"from": "weibo",
-	}
-	err = requests.Get(pathLoginVisitor, crossdomainParams, nil, requests.WithCookieJar(jar))
-	if err != nil {
-		logger.Errorf("loginVisitor error %v", err)
+		logger.Errorf("refreshXsrfToken error %v", err)
 		return nil, err
 	}
 
-	cookieUrl, err := url.Parse(pathPassportVisitor)
+	cookieUrl, err := url.Parse(pathWeiboMobile)
 	if err != nil {
-		panic(fmt.Sprintf("path %v url parse error", pathPassportVisitor))
+		panic(fmt.Sprintf("path %v url parse error", pathWeiboMobile))
 	}
 	return jar.Cookies(cookieUrl), nil
 }
