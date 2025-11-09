@@ -42,6 +42,7 @@ type option struct {
 	CookieJar           http.CookieJar
 	ResponseMiddleware  []middler.ResponseMiddler
 	AutoHeaderHost      bool
+	AutoHeaderReferer   bool
 	NotIgnoreEmpty      bool
 	Transport           *http.Transport
 }
@@ -172,6 +173,12 @@ func RequestAutoHostOption() Option {
 	}
 }
 
+func RequestAutoRefererOption() Option {
+	return func(o *option) {
+		o.AutoHeaderReferer = true
+	}
+}
+
 func NotIgnoreEmptyOption() Option {
 	return func(o *option) {
 		o.NotIgnoreEmpty = true
@@ -227,9 +234,16 @@ func Do(f func(*gout.Client) *dataflow.DataFlow, out interface{}, options ...Opt
 	if opt.Debug {
 		df.Debug(true)
 	}
-	if opt.AutoHeaderHost {
+	if opt.AutoHeaderHost || opt.AutoHeaderReferer {
 		if h, err := df.GetHost(); err == nil {
-			opt.Header["host"] = h
+			if opt.Header == nil {
+				opt.Header = make(gout.H)
+			}
+			if opt.AutoHeaderHost {
+				opt.Header["host"] = h
+			} else if opt.AutoHeaderReferer {
+				opt.Header["referer"] = "https://" + h
+			}
 		}
 	}
 	if len(opt.Cookies) > 0 {
