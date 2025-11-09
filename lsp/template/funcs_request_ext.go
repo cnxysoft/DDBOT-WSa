@@ -2,17 +2,18 @@ package template
 
 import (
 	"bytes"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
-	"github.com/google/uuid"
-	"github.com/spf13/cast"
 	"net/url"
 	"os"
 	"path"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/google/uuid"
+	"github.com/spf13/cast"
 )
 
 const (
@@ -353,4 +354,56 @@ func toAbsoluteURL(rel string) string {
 		return base + rel
 	}
 	return rel
+}
+
+// 常见文件头定义（魔数）
+var fileSignatures = map[string][]byte{
+	// 图片
+	"PNG":  {0x89, 0x50, 0x4E, 0x47}, // \x89PNG
+	"JPG":  {0xFF, 0xD8, 0xFF},       // JPEG
+	"GIF":  {0x47, 0x49, 0x46, 0x38}, // GIF8
+	"BMP":  {0x42, 0x4D},             // BM
+	"TIFF": {0x49, 0x49, 0x2A, 0x00}, // II*\x00 或者 MM\x00*
+	"PSD":  {0x38, 0x42, 0x50, 0x53}, // 8BPS
+
+	// 文档
+	"PDF":  {0x25, 0x50, 0x44, 0x46},       // %PDF
+	"RTF":  {0x7B, 0x5C, 0x72, 0x74, 0x66}, // {\rtf
+	"DOC":  {0xD0, 0xCF, 0x11, 0xE0},       // OLE Compound
+	"XLS":  {0xD0, 0xCF, 0x11, 0xE0},       // 同上
+	"PPT":  {0xD0, 0xCF, 0x11, 0xE0},       // 同上
+	"DOCX": {0x50, 0x4B, 0x03, 0x04},       // ZIP 格式
+	"XLSX": {0x50, 0x4B, 0x03, 0x04},       // ZIP 格式
+	"PPTX": {0x50, 0x4B, 0x03, 0x04},       // ZIP 格式
+
+	// 压缩
+	"ZIP":   {0x50, 0x4B, 0x03, 0x04},             // PK..
+	"RAR":   {0x52, 0x61, 0x72, 0x21},             // Rar!
+	"7Z":    {0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}, // 7z..
+	"GZIP":  {0x1F, 0x8B},                         // gzip
+	"BZIP2": {0x42, 0x5A, 0x68},                   // BZh
+
+	// 音视频
+	"MP3":  {0x49, 0x44, 0x33},                               // ID3
+	"WAV":  {0x52, 0x49, 0x46, 0x46},                         // RIFF
+	"AVI":  {0x52, 0x49, 0x46, 0x46},                         // RIFF
+	"MP4":  {0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70}, // ftyp
+	"MIDI": {0x4D, 0x54, 0x68, 0x64},                         // MThd
+
+	// 可执行
+	"EXE":   {0x4D, 0x5A},             // MZ
+	"DLL":   {0x4D, 0x5A},             // MZ
+	"ELF":   {0x7F, 0x45, 0x4C, 0x46}, // ELF
+	"MachO": {0xFE, 0xED, 0xFA, 0xCE}, // Mach-O
+	"ICO":   {0x00, 0x00, 0x01, 0x00}, // ICO
+}
+
+// DetectFileType 检测文件头
+func DetectFileType(data []uint8) string {
+	for typ, sig := range fileSignatures {
+		if len(data) >= len(sig) && bytes.Equal(data[:len(sig)], sig) {
+			return typ
+		}
+	}
+	return "UNKNOWN"
 }

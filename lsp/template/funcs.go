@@ -255,6 +255,7 @@ func builtins() FuncMap {
 		"httpPostForm":  httpPostForm,
 		"downloadFile":  downloadFile,
 		"parseBiliPost": getBiliPost,
+		"fileType":      DetectFileType,
 
 		// json
 		"toGJson": toGJson,
