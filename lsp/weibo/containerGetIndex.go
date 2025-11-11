@@ -29,8 +29,10 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 		requests.AddUAOption(),
 		requests.TimeoutOption(time.Second*10),
 		requests.HeaderOption("referer", CreateReferer(uid)),
+		requests.CookieOption("SUB", GetSettingCookie()),
 	)
 	opts = append(opts, CookieOption()...)
+	opts = append(opts, SetXsrfToken(opts))
 	profileResp := new(ApiContainerGetIndexProfileResponse)
 	err := requests.Get(path, CreateParam(uid), &profileResp, opts...)
 	if err != nil {
@@ -52,8 +54,10 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 		requests.AddUAOption(),
 		requests.TimeoutOption(time.Second*10),
 		requests.HeaderOption("referer", CreateReferer(uid)),
+		requests.CookieOption("SUB", GetSettingCookie()),
 	)
 	opts = append(opts, CookieOption()...)
+	opts = append(opts, SetXsrfToken(opts))
 	profileResp := new(ApiContainerGetIndexCardsResponse)
 	err := requests.Get(path, CreateParam(uid), &profileResp, opts...)
 	if err != nil {
@@ -64,16 +68,14 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 
 func CreateParam(uid int64) gout.H {
 	return gout.H{
-		"uid":          strconv.FormatInt(uid, 10),
-		"page":         "1",
-		"x-xsrf-token": getXsrfToken(CookieOption()),
+		"uid":  strconv.FormatInt(uid, 10),
+		"page": "1",
 	}
 }
 
-// getXsrfToken 从options中提取XSRF-TOKEN cookie值
-func getXsrfToken(opts []requests.Option) string {
-	// 使用我们新添加的ExtractCookieOption函数来提取XSRF-TOKEN
-	return requests.ExtractCookieOption(opts, "XSRF-TOKEN")
+func SetXsrfToken(opts []requests.Option) requests.Option {
+	xsrf := requests.ExtractCookieOption(opts, "XSRF-TOKEN")
+	return requests.HeaderOption("x-xsrf-token", xsrf)
 }
 
 func CreateReferer(uid int64) string {
