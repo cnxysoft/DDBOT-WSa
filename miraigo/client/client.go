@@ -1692,11 +1692,14 @@ func parseFileElement(contentMap map[string]interface{}, elements *[]message.IMe
 	file, ok := contentMap["data"].(map[string]interface{})
 	if ok {
 		var fileSize int64 = 0
-		var fileName, url string
+		var busId int32
+		var fileName, url, fileId string
 		if file["file"] != nil {
 			fileName = file["file"].(string)
 		} else if file["file_name"] != nil {
 			fileName = file["file_name"].(string)
+		} else if file["name"] != nil {
+			fileName = file["name"].(string)
 		}
 		if file["file_size"] != nil {
 			switch file["file_size"].(type) {
@@ -1705,23 +1708,47 @@ func parseFileElement(contentMap map[string]interface{}, elements *[]message.IMe
 			case int64:
 				fileSize = file["file_size"].(int64)
 			}
+		} else if file["size"] != nil {
+			switch file["size"].(type) {
+			case string:
+				fileSize, _ = strconv.ParseInt(file["size"].(string), 10, 64)
+			case int64:
+				fileSize = file["size"].(int64)
+			}
+		}
+		if file["busid"] != nil {
+			if busid, ok := file["busid"].(int64); ok {
+				busId = int32(busid)
+			} else if busid, ok := file["busid"].(float64); ok {
+				busId = int32(busid)
+			} else if busid, ok := file["busid"].(string); ok {
+				b, _ := strconv.Atoi(busid)
+				busId = int32(b)
+			}
 		}
 		if file["url"] != nil {
 			url = file["url"].(string)
 		}
+		if file["file_id"] != nil {
+			fileId = file["file_id"].(string)
+		} else if file["id"] != nil {
+			fileId = file["id"].(string)
+		}
 		if isGroupMsg {
 			*elements = append(*elements, &message.GroupFileElement{
-				Name: fileName,
-				Size: fileSize,
-				Id:   file["file_id"].(string),
-				Url:  url,
+				Name:  fileName,
+				Size:  fileSize,
+				Id:    fileId,
+				Url:   url,
+				Busid: busId,
 			})
 		} else {
 			*elements = append(*elements, &message.FriendFileElement{
-				Name: fileName,
-				Size: fileSize,
-				Id:   file["file_id"].(string),
-				Url:  url,
+				Name:  fileName,
+				Size:  fileSize,
+				Id:    fileId,
+				Url:   url,
+				Busid: busId,
 			})
 		}
 	}
