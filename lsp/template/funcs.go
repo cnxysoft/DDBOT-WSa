@@ -80,6 +80,7 @@ func builtins() FuncMap {
 		"file":               file,
 		"remoteDownloadFile": remoteDownloadFile,
 		"getMsg":             getMsg,
+		"sendApi":            sendApi,
 		"getFileUrl":         getFileUrl,
 		"reCall":             reCall,
 
@@ -98,6 +99,7 @@ func builtins() FuncMap {
 		"cooldown":      cooldown,
 		"setCooldown":   setCooldown,
 		"openFile":      openFile,
+		"base64":        toBase64,
 		"readLine":      readLine,
 		"findReadLine":  findReadLine,
 		"findWriteLine": findWriteLine,

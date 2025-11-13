@@ -2,6 +2,7 @@ package template
 
 import (
 	"bufio"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
@@ -201,4 +202,8 @@ func lsDir(dir string, recursive bool) []string {
 	}
 
 	return result
+}
+
+func toBase64(b []byte) string {
+	return "base64://" + base64.StdEncoding.EncodeToString(b)
 }

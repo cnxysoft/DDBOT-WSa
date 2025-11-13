@@ -897,6 +897,20 @@ func getMsg(msgId int32) interface{} {
 	return ret
 }
 
+func sendApi(api string, params map[string]interface{}, expTime ...float64) interface{} {
+	bot := localutils.GetBot()
+	if bot == nil {
+		logger.Error("bot 实例未找到")
+		return nil
+	}
+	ret, err := (*bot.Bot).QQClient.SendApi(api, params, expTime...)
+	if err != nil {
+		logger.Errorf("調用API失败: %v", err)
+		return nil
+	}
+	return ret
+}
+
 func loop(from, to int64) <-chan int64 {
 	ch := make(chan int64)
 	go func() {
