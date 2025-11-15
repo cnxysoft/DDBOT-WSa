@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html/template"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,6 +219,43 @@ func builtins() FuncMap {
 		"upper":     strings.ToUpper,
 		"lower":     strings.ToLower,
 		"title":     strings.Title,
+
+		"regexMatch": func(s, pattern string) bool {
+			matched, err := regexp.MatchString(pattern, s)
+			if err != nil {
+				return false
+			}
+			return matched
+		},
+		"regexFindAll": func(s, pattern string) []string {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return []string{}
+			}
+			return re.FindAllString(s, -1)
+		},
+		"regexReplaceAll": func(s, pattern, repl string) string {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return s
+			}
+			return re.ReplaceAllString(s, repl)
+		},
+		"regexFindPos": func(s, pattern string) []map[string]int {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return []map[string]int{}
+			}
+			matches := re.FindAllStringIndex(s, -1)
+			result := []map[string]int{}
+			for _, m := range matches {
+				result = append(result, map[string]int{
+					"start":  m[0],
+					"length": m[1] - m[0],
+				})
+			}
+			return result
+		},
 
 		// defaults
 		"empty":    empty,
