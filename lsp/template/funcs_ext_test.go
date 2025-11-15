@@ -2,14 +2,15 @@ package template
 
 import (
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/internal/test"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestExtRoll(t *testing.T) {
@@ -340,4 +341,85 @@ func runTemplateWithExt(template string, data map[string]interface{}) (string, e
 	var tmpl = Must(New("").Funcs(FuncMap(funcsExt)).Parse(template))
 	var err = tmpl.Execute(m, data)
 	return msgstringer.MsgToString(m.Elements()), err
+}
+
+// 辅助函数：比较年月日和时分
+func sameDateTime(a, b time.Time) bool {
+	return a.Year() == b.Year() &&
+		a.Month() == b.Month() &&
+		a.Day() == b.Day() &&
+		a.Hour() == b.Hour() &&
+		a.Minute() == b.Minute()
+}
+
+func TestGetTime_WithBase(t *testing.T) {
+	// 固定基准时间：2025-11-15 12:00
+	base := time.Date(2025, 11, 15, 12, 0, 0, 0, time.Local)
+
+	tests := []struct {
+		input interface{}
+		f     string
+		base  interface{}
+		want  time.Time
+	}{
+		// 绝对时间
+		{
+			input: "2025-11-16 16:00:00",
+			f:     "dateTime",
+			base:  nil,
+			want:  time.Date(2025, 11, 16, 16, 0, 0, 0, time.Local),
+		},
+		// 相对时间：今天
+		{
+			input: "今天 16:00",
+			f:     "dateTime",
+			base:  base,
+			want:  time.Date(2025, 11, 15, 16, 0, 0, 0, time.Local),
+		},
+		// 相对时间：明天
+		{
+			input: "明天 20:00",
+			f:     "dateTime",
+			base:  base,
+			want:  time.Date(2025, 11, 16, 20, 0, 0, 0, time.Local),
+		},
+		// 相对时间：后天
+		{
+			input: "后天 18:30",
+			f:     "dateTime",
+			base:  base,
+			want:  time.Date(2025, 11, 17, 18, 30, 0, 0, time.Local),
+		},
+		// 简化日期
+		{
+			input: "11-22 20:00",
+			f:     "dateTime",
+			base:  base,
+			want:  time.Date(2025, 11, 22, 20, 0, 0, 0, time.Local),
+		},
+		// Unix 时间戳输入
+		{
+			input: int64(base.Unix()),
+			f:     "dateTime",
+			base:  nil,
+			want:  base,
+		},
+	}
+
+	for _, tt := range tests {
+		var gotStr string
+		if tt.base != nil {
+			gotStr = getTime(tt.input, tt.f, tt.base)
+		} else {
+			gotStr = getTime(tt.input, tt.f)
+		}
+		got, err := time.ParseInLocation(time.DateTime, gotStr, time.Local)
+		if err != nil {
+			t.Errorf("parse result failed for input %v: %v", tt.input, err)
+			continue
+		}
+		if !sameDateTime(got, tt.want) {
+			t.Errorf("getTime(%v) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
 }

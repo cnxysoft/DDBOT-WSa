@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -554,28 +555,129 @@ func getTimeStamp(t string) int64 {
 	return ret
 }
 
-func getTime(s interface{}, f string) string {
+func getTime(s interface{}, f string, bases ...interface{}) string {
 	var t time.Time
+
+	// 如果传了基准时间，就用它；否则默认用当前时间
+	var base time.Time
+	if len(bases) > 0 {
+		switch v := bases[0].(type) {
+		case time.Time:
+			base = v
+		case int64:
+			base = time.Unix(v, 0).In(time.Local)
+		case int32:
+			base = time.Unix(int64(v), 0).In(time.Local)
+		case int:
+			base = time.Unix(int64(v), 0).In(time.Local)
+		case string:
+			// 如果传的是字符串，也尝试解析
+			tmp, err := time.ParseInLocation(time.DateTime, v, time.Local)
+			if err == nil {
+				base = tmp
+			} else {
+				base = time.Now()
+			}
+		default:
+			base = time.Now()
+		}
+	} else {
+		base = time.Now()
+	}
+
+	parseWithLayouts := func(str string, loc *time.Location, layouts ...string) (time.Time, error) {
+		for _, layout := range layouts {
+			if tt, err := time.ParseInLocation(layout, str, loc); err == nil {
+				return tt, nil
+			}
+		}
+		return time.Time{}, fmt.Errorf("no layout matched")
+	}
 
 	switch v := s.(type) {
 	case time.Time:
 		t = v
 	case string:
 		if v == "now" {
-			t = time.Now()
+			t = base
 		} else {
-			tmp, err := time.ParseInLocation(time.DateTime, v, time.Local)
-			if err != nil {
-				return "parse time error"
+			str := strings.TrimSpace(v)
+			str = strings.ReplaceAll(str, "预计", "")
+			str = strings.ReplaceAll(str, "发布", "")
+			str = strings.ReplaceAll(str, "直播", "")
+
+			loc := time.Local
+			now := base // 用基准时间替代 time.Now()
+
+			// 1) 绝对时间
+			absLayouts := []string{
+				time.DateTime,
+				"2006-01-02 15:04",
+				"2006/01/02 15:04:05",
+				"2006/01/02 15:04",
+				"2006.01.02 15:04:05",
+				"2006.01.02 15:04",
+				time.RFC3339,
 			}
-			t = tmp
+			if tt, err := parseWithLayouts(str, loc, absLayouts...); err == nil {
+				t = tt
+				break
+			}
+
+			// 2) 相对时间：今天/明天/后天
+			if strings.HasPrefix(str, "今天") || strings.HasPrefix(str, "明天") || strings.HasPrefix(str, "后天") {
+				parts := strings.Fields(str)
+				if len(parts) >= 2 {
+					offset := 0
+					switch {
+					case strings.HasPrefix(str, "明天"):
+						offset = 1
+					case strings.HasPrefix(str, "后天"):
+						offset = 2
+					}
+					baseDate := now.AddDate(0, 0, offset)
+					dateStr := fmt.Sprintf("%04d-%02d-%02d %s", baseDate.Year(), baseDate.Month(), baseDate.Day(), parts[1])
+					if tt, err := time.ParseInLocation("2006-01-02 15:04", dateStr, loc); err == nil {
+						t = tt
+						break
+					}
+				}
+			}
+
+			// 3) 简化日期：MM-DD HH:MM
+			if matched := regexp.MustCompile(`^(?:\D|^)?(\d{2}-\d{2})\s+(\d{2}:\d{2})(?:\D|$)?`).FindStringSubmatch(str); len(matched) == 3 {
+				dateStr := fmt.Sprintf("%04d-%s %s", now.Year(), matched[1], matched[2])
+				if tt, err := time.ParseInLocation("2006-01-02 15:04", dateStr, loc); err == nil {
+					t = tt
+					break
+				}
+			}
+
+			// 4) 兜底
+			if tt, err := parseWithLayouts(str, loc,
+				time.DateOnly,
+				time.TimeOnly,
+				"15:04",
+			); err == nil {
+				if tt.Year() == 0 {
+					tt = time.Date(now.Year(), now.Month(), now.Day(), tt.Hour(), tt.Minute(), tt.Second(), 0, loc)
+				}
+				t = tt
+			} else {
+				logger.Error("template: parse time error")
+				return ""
+			}
 		}
+
 	case int:
+		t = time.Unix(int64(v), 0).In(time.Local)
+	case int32:
 		t = time.Unix(int64(v), 0).In(time.Local)
 	case int64:
 		t = time.Unix(v, 0).In(time.Local)
 	default:
-		panic("template: getTime with invalid s")
+		logger.Error("template: getTime with invalid s")
+		return ""
 	}
 
 	switch f {
