@@ -220,6 +220,15 @@ func builtins() FuncMap {
 		"lower":     strings.ToLower,
 		"title":     strings.Title,
 
+		"extractOpusID": func(text string) string {
+			re := regexp.MustCompile(`https?://www\.bilibili\.com/opus/(\d+)`)
+			matches := re.FindStringSubmatch(text)
+			if len(matches) > 1 {
+				return matches[1]
+			}
+			return ""
+		},
+
 		"regexMatch": func(s, pattern string) bool {
 			matched, err := regexp.MatchString(pattern, s)
 			if err != nil {
@@ -233,6 +242,20 @@ func builtins() FuncMap {
 				return []string{}
 			}
 			return re.FindAllString(s, -1)
+		},
+		"regexFindAllGroups": func(s, pattern string) []string {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return []string{}
+			}
+			matches := re.FindAllStringSubmatch(s, -1)
+			result := []string{}
+			for _, m := range matches {
+				if len(m) > 1 {
+					result = append(result, m[1]) // 只取第一个捕获组
+				}
+			}
+			return result
 		},
 		"regexReplaceAll": func(s, pattern, repl string) string {
 			re, err := regexp.Compile(pattern)
