@@ -1,16 +1,20 @@
 package bilibili
 
 import (
+	"bytes"
+	"strings"
+	"sync"
+
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
-	"strings"
-	"sync"
 )
 
 type NewsInfo struct {
@@ -996,6 +1000,7 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 			"msg":        c.orgMsg,
 			"group_code": c.GroupCode,
 			"parsePost":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
+			"dynamicNew": c.SecAnalysis(),
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)
@@ -1005,4 +1010,26 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 		return
 	})
 	return c.msgCache
+}
+
+func (c *CacheCard) SecAnalysis() (result map[string]interface{}) {
+	if !config.GlobalConfig.GetBool("bilibili.secAnalysis") {
+		return
+	}
+	Url := "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + c.dynamic.Id
+	var resp bytes.Buffer
+	var opts = []requests.Option{
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferMainland),
+	}
+	err := requests.Get(Url, nil, &resp, opts...)
+	if err != nil {
+		logger.WithField("url", Url).Errorf("SecAnalysis get failed %v", err)
+		return
+	}
+	if err := json.Unmarshal(resp.Bytes(), &result); err != nil {
+		logger.WithError(err).Error("SecAnalysis unmarshal failed")
+		return
+	}
+	return
 }

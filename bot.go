@@ -191,6 +191,7 @@ bilibili:
   disableSub: false        # 禁止ddbot去b站关注帐号，这意味着只能订阅帐号已关注的用户，或者在b站手动关注
   onlyOnlineNotify: false  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
   autoParsePosts: false    # 自动解析专栏，将发送专栏动态改为发送专栏内容
+  secAnalysis: true        # 是否开启动态二次解析，默认关闭
 
 # A站相关的功能推荐配置一个b站账号，建议使用小号
 # bot将使用您A站帐号的以下功能（订阅动态时）：
