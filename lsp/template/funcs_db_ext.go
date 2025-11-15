@@ -2,19 +2,11 @@ package template
 
 import (
 	"encoding/json"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"strings"
 	"time"
-)
 
-type T struct {
-	Index   int         `json:"Index"`
-	Indexes interface{} `json:"Indexes"`
-	Num     int         `json:"Num"`
-	Raw     string      `json:"Raw"`
-	Str     string      `json:"Str"`
-	Type    int         `json:"Type"`
-}
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+)
 
 func decKeys(key string) (K []interface{}) {
 	k := strings.Split(key, ":")
@@ -70,17 +62,42 @@ func setJson(key string, data interface{}, opts ...[]localdb.OptionFunc) string 
 	return ""
 }
 
-func getJson(key string, opts ...[]localdb.OptionFunc) (value *map[string]interface{}) {
+func getJson(key string, opts ...[]localdb.OptionFunc) interface{} {
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
-	var data T
-	err := GetTemplateSC().GetJson(localdb.ExtDbCustomKey(Keys...), &data, opt...)
-	if err != nil {
+
+	var err error
+	var raw json.RawMessage
+	if err = GetTemplateSC().GetJson(localdb.ExtDbCustomKey(Keys...), &raw, opt...); err != nil {
 		logger.Errorf("ExtDB: get json error: %v", err)
-		return
+		return nil
 	}
-	json.Unmarshal([]byte(data.Raw), &value)
-	return
+	if len(raw) == 0 {
+		return nil
+	}
+
+	switch raw[0] {
+	case '{': // 对象
+		var obj map[string]interface{}
+		if err = json.Unmarshal(raw, &obj); err == nil {
+			return obj
+		}
+		logger.Errorf("ExtDB: parse object error: %v", err)
+	case '[': // 数组
+		var arr []interface{}
+		if err = json.Unmarshal(raw, &arr); err == nil {
+			return arr
+		}
+		logger.Errorf("ExtDB: parse array error: %v", err)
+	default: // 原始值：string/number/bool/null
+		var v interface{}
+		if err = json.Unmarshal(raw, &v); err == nil {
+			return v
+		}
+		logger.Errorf("ExtDB: parse primitive error: %v", err)
+	}
+
+	return nil
 }
 
 func setInt64(key string, value int64, opts ...[]localdb.OptionFunc) string {
@@ -95,6 +112,32 @@ func setInt64(key string, value int64, opts ...[]localdb.OptionFunc) string {
 		return err.Error()
 	}
 	return ""
+}
+
+func seqInt64(key string) int64 {
+	Keys := decKeys(key)
+	value, err := GetTemplateSC().SeqNext(localdb.ExtDbCustomKey(Keys...))
+	if localdb.IsRollback(err) {
+		return -1
+	}
+	if err != nil {
+		logger.Errorf("ExtDB: set int64 error: %v", err)
+		return -1
+	}
+	return value
+}
+
+func incInt64(key string, value int64) int64 {
+	Keys := decKeys(key)
+	Value, err := GetTemplateSC().IncInt64(localdb.ExtDbCustomKey(Keys...), value)
+	if localdb.IsRollback(err) {
+		return -1
+	}
+	if err != nil {
+		logger.Errorf("ExtDB: set int64 error: %v", err)
+		return -1
+	}
+	return Value
 }
 
 func getInt64(key string, opts ...[]localdb.OptionFunc) int64 {

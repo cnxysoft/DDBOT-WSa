@@ -133,6 +133,8 @@ func builtins() FuncMap {
 		"setJson":     setJson,
 		"getJson":     getJson,
 		"setInt64":    setInt64,
+		"seqInt64":    seqInt64,
+		"incInt64":    incInt64,
 		"getInt64":    getInt64,
 		"del":         delData,
 		"exist":       existData,
