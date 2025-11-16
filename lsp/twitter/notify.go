@@ -177,13 +177,29 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 					WithField("tweetId", tweet.ID).
 					Errorf("concern notify recoverd %v", err)
 			}
+
+			var opts []requests.Option
+			if tweet.MirrorHost == "nitter.privacyredirect.com" {
+				opts = []requests.Option{
+					requests.RequestAutoHostOption(),
+					requests.HeaderOption("Accept-Encoding", "gzip, deflate, br, zstd"),
+					requests.HeaderOption("sec-fetch-site", "none"),
+					requests.HeaderOption("sec-fetch-mode", "navigate"),
+					requests.HeaderOption("sec-fetch-dest", "document"),
+					requests.HeaderOption("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"),
+					requests.HeaderOption("accept",
+						"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"),
+				}
+			}
+
 			m.Url = fullURL.String()
 			addCut(message, nil)
+			opts = append(opts, requests.ProxyOption(proxy_pool.PreferOversea),
+				requests.AddUAOption(UserAgent),
+				requests.WithCookieJar(Cookie))
 			message.Append(
 				mmsg.NewImageByUrl(m.Url,
-					requests.ProxyOption(proxy_pool.PreferOversea),
-					requests.AddUAOption(UserAgent),
-					requests.WithCookieJar(Cookie)))
+					opts...))
 		case "video":
 			if strings.Contains(unescape, "video.twimg.com") {
 				idx := strings.Index(unescape, "video.twimg.com")
