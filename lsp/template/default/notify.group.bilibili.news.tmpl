@@ -172,4 +172,13 @@
         {{ end -}}
     {{ end -}}
 {{ end -}}
+{{ if (and .dynamicNew (eq (int .dynamicNew.code) 0)) -}}
+    {{ if and .dynamicNew.data.item.orig .dynamicNew.data.item.orig.modules.module_dynamic.additional -}}
+        {{ $r := .dynamicNew.data.item.orig.modules.module_dynamic.additional.reserve -}}
+        {{ printf "%v\n%v - %v\n" $r.title $r.desc1.text $r.desc2.text -}}
+    {{ else if .dynamicNew.data.item.modules.module_dynamic.additional -}}
+        {{ $r := .dynamicNew.data.item.modules.module_dynamic.additional.reserve -}}
+        {{ printf "%v\n%v - %v\n" $r.title $r.desc1.text $r.desc2.text -}}
+    {{ end -}}
+{{ end -}}
 {{ .dynamic.DynamicUrl }}
