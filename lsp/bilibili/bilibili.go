@@ -3,16 +3,17 @@ package bilibili
 import (
 	"errors"
 	"fmt"
-	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
-	jsoniter "github.com/json-iterator/go"
-	"go.uber.org/atomic"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/cnxysoft/DDBOT-WSa/requests"
+	jsoniter "github.com/json-iterator/go"
+	"go.uber.org/atomic"
 )
 
 const (
@@ -48,6 +49,7 @@ var BasePath = map[string]string{
 	PathGetPlayTogetherUserAnchorInfoV2: BaseLiveHost,
 	PathRoomInfo:                        BaseLiveHost,
 	PathWebAreaList:                     BaseLiveHost,
+	PathWebDynamicDetail:                BaseHost,
 }
 
 type VerifyInfo struct {

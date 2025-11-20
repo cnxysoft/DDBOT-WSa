@@ -17,6 +17,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const PathWebDynamicDetail = "/x/polymer/web-dynamic/v1/detail"
+
 type NewsInfo struct {
 	UserInfo
 	LastDynamicId int64   `json:"last_dynamic_id"`
@@ -436,11 +438,12 @@ func urlsMergeImage(urls []string) (result []byte, err error) {
 
 type CacheCard struct {
 	*Card
-	GroupCode int64
-	once      sync.Once
-	msgCache  *mmsg.MSG
-	dynamic   DynamicInfo
-	orgMsg    *message.GroupMessage
+	GroupCode  int64
+	once       sync.Once
+	msgCache   *mmsg.MSG
+	dynamic    DynamicInfo
+	dynamicRaw map[string]interface{}
+	orgMsg     *message.GroupMessage
 }
 
 func NewCacheCard(card *Card) *CacheCard {
@@ -450,15 +453,20 @@ func NewCacheCard(card *Card) *CacheCard {
 }
 
 type DynamicInfo struct {
-	Type        DynamicDescType `json:"type"`
-	Id          string          `json:"id"`
-	WithOrigin  bool            `json:"with_origin"`
-	OriginDyId  string          `json:"origin_dy_id"`
-	OriginDyUrl string          `json:"origin_dy_url"`
-	Date        string          `json:"date"`
-	Content     string          `json:"content"`
-	Title       string          `json:"title"`
-	DynamicUrl  string          `json:"dynamic_url"`
+	Type            DynamicDescType `json:"type"`
+	Id              string          `json:"id"`
+	WithOrigin      bool            `json:"with_origin"`
+	OriginDyId      string          `json:"origin_dy_id"`
+	OriginDyUrl     string          `json:"origin_dy_url"`
+	Date            string          `json:"date"`
+	Content         string          `json:"content"`
+	Title           string          `json:"title"`
+	OriginTitle     string          `json:"origin_title"`
+	TopicName       string          `json:"topic_name"`
+	OriginTopicName string          `json:"origin_topic_name"`
+	DynamicUrl      string          `json:"dynamic_url"`
+	Detail          DynamicDetail   `json:"detail"`
+	OriginDetail    DynamicDetail   `json:"origin_detail"`
 
 	User struct {
 		Uid  int64  `json:"uid"`
@@ -576,22 +584,44 @@ type Addon struct {
 	} `json:"video,omitempty"`
 }
 
+type DynamicDetail struct {
+	Reserve struct {
+		Title string `json:"title"`
+		Desc1 string `json:"desc1"`
+		Desc2 string `json:"desc2"`
+		Desc3 string `json:"desc3"`
+	} `json:"reserve,omitempty"`
+	PGC struct {
+		Type     string `json:"type"`
+		Title    string `json:"title"`
+		CoverUrl string `json:"cover_url"`
+	} `json:"pgc,omitempty"`
+	Title     string `json:"title"`
+	TopicName string `json:"topic_name"`
+	Content   string `json:"content"`
+}
+
 func (c *CacheCard) prepare() {
 	var (
-		card       = c.Card
-		log        = logger
-		Id         = card.GetDesc().GetDynamicIdStr()
-		dynamicUrl = DynamicUrl(Id)
-		date       = localutils.TimestampFormat(card.GetDesc().GetTimestamp())
-		name       = card.GetDesc().GetUserProfile().GetInfo().GetUname()
-		Title      = reqDynamicPage(Id)
+		card         = c.Card
+		log          = logger
+		Id           = card.GetDesc().GetDynamicIdStr()
+		dynamicUrl   = DynamicUrl(Id)
+		date         = localutils.TimestampFormat(card.GetDesc().GetTimestamp())
+		name         = card.GetDesc().GetUserProfile().GetInfo().GetUname()
+		detailResp   = SecAnalysis(Id)
+		detail       = getDescContent(detailResp, false)
+		originDetail = getDescContent(detailResp, true)
 	)
 	c.dynamic.Id = Id
-	c.dynamic.Title = Title
+	c.dynamic.Title = detail.Title
+	c.dynamic.TopicName = detail.TopicName
 	c.dynamic.User.Name = name
 	c.dynamic.User.Uid = card.GetDesc().GetUserProfile().GetInfo().GetUid()
 	c.dynamic.User.Face = card.GetDesc().GetUserProfile().GetInfo().GetFace()
 	c.dynamic.Date = date
+	c.dynamic.Detail = detail
+	c.dynamicRaw = detailResp
 	switch card.GetDesc().GetType() {
 	case DynamicDescType_WithOrigin:
 		c.dynamic.WithOrigin = true
@@ -607,10 +637,13 @@ func (c *CacheCard) prepare() {
 		c.dynamic.OriginUser.Uid = cardOrigin.GetOriginUser().GetInfo().GetUid()
 		c.dynamic.OriginUser.Face = cardOrigin.GetOriginUser().GetInfo().GetFace()
 		// very sb
+		c.dynamic.OriginTitle = originDetail.Title
+		c.dynamic.OriginTopicName = originDetail.TopicName
+		c.dynamic.OriginDetail = originDetail
 		switch cardOrigin.GetItem().GetOrigType() {
 		case DynamicDescType_WithImage:
 			c.dynamic.Type = DynamicDescType_WithImage
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithImage)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -618,7 +651,7 @@ func (c *CacheCard) prepare() {
 					Errorf("Unmarshal origin cardWithImage failed %v", err)
 				return
 			}
-			c.dynamic.Image.Description = origin.GetItem().GetDescription()
+			c.dynamic.Image.Description = replaseDesc(origin.GetItem().GetDescription(), originDetail.Content)
 			// 输出urls
 			var urls = make([]string, len(origin.GetItem().GetPictures()))
 			for index, pic := range origin.GetItem().GetPictures() {
@@ -640,17 +673,17 @@ func (c *CacheCard) prepare() {
 			}
 		case DynamicDescType_TextOnly:
 			c.dynamic.Type = DynamicDescType_TextOnly
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardTextOnly)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithText failed %v", err)
 				return
 			}
-			c.dynamic.Text.Content = origin.GetItem().GetContent()
+			c.dynamic.Text.Content = replaseDesc(origin.GetItem().GetContent(), originDetail.Content)
 		case DynamicDescType_WithVideo:
 			c.dynamic.Type = DynamicDescType_WithVideo
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithVideo)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -659,12 +692,12 @@ func (c *CacheCard) prepare() {
 			}
 			c.dynamic.Video.Title = origin.GetTitle()
 			c.dynamic.Video.Desc = origin.GetDesc()
-			c.dynamic.Video.Dynamic = origin.GetDynamic()
+			c.dynamic.Video.Dynamic = replaseDesc(origin.GetDynamic(), originDetail.Content)
 			c.dynamic.Video.CoverUrl = origin.GetPic()
 			c.dynamic.Video.Action = c.Card.GetDisplay().GetOrigin().GetUsrActionTxt()
 		case DynamicDescType_WithPost:
 			c.dynamic.Type = DynamicDescType_WithPost
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithPost)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -680,7 +713,7 @@ func (c *CacheCard) prepare() {
 			}
 		case DynamicDescType_WithMusic:
 			c.dynamic.Type = DynamicDescType_WithMusic
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithMusic)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -693,7 +726,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Music.CoverUrl = origin.GetCover()
 		case DynamicDescType_WithSketch:
 			c.dynamic.Type = DynamicDescType_WithSketch
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithSketch)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -708,7 +741,7 @@ func (c *CacheCard) prepare() {
 			}
 		case DynamicDescType_WithLive:
 			c.dynamic.Type = DynamicDescType_WithLive
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithLive)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -719,7 +752,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Live.CoverUrl = origin.GetCover()
 		case DynamicDescType_WithLiveV2:
 			c.dynamic.Type = DynamicDescType_WithLiveV2
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithLiveV2)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -730,7 +763,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Live.CoverUrl = origin.GetLivePlayInfo().GetCover()
 		case DynamicDescType_WithMylist:
 			c.dynamic.Type = DynamicDescType_WithMylist
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithMylist)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -741,14 +774,14 @@ func (c *CacheCard) prepare() {
 			c.dynamic.MyList.CoverUrl = origin.GetCover()
 		case DynamicDescType_WithMiss:
 			c.dynamic.Type = DynamicDescType_WithMiss
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			c.dynamic.Miss.Tips = cardOrigin.GetItem().GetTips()
 		case DynamicDescType_WithOrigin:
 			c.dynamic.Type = DynamicDescType_WithOrigin
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 		case DynamicDescType_WithCourse:
 			c.dynamic.Type = DynamicDescType_WithCourse
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithCourse)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
 			if err != nil {
@@ -761,7 +794,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Course.CoverUrl = origin.GetCover()
 		default:
 			c.dynamic.Type = DynamicDescType_DynamicDescTypeUnknown
-			c.dynamic.Content = cardOrigin.GetItem().GetContent()
+			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			// 试试media
 			origin := new(CardWithMedia)
 			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
@@ -773,6 +806,14 @@ func (c *CacheCard) prepare() {
 				c.dynamic.Default.TypeName = origin.GetApiSeasonInfo().GetTypeName()
 				c.dynamic.Default.Title = origin.GetApiSeasonInfo().GetTitle()
 				c.dynamic.Default.CoverUrl = origin.GetCover()
+			} else if originDetail.PGC.Title != "" {
+				c.dynamic.Default.TypeName = originDetail.PGC.Type
+				c.dynamic.Default.Title = originDetail.PGC.Title
+				c.dynamic.Default.CoverUrl = originDetail.PGC.CoverUrl
+			} else if cardOrigin.GetOrigin() == "源动态不见了" {
+				c.dynamic.Default.TypeName = "不支持的"
+				c.dynamic.Default.Title = "未知动态"
+				c.dynamic.Default.Desc = "源动态不见了"
 			} else {
 				log.WithField("content", card.GetCard()).Info("found new type with origin")
 				c.dynamic.OriginUser.Name = originName
@@ -785,7 +826,7 @@ func (c *CacheCard) prepare() {
 			log.WithField("card", card).Errorf("GetCardWithImage cast failed %v", err)
 			return
 		}
-		c.dynamic.Image.Description = cardImage.GetItem().GetDescription()
+		c.dynamic.Image.Description = replaseDesc(cardImage.GetItem().GetDescription(), detail.Content)
 		// 输出urls
 		var urls = make([]string, len(cardImage.GetItem().GetPictures()))
 		for index, pic := range cardImage.GetItem().GetPictures() {
@@ -812,7 +853,7 @@ func (c *CacheCard) prepare() {
 			log.WithField("card", card).Errorf("GetCardTextOnly cast failed %v", err)
 			return
 		}
-		c.dynamic.Content = cardText.GetItem().GetContent()
+		c.dynamic.Content = replaseDesc(cardText.GetItem().GetContent(), detail.Content)
 	case DynamicDescType_WithVideo:
 		c.dynamic.Type = DynamicDescType_WithVideo
 		cardVideo, err := card.GetCardWithVideo()
@@ -830,7 +871,7 @@ func (c *CacheCard) prepare() {
 		actionText := card.GetDisplay().GetUsrActionTxt()
 		c.dynamic.Video.Action = actionText
 		c.dynamic.Video.Title = cardVideo.GetTitle()
-		c.dynamic.Video.Dynamic = cardVideo.GetDynamic()
+		c.dynamic.Video.Dynamic = replaseDesc(cardVideo.GetDynamic(), detail.Content)
 		if len(description) != 0 {
 			c.dynamic.Video.Desc = description
 		}
@@ -869,7 +910,7 @@ func (c *CacheCard) prepare() {
 				Errorf("GetCardWithSketch cast failed %v", err)
 			return
 		}
-		c.dynamic.Sketch.Content = cardSketch.GetVest().GetContent()
+		c.dynamic.Sketch.Content = replaseDesc(cardSketch.GetVest().GetContent(), detail.Content)
 		if cardSketch.GetSketch().GetTitle() == cardSketch.GetSketch().GetDescText() {
 			c.dynamic.Sketch.Title = cardSketch.GetSketch().GetTitle()
 		} else {
@@ -908,7 +949,7 @@ func (c *CacheCard) prepare() {
 				Errorf("GetCardWithOrig case failed %v", err)
 			return
 		}
-		c.dynamic.Content = cardWithMiss.GetItem().GetContent()
+		c.dynamic.Content = replaseDesc(cardWithMiss.GetItem().GetContent(), detail.Content)
 		c.dynamic.Miss.Tips = cardWithMiss.GetItem().GetTips()
 	default:
 		c.dynamic.Type = DynamicDescType_DynamicDescTypeUnknown
@@ -996,11 +1037,11 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(func() {
 		c.prepare()
 		var data = map[string]interface{}{
-			"dynamic":    c.dynamic,
-			"msg":        c.orgMsg,
-			"group_code": c.GroupCode,
-			"parsePost":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
-			"dynamicNew": c.SecAnalysis(),
+			"dynamic":     c.dynamic,
+			"msg":         c.orgMsg,
+			"group_code":  c.GroupCode,
+			"parse_post":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
+			"dynamic_raw": c.dynamicRaw,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)
@@ -1012,17 +1053,22 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 	return c.msgCache
 }
 
-func (c *CacheCard) SecAnalysis() (result map[string]interface{}) {
+func SecAnalysis(id string) (result map[string]interface{}) {
 	if !config.GlobalConfig.GetBool("bilibili.secAnalysis") {
 		return
 	}
-	Url := "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail?id=" + c.dynamic.Id
+	Url := BPath(PathWebDynamicDetail)
+	params := map[string]string{
+		"id":       id,
+		"features": "itemOpusStyle,opusBigCover,onlyfansVote,endFooterHidden,decorationCard,onlyfansAssetsV2,ugcDelete,onlyfansQaCard,editable,opusPrivateVisible,avatarAutoTheme",
+	}
 	var resp bytes.Buffer
 	var opts = []requests.Option{
 		requests.AddUAOption(),
-		requests.ProxyOption(proxy_pool.PreferMainland),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.RetryOption(3),
 	}
-	err := requests.Get(Url, nil, &resp, opts...)
+	err := requests.Get(Url, params, &resp, opts...)
 	if err != nil {
 		logger.WithField("url", Url).Errorf("SecAnalysis get failed %v", err)
 		return
@@ -1032,4 +1078,99 @@ func (c *CacheCard) SecAnalysis() (result map[string]interface{}) {
 		return
 	}
 	return
+}
+
+func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDetail) {
+	code, ok := resp["code"].(float64)
+	if !ok || code != 0 {
+		return
+	}
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	item, ok := data["item"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	searchDesc := func(modules map[string]interface{}) (res DynamicDetail) {
+		if modules == nil {
+			return
+		}
+		dynamic, ok := modules["module_dynamic"].(map[string]interface{})
+		if !ok {
+			return
+		}
+
+		if topic, ok := dynamic["topic"].(map[string]interface{}); ok {
+			if name, ok := topic["name"].(string); ok {
+				res.TopicName = "#" + name + "#"
+			}
+		}
+
+		if desc, ok := dynamic["desc"].(map[string]interface{}); ok {
+			text, ok := desc["text"].(string)
+			if ok {
+				res.Content = text
+				return
+			}
+		}
+
+		if major, ok := dynamic["major"].(map[string]interface{}); ok {
+			if opus, ok := major["opus"].(map[string]interface{}); ok {
+				if title, ok := opus["title"].(string); ok {
+					res.Title = title
+				}
+				if summary, ok := opus["summary"].(map[string]interface{}); ok {
+					text := summary["text"].(string)
+					res.Content = text
+				}
+			}
+
+			if pgc, ok := major["pgc"].(map[string]interface{}); ok {
+				if badge, ok := pgc["badge"].(map[string]interface{}); ok {
+					res.PGC.Type = badge["text"].(string)
+				}
+				if title, ok := pgc["title"].(string); ok {
+					res.PGC.Title = title
+				}
+				if cover, ok := pgc["cover"].(string); ok {
+					res.PGC.CoverUrl = cover
+				}
+			}
+		}
+
+		if additional, ok := dynamic["additional"].(map[string]interface{}); ok {
+			if additional["type"] == "ADDITIONAL_TYPE_RESERVE" {
+				if reserve, ok := additional["reserve"].(map[string]interface{}); ok {
+					res.Reserve.Title = reserve["title"].(string)
+					res.Reserve.Desc1 = reserve["desc1"].(map[string]interface{})["text"].(string)
+					res.Reserve.Desc2 = reserve["desc2"].(map[string]interface{})["text"].(string)
+					if reserve["desc3"] != nil {
+						res.Reserve.Desc3 = reserve["desc3"].(map[string]interface{})["text"].(string)
+					}
+				}
+			}
+		}
+		return
+	}
+
+	if repost {
+		if orig, ok := item["orig"].(map[string]interface{}); ok {
+			modules := orig["modules"].(map[string]interface{})
+			result = searchDesc(modules)
+		}
+	} else {
+		if modules, ok := item["modules"].(map[string]interface{}); ok {
+			result = searchDesc(modules)
+		}
+	}
+	return
+}
+
+func replaseDesc(text string, newText string) string {
+	if newText == "" {
+		return text
+	}
+	return newText
 }
