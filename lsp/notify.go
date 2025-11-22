@@ -54,6 +54,11 @@ func (l *Lsp) ConcernNotify() {
 			// 注意notify可能会缓存MSG
 			var m = l.NotifyMessage(inotify).Clone()
 
+			if m == nil {
+				logger.Debug("the notification message is empty, skip this push.")
+				continue
+			}
+
 			// 如果群id < 0, 则认为是TG聊群并忽略推送至QQ
 			if inotify.GetGroupCode() < 0 {
 				lsptelegram.SendToChat(inotify.GetGroupCode(), m)

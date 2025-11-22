@@ -42,6 +42,13 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	m = mmsg.NewMSG()
 	var addedUrl bool
 	if n.shouldCompact {
+		// 先推送了转发，才推送原文
+		// 这种直接放弃，避免二次推送
+		if n.Tweet.OrgUser == nil && n.Tweet.QuoteTweet == nil {
+			logger.Debug("compact notify ignored: already pushed.")
+			m = nil
+			return
+		}
 		// 通过回复之前消息的方式简化推送
 		msg, _ := n.concern.GetNotifyMsg(n.GroupCode, n.compactKey)
 		if msg != nil {
