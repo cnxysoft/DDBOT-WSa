@@ -323,6 +323,12 @@ DDBOT的命令格式皆遵守这个规则。
 /config filter text 97505 关键字1 关键字2
 ```
 
+- 屏蔽动态关键字，不推送包含任意关键字的动态
+
+```shell
+/config filter not_text 97505 关键字1 关键字2
+```
+
 - 查看当前过滤器配置
 
 ```shell

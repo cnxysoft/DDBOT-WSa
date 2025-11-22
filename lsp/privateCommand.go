@@ -348,6 +348,10 @@ func (c *LspPrivateCommand) ConfigCommand() {
 				Id      string   `arg:"" help:"配置的主播id"`
 				Keyword []string `arg:"" optional:"" help:"指定的关键字"`
 			} `cmd:"" help:"当动态内容里出现关键字时进行推送" name:"text" group:"filter"`
+			NotText struct {
+				Id      string   `arg:"" help:"配置的主播id"`
+				Keyword []string `arg:"" optional:"" help:"指定的关键字"`
+			} `cmd:"" help:"当动态内容未出现关键字时进行推送" name:"not_text" group:"filter"`
 			Clear struct {
 				Id string `arg:"" help:"配置的主播id"`
 			} `cmd:"" help:"清除过滤器" name:"clear" group:"filter"`
@@ -444,6 +448,8 @@ func (c *LspPrivateCommand) ConfigCommand() {
 			IConfigFilterCmdNotType(c.NewMessageContext(log), groupCode, configCmd.Filter.NotType.Id, site, ctype, configCmd.Filter.NotType.Type)
 		case "text":
 			IConfigFilterCmdText(c.NewMessageContext(log), groupCode, configCmd.Filter.Text.Id, site, ctype, configCmd.Filter.Text.Keyword)
+		case "not_text":
+			IConfigFilterCmdNotText(c.NewMessageContext(log), groupCode, configCmd.Filter.NotText.Id, site, ctype, configCmd.Filter.NotText.Keyword)
 		case "clear":
 			IConfigFilterCmdClear(c.NewMessageContext(log), groupCode, configCmd.Filter.Clear.Id, site, ctype)
 		case "show":

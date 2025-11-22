@@ -2,15 +2,16 @@ package lsp
 
 import (
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
-	"go.uber.org/atomic"
 	"math/rand"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"go.uber.org/atomic"
 
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -721,6 +722,10 @@ func (lgc *LspGroupCommand) ConfigCommand() {
 				Id      string   `arg:"" help:"配置的主播id"`
 				Keyword []string `arg:"" optional:"" help:"指定的关键字"`
 			} `cmd:"" help:"当动态内容里出现关键字时进行推送" name:"text" group:"filter"`
+			NotText struct {
+				Id      string   `arg:"" help:"配置的主播id"`
+				Keyword []string `arg:"" optional:"" help:"指定的关键字"`
+			} `cmd:"" help:"当动态内容未出现关键字时进行推送" name:"not_text" group:"filter"`
 			Clear struct {
 				Id string `arg:"" help:"配置的主播id"`
 			} `cmd:"" help:"清除过滤器" name:"clear" group:"filter"`
@@ -810,6 +815,8 @@ func (lgc *LspGroupCommand) ConfigCommand() {
 			IConfigFilterCmdNotType(lgc.NewMessageContext(log), lgc.groupCode(), configCmd.Filter.NotType.Id, site, ctype, configCmd.Filter.NotType.Type)
 		case "text":
 			IConfigFilterCmdText(lgc.NewMessageContext(log), lgc.groupCode(), configCmd.Filter.Text.Id, site, ctype, configCmd.Filter.Text.Keyword)
+		case "not_text":
+			IConfigFilterCmdNotText(lgc.NewMessageContext(log), lgc.groupCode(), configCmd.Filter.NotText.Id, site, ctype, configCmd.Filter.NotText.Keyword)
 		case "clear":
 			IConfigFilterCmdClear(lgc.NewMessageContext(log), lgc.groupCode(), configCmd.Filter.Clear.Id, site, ctype)
 		case "show":

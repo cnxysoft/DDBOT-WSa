@@ -8,6 +8,7 @@ const (
 	FilterTypeType    = "type"
 	FilterTypeNotType = "not_type"
 	FilterTypeText    = "text"
+	FilterTypeNotText = "not_text"
 )
 
 type GroupConcernFilterConfigByType struct {
@@ -48,7 +49,7 @@ func (g *GroupConcernFilterConfig) GetFilterByType() (*GroupConcernFilterConfigB
 }
 
 func (g *GroupConcernFilterConfig) GetFilterByText() (*GroupConcernFilterConfigByText, error) {
-	if g.Type != FilterTypeText {
+	if g.Type != FilterTypeText && g.Type != FilterTypeNotText {
 		return nil, errors.New("filter type mismatched")
 	}
 	var result = new(GroupConcernFilterConfigByText)

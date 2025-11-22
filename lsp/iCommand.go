@@ -639,6 +639,30 @@ func IConfigFilterCmdText(c *MessageContext, groupCode int64, id string, site st
 	}
 }
 
+func IConfigFilterCmdNotText(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type, keywords []string) {
+	err := configCmdGroupCommonCheck(c, groupCode)
+	if err == nil {
+		if len(keywords) == 0 {
+			c.TextReply("失败 - 没有指定过滤关键字")
+			return
+		}
+		err = iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
+			config.GetGroupConcernFilter().Type = concern.FilterTypeNotText
+			filterConfig := &concern.GroupConcernFilterConfigByText{Text: keywords}
+			config.GetGroupConcernFilter().Config = filterConfig.ToString()
+			return true
+		})
+	}
+	if localdb.IsRollback(err) || permission.IsPermissionError(err) {
+		return
+	}
+	if err != nil {
+		c.TextReply(err.Error())
+	} else {
+		ReplyUserInfo(c, id, site, ctype)
+	}
+}
+
 func IConfigFilterCmdClear(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type) {
 	err := iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
 		*config.GetGroupConcernFilter() = concern.GroupConcernFilterConfig{}
@@ -663,13 +687,17 @@ func IConfigFilterCmdShow(c *MessageContext, groupCode int64, id string, site st
 		sb := strings.Builder{}
 		sb.WriteString("当前配置：\n")
 		switch config.GetGroupConcernFilter().Type {
-		case concern.FilterTypeText:
-			sb.WriteString("关键字过滤模式：\n")
+		case concern.FilterTypeText, concern.FilterTypeNotText:
 			filter, err := config.GetGroupConcernFilter().GetFilterByText()
 			if err != nil {
 				logger.WithField("filter_config", config.GetGroupConcernFilter().Config).Errorf("get filter failed %v", err)
 				c.TextReply("查询失败 - 内部错误")
 				return false
+			}
+			if config.GetGroupConcernFilter().Type == concern.FilterTypeText {
+				sb.WriteString("关键字过滤模式 - 只推送以下关键字的动态：\n")
+			} else if config.GetGroupConcernFilter().Type == concern.FilterTypeNotText {
+				sb.WriteString("关键字过滤模式 - 不推送以下关键字的动态：\n")
 			}
 			for _, kw := range filter.Text {
 				sb.WriteString(kw)

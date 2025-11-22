@@ -1,8 +1,9 @@
 package concern
 
 import (
-	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"strings"
+
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 )
 
 // IConfig 定义了Config的通用接口
@@ -29,7 +30,8 @@ type GroupConcernConfig struct {
 // 默认支持 GroupConcernNotifyConfig GroupConcernAtConfig
 // GroupConcernFilterConfig 默认只支持 text
 func (g *GroupConcernConfig) Validate() error {
-	if !g.GetGroupConcernFilter().Empty() && g.GetGroupConcernFilter().Type != FilterTypeText {
+	if !g.GetGroupConcernFilter().Empty() &&
+		(g.GetGroupConcernFilter().Type != FilterTypeText && g.GetGroupConcernFilter().Type != FilterTypeNotText) {
 		return ErrConfigNotSupported
 	}
 	return nil
@@ -43,7 +45,7 @@ func (g *GroupConcernConfig) FilterHook(notify Notify) *HookResult {
 	}
 	logger := notify.Logger().WithField("FilterType", g.GetGroupConcernFilter().Type)
 	switch g.GetGroupConcernFilter().Type {
-	case FilterTypeText:
+	case FilterTypeText, FilterTypeNotText:
 		textFilter, err := g.GetGroupConcernFilter().GetFilterByText()
 		if err != nil {
 			logger.WithField("Content", g.GetGroupConcernFilter().Config).
@@ -53,8 +55,14 @@ func (g *GroupConcernConfig) FilterHook(notify Notify) *HookResult {
 			msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
 			for _, text := range textFilter.Text {
 				if strings.Contains(msgString, text) {
-					hook.Pass = true
+					if g.GetGroupConcernFilter().Type == FilterTypeText {
+						hook.Pass = true
+					} else if g.GetGroupConcernFilter().Type == FilterTypeNotText {
+						hook.Pass = false
+					}
 					break
+				} else if g.GetGroupConcernFilter().Type == FilterTypeNotText {
+					hook.Pass = true
 				}
 			}
 			if !hook.Pass {
