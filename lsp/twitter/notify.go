@@ -1,6 +1,7 @@
 package twitter
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,7 +22,6 @@ import (
 type ConcernNewsNotify struct {
 	GroupCode int64 `json:"group_code"`
 	*NewsInfo
-
 	shouldCompact bool
 	compactKey    string
 	concern       *twitterConcern
@@ -167,39 +167,56 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 		}
 
 		switch m.Type {
+
 		case "image":
 			if tweet.MirrorHost == XImgHost {
+				// nitter 的 /pic/ 代理路径，剔除前缀以便还原
 				unescape = strings.TrimLeft(unescape, "/pic/")
 			}
 			fullURL, err := Url.Parse(unescape)
 			if err != nil {
 				logger.WithField("stack", string(debug.Stack())).
 					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recoverd %v", err)
+					Errorf("concern notify recovered %v", err)
+				break
 			}
 
-			var opts []requests.Option
-			if tweet.MirrorHost == "nitter.privacyredirect.com" {
-				opts = []requests.Option{
-					requests.RequestAutoHostOption(),
-					requests.HeaderOption("Accept-Encoding", "gzip, deflate, br, zstd"),
-					requests.HeaderOption("sec-fetch-site", "none"),
-					requests.HeaderOption("sec-fetch-mode", "navigate"),
-					requests.HeaderOption("sec-fetch-dest", "document"),
-					requests.HeaderOption("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"),
-					requests.HeaderOption("accept",
-						"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"),
+			// 规范化为 pbs 最大尺寸，并下载到本地
+			finalURL := NormalizeMediaURLToPBSOrig(fullURL.String())
+			filePath, derr := tryDownloadBestImage(finalURL)
+			if derr != nil {
+				// 下载失败 → 兜底仍以 URL 方式发送，避免消息丢失
+				logger.WithField("stack", string(debug.Stack())).
+					WithField("tweetId", tweet.ID).
+					Errorf("download orig image failed: %v", derr)
+
+				var opts []requests.Option
+				if tweet.MirrorHost == "nitter.privacyredirect.com" {
+					opts = []requests.Option{
+						requests.RequestAutoHostOption(),
+						requests.HeaderOption("Accept-Encoding", "gzip, deflate, br, zstd"),
+						requests.HeaderOption("sec-fetch-site", "none"),
+						requests.HeaderOption("sec-fetch-mode", "navigate"),
+						requests.HeaderOption("sec-fetch-dest", "document"),
+						requests.HeaderOption("accept-language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"),
+						requests.HeaderOption("accept",
+							"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"),
+					}
 				}
+				addCut(message, nil)
+				opts = append(opts,
+					requests.ProxyOption(proxy_pool.PreferOversea),
+					requests.AddUAOption(UserAgent),
+					requests.WithCookieJar(Cookie),
+				)
+				message.Append(mmsg.NewImageByUrl(fullURL.String(), opts...))
+				break
 			}
 
-			m.Url = fullURL.String()
+			// 关键：使用“本地图片”上传到 QQ，达到“原图”体验
 			addCut(message, nil)
-			opts = append(opts, requests.ProxyOption(proxy_pool.PreferOversea),
-				requests.AddUAOption(UserAgent),
-				requests.WithCookieJar(Cookie))
-			message.Append(
-				mmsg.NewImageByUrl(m.Url,
-					opts...))
+			message.Append(mmsg.NewImageByLocal(filePath))
+
 		case "video":
 			if strings.Contains(unescape, "video.twimg.com") {
 				idx := strings.Index(unescape, "video.twimg.com")
@@ -446,4 +463,177 @@ func safeDecodeURIComponent(s string) (string, error) {
 		decoded = nextDecoded
 	}
 	return decoded, nil
+}
+
+// ======== 规范化 Twitter/Nitter 图片到 pbs 最大尺寸（name=orig） ========
+
+// NormalizeMediaURLToPBSOrig 将媒体 URL 规范化到 pbs 的最大可用版本（name=orig），并保留 format。
+// 对 nitter 的 /pic/ 路由做还原；失败时返回原始 URL（后续再兜底）。
+func NormalizeMediaURLToPBSOrig(src string) string {
+	u, err := url.Parse(src)
+	if err != nil {
+		return src
+	}
+
+	// 1) pbs 链接：直接规范化为 name=orig
+	if u.Host == "pbs.twimg.com" {
+		q := u.Query()
+		if q.Has("format") {
+			q.Set("name", "orig")
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+		// 扩展名路径 -> 转成 query
+		p := u.Path
+		if i := strings.LastIndex(p, "."); i > 0 {
+			ext := strings.ToLower(p[i+1:])
+			switch ext {
+			case "jpg", "jpeg", "png", "webp":
+				u.Path = p[:i] // 去掉扩展名
+				q.Set("format", ext)
+				q.Set("name", "orig")
+				u.RawQuery = q.Encode()
+				return u.String()
+			}
+		}
+		return src
+	}
+
+	// 2) nitter 镜像：尝试从 /pic/ 解码出 pbs 路径（常见：/pic/media%2F<id>...）
+	if strings.Contains(u.Host, "nitter") {
+		if strings.HasPrefix(u.Path, "/pic/") {
+			tail := strings.TrimPrefix(u.Path, "/pic/")
+			decoded, err := url.PathUnescape(tail) // "media%2FFoo.jpg?name=small" -> "media/Foo.jpg?name=small"
+			if err == nil {
+				var pathOnly, rawQ string
+				if idx := strings.Index(decoded, "?"); idx >= 0 {
+					pathOnly = decoded[:idx]
+					rawQ = decoded[idx+1:]
+				} else {
+					pathOnly = decoded
+				}
+				pb := &url.URL{Scheme: "https", Host: "pbs.twimg.com", Path: "/" + strings.TrimPrefix(pathOnly, "/")}
+				q2, _ := url.ParseQuery(rawQ)
+				if q2.Has("format") {
+					q2.Set("name", "orig")
+					pb.RawQuery = q2.Encode()
+				} else {
+					if i := strings.LastIndex(pathOnly, "."); i > 0 {
+						ext := strings.ToLower(pathOnly[i+1:])
+						switch ext {
+						case "jpg", "jpeg", "png", "webp":
+							pb.Path = pathOnly[:i] // 去掉扩展名
+							q2.Set("format", ext)
+							q2.Set("name", "orig")
+							pb.RawQuery = q2.Encode()
+						}
+					}
+				}
+				return pb.String()
+			}
+		}
+		return src
+	}
+
+	return src
+}
+
+// ======== 按 orig/large/medium 下载到本地文件（兜底） ========
+
+func tryDownloadBestImage(finalURL string) (string, error) {
+	// 优先 orig
+	candidates := []string{NormalizeMediaURLToPBSOrig(finalURL)}
+
+	// 根据已有 query，兜底 large / medium
+	if uu, err := url.Parse(finalURL); err == nil {
+		q := uu.Query()
+		if q.Has("name") {
+			q.Set("name", "large")
+			uu.RawQuery = q.Encode()
+			candidates = append(candidates, uu.String())
+			q.Set("name", "medium")
+			uu.RawQuery = q.Encode()
+			candidates = append(candidates, uu.String())
+		}
+	}
+
+	var lastErr error
+	for _, c := range candidates {
+		path, err := downloadImageLocal(c)
+		if err == nil {
+			return path, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no candidates to download")
+	}
+	return "", lastErr
+}
+
+// ======== 下载图片到 ./res/<uuid>.<ext> 并异步清理 ========
+
+func downloadImageLocal(imgURL string) (string, error) {
+	var buf bytes.Buffer
+	var hdr requests.RespHeader
+	// 复用统一请求配置（代理、UA、Cookie、超时等）
+	opts := SetRequestOptions()
+	if err := requests.GetWithHeader(imgURL, nil, &buf, &hdr, opts...); err != nil {
+		return "", err
+	}
+
+	if _, err := os.Stat("./res"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./res", 0755); err != nil {
+			return "", err
+		}
+	}
+
+	// 根据 Content-Type 或 URL 推断扩展名
+	ext := "jpg"
+	ct := strings.ToLower(hdr.ContentType)
+	switch {
+	case strings.Contains(ct, "png"):
+		ext = "png"
+	case strings.Contains(ct, "webp"):
+		ext = "webp"
+	case strings.Contains(ct, "jpeg"), strings.Contains(ct, "jpg"):
+		ext = "jpg"
+	}
+	// 如果 URL 里有 format=xxx，以它为准
+	if u, err := url.Parse(imgURL); err == nil {
+		q := u.Query()
+		if f := strings.ToLower(q.Get("format")); f != "" {
+			switch f {
+			case "png", "webp", "jpg", "jpeg":
+				ext = f
+			}
+		} else {
+			// 路径扩展名也可作为备用判断
+			p := u.Path
+			if i := strings.LastIndex(p, "."); i > 0 {
+				e := strings.ToLower(p[i+1:])
+				switch e {
+				case "png", "webp", "jpg", "jpeg":
+					ext = e
+				}
+			}
+		}
+	}
+
+	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + ext)
+	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+		return "", err
+	}
+
+	// 180 秒后清理临时文件（与你现有 downloadMedia 一致）
+	go func(path string) {
+		time.Sleep(time.Second * 180)
+		logger.Debugf("Delete temporary image: %s", path)
+		if err := os.Remove(path); err != nil {
+			logger.WithField("filePath", path).
+				Errorf("Delete temporary image error: %v", err)
+		}
+	}(filePath)
+
+	return filePath, nil
 }
