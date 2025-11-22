@@ -22,7 +22,6 @@ import (
 type ConcernNewsNotify struct {
 	GroupCode int64 `json:"group_code"`
 	*NewsInfo
-
 	shouldCompact bool
 	compactKey    string
 	concern       *twitterConcern
