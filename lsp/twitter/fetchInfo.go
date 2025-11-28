@@ -222,11 +222,15 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 	profile.Website = XUrl + doc.Find("a[class='profile-card-username']").AttrOr("href", "")
 	doc.Find("meta[property='og:title']").Each(func(i int, s *goquery.Selection) {
 		title := s.AttrOr("content", "")
-		parts := strings.Split(title, " (")
+		subTitle := strings.LastIndex(title, " (")
+		parts := []string{
+			title[:subTitle],
+			title[subTitle:],
+		}
 		if len(parts) > 0 {
 			profile.Name = strings.TrimSpace(parts[0])
 			if len(parts) > 1 {
-				profile.ScreenName = strings.Trim(parts[1], "@)")
+				profile.ScreenName = strings.Trim(parts[1], " (@)")
 			}
 		}
 	})
