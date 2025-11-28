@@ -598,6 +598,21 @@ type DynamicDetail struct {
 		Title    string `json:"title"`
 		CoverUrl string `json:"cover_url"`
 	} `json:"pgc,omitempty"`
+	Archive struct {
+		Aid            string `json:"aid"`
+		Bvid           string `json:"bvid"`
+		Cover          string `json:"cover"`
+		Desc           string `json:"desc"`
+		DisablePreview int32  `json:"disable_preview"`
+		DurationText   string `json:"duration_text"`
+		JumpUrl        string `json:"jump_url"`
+		Stat           struct {
+			Danmaku string `json:"danmaku"`
+			Play    string `json:"play"`
+		} `json:"stat"`
+		Title string `json:"title"`
+		Type  int32  `json:"type"`
+	} `json:"archive,omitempty"`
 	Title     string `json:"title"`
 	TopicName string `json:"topic_name"`
 	Content   string `json:"content"`
@@ -1138,6 +1153,20 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 				}
 				if cover, ok := pgc["cover"].(string); ok {
 					res.PGC.CoverUrl = cover
+				}
+			}
+
+			if archive, ok := major["archive"].(map[string]interface{}); ok {
+				Json, err := json.Marshal(archive)
+				if err != nil {
+					logger.WithError(err).Error("func:getDescContent, json.Marshal failed")
+				}
+				err = json.Unmarshal(Json, &res.Archive)
+				if err != nil {
+					return DynamicDetail{}
+				}
+				if strings.HasPrefix(res.Archive.JumpUrl, "//") {
+					res.Archive.JumpUrl = "https:" + res.Archive.JumpUrl
 				}
 			}
 		}
