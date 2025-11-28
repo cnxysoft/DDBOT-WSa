@@ -1123,10 +1123,8 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 		}
 
 		if desc, ok := dynamic["desc"].(map[string]interface{}); ok {
-			text, ok := desc["text"].(string)
-			if ok {
+			if text, ok := desc["text"].(string); ok {
 				res.Content = text
-				return
 			}
 		}
 
