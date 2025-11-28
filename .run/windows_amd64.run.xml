@@ -2,10 +2,11 @@
   <configuration default="false" name="windows_amd64" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$" />
-    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_windows_amd64.exe -v -ldflags=&quot;-s -w -extldflags=-static -linkmode external -extldflags '-Wl,--gc-sections'&quot; -trimpath -tags cgo" />
+    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_windows_amd64.exe -v -ldflags=&quot;-s -w -linkmode external -extldflags '-static,-Wl,--gc-sections'&quot; -trimpath -tags cgo" />
     <envs>
       <env name="GOOS" value="windows" />
       <env name="GOARCH" value="amd64" />
+      <env name="CGO_ENABLED" value="1" />
     </envs>
     <kind value="DIRECTORY" />
     <package value="github.com/cnxysoft/DDBOT-WSa" />
