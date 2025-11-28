@@ -128,29 +128,26 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 		}
 		return url
 	}
-	l.once.Do(func() {
-		var data = map[string]interface{}{
-			"live_info":        l,
-			"uid":              l.Mid,
-			"title":            l.LiveTitle,
-			"name":             l.Name,
-			"url":              cleanRoomUrl(l.RoomUrl),
-			"cover":            l.Cover,
-			"living":           l.Living(),
-			"parent_area_name": l.ParentAreaName,
-			"area_name":        l.AreaName,
-			"live_time":        l.LiveTime,
-			"extend_notify":    l.ExtendNotify,
-			"group_code":       l.GroupCode,
-			"title_changed":    l.liveTitleChanged,
-		}
-		var err error
-		l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
-		if err != nil {
-			logger.Errorf("bilibili: LiveInfo LoadAndExec error %v", err)
-		}
-		return
-	})
+	var data = map[string]interface{}{
+		"live_info":        l,
+		"uid":              l.Mid,
+		"title":            l.LiveTitle,
+		"name":             l.Name,
+		"url":              cleanRoomUrl(l.RoomUrl),
+		"cover":            l.Cover,
+		"living":           l.Living(),
+		"parent_area_name": l.ParentAreaName,
+		"area_name":        l.AreaName,
+		"live_time":        l.LiveTime,
+		"extend_notify":    l.ExtendNotify,
+		"group_code":       l.GroupCode,
+		"title_changed":    l.liveTitleChanged,
+	}
+	var err error
+	l.msgCache, err = template.LoadAndExec("notify.group.bilibili.live.tmpl", data)
+	if err != nil {
+		logger.Errorf("bilibili: LiveInfo LoadAndExec error %v", err)
+	}
 	return l.msgCache
 }
 
