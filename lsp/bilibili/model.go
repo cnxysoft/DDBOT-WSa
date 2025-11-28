@@ -64,7 +64,8 @@ func (notify *ConcernNewsNotify) Living() bool {
 }
 
 type ConcernLiveNotify struct {
-	GroupCode int64 `json:"group_code"`
+	GroupCode    int64 `json:"group_code"`
+	ExtendNotify bool  `json:"extend_notify"`
 	*LiveInfo
 }
 
@@ -340,6 +341,7 @@ func (notify *ConcernNewsNotify) Logger() *logrus.Entry {
 
 func (notify *ConcernLiveNotify) ToMessage() (m *mmsg.MSG) {
 	notify.LiveInfo.GroupCode = notify.GroupCode
+	notify.LiveInfo.ExtendNotify = notify.ExtendNotify
 	return notify.LiveInfo.GetMSG()
 }
 

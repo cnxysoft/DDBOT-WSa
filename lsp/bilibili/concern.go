@@ -331,7 +331,7 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 			}
 			inotify := NewConcernLiveNotify(groupCode, event)
 			if extend := c.StateManager.IsExtendNotify(inotify); extend {
-				event.ExtendNotify = true
+				inotify.ExtendNotify = true
 			}
 			result = append(result, inotify)
 		case *NewsInfo:
@@ -552,7 +552,12 @@ func (c *Concern) GroupWatchNotify(groupCode, mid int64) {
 	liveInfo, _ := c.GetLiveInfo(mid)
 	if liveInfo.Living() {
 		liveInfo.liveStatusChanged = true
-		c.notify <- NewConcernLiveNotify(groupCode, liveInfo)
+		notify := NewConcernLiveNotify(groupCode, liveInfo)
+		extend := c.StateManager.IsExtendNotify(notify)
+		if extend {
+			notify.ExtendNotify = true
+		}
+		c.notify <- notify
 	}
 }
 
