@@ -228,10 +228,8 @@ douyin:
   interval: 30s
   onlyOnlineNotify: false
 
-# weibo 推送暂时需要设置Cookie才会启动。
 weibo:
   onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
-  sub: # 登录weibo.com后取得对应名称的Cookie填入此处。
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送

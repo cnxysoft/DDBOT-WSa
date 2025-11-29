@@ -3,9 +3,6 @@ package weibo
 import (
 	"errors"
 	"fmt"
-	"strconv"
-	"time"
-
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
@@ -14,6 +11,8 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/tidwall/buntdb"
+	"strconv"
+	"time"
 )
 
 var online bool
@@ -41,17 +40,6 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 }
 
 func (c *Concern) Start() error {
-	sub := GetSettingCookie()
-	if sub == "" {
-		logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
-		return nil
-	}
-	freshCookieOpt(sub)
-	go func() {
-		for range time.Tick(time.Hour) {
-			freshCookieOpt(sub)
-		}
-	}()
 	c.UseEmitQueue()
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
 		uid := id.(int64)
