@@ -1,0 +1,42 @@
+{{ $msg := "" -}}
+{{ if .dynamic.WithRetweet -}}
+    {{ $msg = join "" (list "weibo-" .dynamic.User.Name "转发了" .dynamic.Retweet.User.Name "的微博：\n") -}}
+{{ else -}}
+    {{ $msg = join "" (list "weibo-" .dynamic.User.Name "发布了新微博：\n") -}}
+{{ end -}}
+{{ printf "%v%v\n" $msg .dynamic.Date -}}
+
+{{ if ne .dynamic.Content "" -}}
+    {{ printf "%v\n" .dynamic.Content -}}
+{{ end -}}
+
+{{ if gt (len .dynamic.Images) 0 -}}
+    {{ range $v := .dynamic.Images -}}
+        {{ pic $v -}}
+    {{ end -}}
+{{ end -}}
+
+{{ if .dynamic.WithRetweet -}}
+    {{ printf "\n原微博：\n" -}}
+    {{ if ne .dynamic.Retweet.Content "" -}}
+        {{ printf "%v\n" .dynamic.Retweet.Content -}}
+    {{ end -}}
+    {{ if gt (len .dynamic.Retweet.Images) 0 -}}
+        {{ range $v := .dynamic.Retweet.Images -}}
+            {{ pic $v -}}
+        {{ end -}}
+    {{ end -}}
+{{ end -}}
+
+{{ if ne .dynamic.Page.Type "" -}}
+    {{ if ne .dynamic.Page.CoverUrl "" -}}
+        {{ pic .dynamic.Page.CoverUrl -}}
+    {{ end -}}
+    {{ if eq .dynamic.Page.Type "video" -}}
+        {{ printf "%v\n%v - %v\n" .dynamic.Video.Title .dynamic.Video.PublishTime .dynamic.Video.OnlineUsers -}}
+    {{ else if eq .dynamic.Page.Type "article" -}}
+        {{ printf "%v\n" .dynamic.Page.Content1 -}}
+    {{ end -}}
+{{ end -}}
+
+{{ printf "%v" .dynamic.Url -}}

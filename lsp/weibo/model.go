@@ -9,6 +9,7 @@ import (
 
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -95,12 +96,56 @@ func NewConcernNewsNotify(groupCode int64, info *NewsInfo) []*ConcernNewsNotify 
 	return result
 }
 
+// WeiboDynamic 微博动态数据结构，用于模板渲染
+type WeiboDynamic struct {
+	User        WeiboUser    `json:"user"`
+	Type        CardType     `json:"type"`
+	Content     string       `json:"content"`
+	Date        string       `json:"date"`
+	Url         string       `json:"url"`
+	Images      []string     `json:"images"`
+	Video       WeiboVideo   `json:"video"`
+	WithRetweet bool         `json:"with_retweet"`
+	Retweet     WeiboRetweet `json:"retweet"`
+	Page        WeiboPage    `json:"page"`
+}
+
+// WeiboUser 用户信息
+type WeiboUser struct {
+	Name string `json:"name"`
+	Id   int64  `json:"id"`
+}
+
+// WeiboVideo 视频信息
+type WeiboVideo struct {
+	Title       string `json:"title"`
+	CoverUrl    string `json:"cover_url"`
+	PublishTime string `json:"publish_time"`
+	OnlineUsers string `json:"online_users"`
+}
+
+// WeiboRetweet 转发信息
+type WeiboRetweet struct {
+	User    WeiboUser `json:"user"`
+	Content string    `json:"content"`
+	Images  []string  `json:"images"`
+}
+
+// WeiboPage 页面信息（视频、文章等）
+type WeiboPage struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	CoverUrl string `json:"cover_url"`
+	Content1 string `json:"content1"`
+}
+
 type CacheCard struct {
 	*Card
 	Name string
 
 	once     sync.Once
 	msgCache *mmsg.MSG
+	dynamic  WeiboDynamic
 }
 
 func NewCacheCard(card *Card, name string) *CacheCard {
@@ -108,6 +153,102 @@ func NewCacheCard(card *Card, name string) *CacheCard {
 }
 
 func (c *CacheCard) prepare() {
+	// 初始化动态数据结构
+	dynamic := WeiboDynamic{}
+
+	// 填充用户信息
+	dynamic.User = WeiboUser{
+		Name: c.Name,
+		Id:   c.Card.GetUser().GetId(),
+	}
+
+	// 填充微博基本信息
+	dynamic.Type = c.Card.GetMblogtype()
+	dynamic.Date = getTimeString(c.Card.GetCreatedAt())
+	dynamic.Url = getWeiboUrl(c.Card.GetUser().GetId(), c.Card.Mblogid)
+
+	// 填充微博内容
+	if len(c.Card.GetRawText()) > 0 {
+		rawText := parseHTML(c.Card.GetRawText())
+		dynamic.Content = localutils.RemoveHtmlTag(rawText)
+	} else {
+		text := parseHTML(c.Card.GetText())
+		dynamic.Content = localutils.RemoveHtmlTag(text)
+	}
+
+	// 收集微博图片
+	dynamic.Images = findPicUrlsForCard(c.Card.GetPicInfos())
+
+	// 处理转发微博
+	if c.Card.GetRetweetedStatus() != nil {
+		dynamic.WithRetweet = true
+		retweetStatus := c.Card.GetRetweetedStatus()
+
+		// 填充转发用户信息
+		dynamic.Retweet.User = WeiboUser{
+			Name: retweetStatus.GetUser().GetScreenName(),
+			Id:   retweetStatus.GetUser().GetId(),
+		}
+
+		// 填充转发内容
+		if len(retweetStatus.GetRawText()) > 0 {
+			rawText := parseHTML(retweetStatus.GetRawText())
+			dynamic.Retweet.Content = localutils.RemoveHtmlTag(rawText)
+		} else {
+			text := parseHTML(retweetStatus.GetText())
+			dynamic.Retweet.Content = localutils.RemoveHtmlTag(text)
+		}
+
+		// 收集转发微博图片
+		dynamic.Retweet.Images = findPicUrlsForCard(retweetStatus.GetPicInfos())
+		if retweetStatus.GetMixMediaInfo() != nil {
+			dynamic.Retweet.Images = append(dynamic.Retweet.Images, findPicUrlsForMix(retweetStatus.GetMixMediaInfo().GetItems())...)
+		}
+	}
+
+	// 处理页面信息（视频、文章等）
+	if c.GetPageInfo() != nil {
+		dynamic.Page.Type = c.GetPageInfo().GetObjectType()
+		dynamic.Page.CoverUrl = c.GetPageInfo().GetPagePic()
+		dynamic.Page.Content1 = c.GetPageInfo().GetContent1()
+
+		// 处理视频页面
+		if c.GetPageInfo().GetObjectType() == "video" {
+			mediaInfo := c.GetPageInfo().GetMediaInfo()
+			dynamic.Video.Title = mediaInfo.GetName()
+			dynamic.Video.CoverUrl = c.GetPageInfo().GetPagePic()
+			dynamic.Video.PublishTime = time.Unix(mediaInfo.GetVideoPublishTime(), 0).Format(time.DateTime)
+			dynamic.Video.OnlineUsers = mediaInfo.GetOnlineUsers()
+		}
+	} else if c.Card.GetMixMediaInfo() != nil {
+		// 处理混合媒体信息
+		dynamic.Images = append(dynamic.Images, findPicUrlsForMix(c.Card.GetMixMediaInfo().GetItems())...)
+	}
+
+	// 保存动态数据
+	c.dynamic = dynamic
+}
+
+func (c *CacheCard) GetMSG() *mmsg.MSG {
+	c.once.Do(func() {
+		c.prepare()
+		var data = map[string]interface{}{
+			"dynamic": c.dynamic,
+		}
+		var err error
+		c.msgCache, err = template.LoadAndExec("notify.group.weibo.news.tmpl", data)
+		if err != nil {
+			logger.Errorf("weibo: NewsInfo LoadAndExec error %v", err)
+			// 如果模板加载失败，回退到默认消息
+			c.fallbackMSG()
+		}
+		return
+	})
+	return c.msgCache
+}
+
+// fallbackMSG 模板加载失败时的回退消息生成
+func (c *CacheCard) fallbackMSG() {
 	m := mmsg.NewMSG()
 	createdTime := getTimeString(c.Card.GetCreatedAt())
 	if c.Card.GetRetweetedStatus() != nil {
@@ -124,7 +265,6 @@ func (c *CacheCard) prepare() {
 	}
 	switch c.Card.GetMblogtype() {
 	case CardType_Normal, CardType_Text, CardType_Top:
-		logger.Infof("found card_types: %v", c.Mblogtype.String())
 		if len(c.Card.GetRawText()) > 0 {
 			rawText := parseHTML(c.Card.GetRawText())
 			m.Textf("\n%v", localutils.RemoveHtmlTag(rawText))
@@ -170,11 +310,6 @@ func (c *CacheCard) prepare() {
 	c.msgCache = m
 }
 
-func (c *CacheCard) GetMSG() *mmsg.MSG {
-	c.once.Do(c.prepare)
-	return c.msgCache
-}
-
 func parseHTML(text string) string {
 	text = strings.ReplaceAll(text, "<br />", "\n")
 	text = html.UnescapeString(text)
@@ -196,19 +331,24 @@ func getTimeString(t string) string {
 	return ti
 }
 
-func findPicForCard(picInfos map[string]*Card_PicInfo, m *mmsg.MSG) {
+// findPicUrlsForCard 收集卡片中的图片URL
+func findPicUrlsForCard(picInfos map[string]*Card_PicInfo) []string {
+	var urls []string
 	for _, pic := range picInfos {
 		switch pic.Type {
 		case "pic":
-			m.ImageByUrl(pic.GetLarge().GetUrl(), "")
+			urls = append(urls, pic.GetLarge().GetUrl())
 		case "gif":
-			m.ImageByUrl(pic.GetOriginal().GetUrl(), "")
+			urls = append(urls, pic.GetOriginal().GetUrl())
 		}
 	}
+	return urls
 }
 
-func findPicForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
-	for _, item := range Item {
+// findPicUrlsForMix 收集混合媒体中的图片URL
+func findPicUrlsForMix(items []*Card_MixMediaInfo_Items) []string {
+	var urls []string
+	for _, item := range items {
 		raw := item.Data.AsMap()
 		switch item.Type {
 		case "pic", "gif":
@@ -217,13 +357,29 @@ func findPicForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
 			err := json.Unmarshal(b, &pic)
 			if err != nil {
 				logger.Errorf("found pic failed. %v,", err)
-			}
-			if item.Type == "gif" {
-				m.ImageByUrl(pic.GetOriginal().GetUrl(), "")
 				continue
 			}
-			m.ImageByUrl(pic.GetLarge().GetUrl(), "")
+			if item.Type == "gif" {
+				urls = append(urls, pic.GetOriginal().GetUrl())
+			} else {
+				urls = append(urls, pic.GetLarge().GetUrl())
+			}
 		}
+	}
+	return urls
+}
+
+// 保留原函数用于向后兼容
+func findPicForCard(picInfos map[string]*Card_PicInfo, m *mmsg.MSG) {
+	for _, url := range findPicUrlsForCard(picInfos) {
+		m.ImageByUrl(url, "")
+	}
+}
+
+// 保留原函数用于向后兼容
+func findPicForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
+	for _, url := range findPicUrlsForMix(Item) {
+		m.ImageByUrl(url, "")
 	}
 }
 
