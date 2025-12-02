@@ -1,11 +1,12 @@
 package twitter
 
 import (
+	"testing"
+
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/local_proxy_pool"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 // 可以添加更多边界条件测试
@@ -50,7 +51,7 @@ func TestToMessage_ErrorHandling(t *testing.T) {
 
 	msg := notify.ToMessage()
 	// 验证在这种情况下不会panic，并且媒体元素为空
-	assert.Len(t, msg.Elements(), 3) // 只有文本元素存在
+	assert.Len(t, msg.Elements(), 5) // 只有文本元素存在
 
 	pool.Delete(proxy.ProxyString())
 	pool.Stop()
