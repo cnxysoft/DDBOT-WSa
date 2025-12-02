@@ -1,0 +1,91 @@
+{{ $dynamic := .dynamic -}}
+
+{{ if $dynamic.ShouldCompact -}}
+    {{ if .msg -}}
+        {{ reply .msg -}}
+    {{ end -}}
+
+    {{ $tips := "转发" -}}
+    {{ $orgUserName := $dynamic.Retweet.User.Name -}}
+    {{ if $dynamic.WithQuote -}}
+        {{ $orgUserName = $dynamic.Quote.User.Name -}}
+        {{ $tips = "引用" -}}
+    {{ end -}}
+
+    {{ printf "X-%s%s了%s的推文：\n%s\n%s\n" $dynamic.User.Name $tips $orgUserName $dynamic.Date $dynamic.Content -}}
+{{ else -}}
+    {{ if eq $dynamic.Type 2 -}}
+        {{ printf "X-%s转发了%s的推文：\n" $dynamic.User.Name $dynamic.Retweet.User.Name -}}
+    {{ else -}}
+        {{ printf "X-%s发布了新推文：\n" $dynamic.User.Name -}}
+    {{ end -}}
+
+    {{ printf "%s\n" $dynamic.Date -}}
+
+    {{ if ne $dynamic.Content "" -}}
+        {{ $content := $dynamic.Content -}}
+        {{ if or (gt (len $dynamic.Media) 0) (ne (substr $content -1) "\n") -}}
+            {{ $content = join "" (list $content "\n") -}}
+        {{ end -}}
+        {{ printf "%s" $content -}}
+    {{ end -}}
+
+    {{ range $media := $dynamic.Media -}}
+        {{ if eq $media.Type "image" -}}
+            {{ if ne $media.Base64 "" -}}
+                {{ pic $media.Base64 -}}
+            {{ else -}}
+                {{ pic $media.Url -}}
+            {{ end -}}
+        {{ else if eq $media.Type "gif" -}}
+            {{ if ne $media.Base64 "" -}}
+                {{ pic $media.Base64 -}}
+            {{ else -}}
+                {{ pic $media.Url -}}
+            {{ end -}}
+        {{ else if or (eq $media.Type "video") (eq $media.Type "video(m3u8)") -}}
+            {{ printf "%s\n" $dynamic.Url -}}
+            {{ cut -}}
+            {{ if ne $media.Base64 "" -}}
+                {{ video $media.Base64 -}}
+            {{ else -}}
+                {{ video $media.Url -}}
+            {{ end -}}
+            {{ fin -}}
+        {{ end -}}
+    {{ end -}}
+
+    {{ if $dynamic.WithQuote -}}
+        {{ printf "\n%s引用了%s的推文：\n" $dynamic.User.Name $dynamic.Quote.User.Name -}}
+        {{ printf "%s\n" $dynamic.Quote.Date -}}
+        {{ if ne $dynamic.Quote.Content "" -}}
+            {{ printf "%s\n" $dynamic.Quote.Content -}}
+        {{ end -}}
+
+        {{ range $media := $dynamic.Quote.Media -}}
+            {{ if eq $media.Type "image" -}}
+                {{ if ne $media.Base64 "" -}}
+                    {{ pic $media.Base64 -}}
+                {{ else -}}
+                    {{ pic $media.Url -}}
+                {{ end -}}
+            {{ else if eq $media.Type "gif" -}}
+                {{ if ne $media.Base64 "" -}}
+                    {{ pic $media.Base64 -}}
+                {{ else -}}
+                    {{ pic $media.Url -}}
+                {{ end -}}
+            {{ else if or (eq $media.Type "video") (eq $media.Type "video(m3u8)") -}}
+                {{ printf "%s\n" $dynamic.Url -}}
+                {{ cut -}}
+                {{ if ne $media.Base64 "" -}}
+                    {{ video $media.Base64 -}}
+                {{ else -}}
+                    {{ video $media.Url -}}
+                {{ end -}}
+                {{ fin -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+{{ end -}}
+{{ printf "%s\n" $dynamic.Url -}}

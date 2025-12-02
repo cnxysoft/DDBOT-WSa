@@ -2,6 +2,7 @@ package twitter
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,6 +20,50 @@ import (
 	"github.com/google/uuid"
 )
 
+// TwitterDynamic 推文动态数据结构，用于模板渲染
+type TwitterDynamic struct {
+	User          TwitterUser    `json:"user"`
+	Type          int            `json:"type"`
+	Content       string         `json:"content"`
+	Date          string         `json:"date"`
+	Url           string         `json:"url"`
+	Media         []TwitterMedia `json:"media"`
+	IsRetweet     bool           `json:"is_retweet"`
+	WithQuote     bool           `json:"with_quote"`
+	Retweet       TwitterRetweet `json:"retweet"`
+	Quote         TwitterQuote   `json:"quote"`
+	ShouldCompact bool           `json:"should_compact"`
+	CompactKey    string         `json:"compact_key"`
+}
+
+// TwitterUser 用户信息
+type TwitterUser struct {
+	Name string `json:"name"`
+	Id   string `json:"id"`
+}
+
+// TwitterMedia 媒体信息
+type TwitterMedia struct {
+	Type   string `json:"type"`
+	Url    string `json:"url"`
+	Base64 string `json:"base64"`
+}
+
+// TwitterRetweet 转发信息
+type TwitterRetweet struct {
+	User    TwitterUser    `json:"user"`
+	Content string         `json:"content"`
+	Media   []TwitterMedia `json:"media"`
+}
+
+// TwitterQuote 引用信息
+type TwitterQuote struct {
+	User    TwitterUser    `json:"user"`
+	Content string         `json:"content"`
+	Media   []TwitterMedia `json:"media"`
+	Date    string         `json:"date"`
+}
+
 type ConcernNewsNotify struct {
 	GroupCode int64 `json:"group_code"`
 	*NewsInfo
@@ -32,22 +77,257 @@ func (n *ConcernNewsNotify) GetGroupCode() int64 {
 }
 
 func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
-	defer func() {
-		if err := recover(); err != nil {
-			logger.WithField("stack", string(debug.Stack())).
-				WithField("tweet", n.Tweet).
-				Errorf("concern notify recoverd %v", err)
+	return n.GetMSG(n)
+}
+
+// buildTwitterDynamic 构建TwitterDynamic数据
+func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
+	dynamic := TwitterDynamic{}
+
+	// 基本信息
+	dynamic.User = TwitterUser{
+		Name: n.Name,
+		Id:   n.UserInfo.Id,
+	}
+	dynamic.Type = n.Tweet.RtType()
+	dynamic.Content = n.Tweet.Content
+	dynamic.Url = n.Tweet.Url
+	dynamic.ShouldCompact = n.shouldCompact
+	dynamic.CompactKey = n.compactKey
+
+	// 时间处理
+	var createdAt time.Time
+	if n.Tweet.RtType() == RETWEET {
+		createdAt = time.Now().UTC()
+	} else {
+		createdAt = n.Tweet.CreatedAt
+	}
+	dynamic.Date = CSTTime(createdAt).Format(time.DateTime)
+
+	// 媒体处理
+	dynamic.Media = make([]TwitterMedia, 0, len(n.Tweet.Media))
+	for _, media := range n.Tweet.Media {
+		processedUrl := n.processMediaUrl(media.Url, media.Type)
+
+		// 处理媒体文件，下载并保存到本地
+		localPath, err := n.processMediaFile(media)
+		if err != nil {
+			logger.WithField("mediaUrl", media.Url).
+				WithField("mediaType", media.Type).
+				Errorf("processMediaFile failed, will use URL directly: %v", err)
 		}
-	}()
-	m = mmsg.NewMSG()
+
+		mediaBytes, err := os.ReadFile(localPath)
+		if err != nil {
+			logger.WithField("localPath", localPath).
+				Errorf("ReadFile failed: %v", err)
+		}
+
+		dynamic.Media = append(dynamic.Media, TwitterMedia{
+			Type:   media.Type,
+			Url:    processedUrl,
+			Base64: base64.StdEncoding.EncodeToString(mediaBytes),
+		})
+	}
+
+	// 转发信息
+	dynamic.IsRetweet = n.Tweet.IsRetweet
+	if n.Tweet.IsRetweet && n.Tweet.OrgUser != nil {
+		dynamic.Retweet = TwitterRetweet{
+			User: TwitterUser{
+				Name: n.Tweet.OrgUser.Name,
+				Id:   n.Tweet.OrgUser.ScreenName, // UserProfile没有Id字段，使用ScreenName代替
+			},
+			Content: n.Tweet.Content,
+		}
+	}
+
+	// 引用信息
+	dynamic.WithQuote = n.Tweet.QuoteTweet != nil
+	if n.Tweet.QuoteTweet != nil {
+		quote := n.Tweet.QuoteTweet
+		quoteMedia := make([]TwitterMedia, 0, len(quote.Media))
+		for _, media := range quote.Media {
+			processedUrl := n.processMediaUrl(media.Url, media.Type)
+
+			// 处理引用的媒体文件，下载并保存到本地
+			localPath, err := n.processMediaFile(media)
+			if err != nil {
+				logger.WithField("mediaUrl", media.Url).
+					WithField("mediaType", media.Type).
+					Errorf("processMediaFile for quote tweet failed, will use URL directly: %v", err)
+			}
+
+			mediaBytes, err := os.ReadFile(localPath)
+			if err != nil {
+				logger.WithField("localPath", localPath).
+					Errorf("ReadFile failed: %v", err)
+			}
+
+			quoteMedia = append(quoteMedia, TwitterMedia{
+				Type:   media.Type,
+				Url:    processedUrl,
+				Base64: base64.StdEncoding.EncodeToString(mediaBytes),
+			})
+		}
+		dynamic.Quote = TwitterQuote{
+			User: TwitterUser{
+				Name: quote.OrgUser.Name,
+				Id:   quote.OrgUser.ScreenName, // UserProfile没有Id字段，使用ScreenName代替
+			},
+			Content: quote.Content,
+			Media:   quoteMedia,
+			Date:    CSTTime(quote.CreatedAt).Format(time.DateTime),
+		}
+	}
+
+	return dynamic
+}
+
+// processMediaUrl 处理媒体URL，确保返回完整的HTTP URL
+func (n *ConcernNewsNotify) processMediaUrl(mediaUrl string, mediaType string) string {
+	// 如果已经是完整的HTTP URL，直接返回
+	if strings.HasPrefix(mediaUrl, "http://") || strings.HasPrefix(mediaUrl, "https://") {
+		return mediaUrl
+	}
+
+	// 处理URL编码
+	unescape := mediaUrl
+	if isURIEncoded(unescape) {
+		processedUrl, err := processMediaURL(unescape)
+		if err == nil {
+			unescape = processedUrl
+		}
+	}
+
+	// 处理视频URL，特别是包含完整URL的情况
+	// 例如：/video/2C05D02B4228B/https%3A%2F%2Fvideo.twimg.com%2F...
+	if strings.Contains(unescape, "video.twimg.com") {
+		// 提取video.twimg.com及其之后的部分
+		idx := strings.Index(unescape, "video.twimg.com")
+		if idx != -1 {
+			// 直接构造完整的视频URL
+			return fmt.Sprintf("https://%s", unescape[idx:])
+		}
+	}
+
+	// 处理相对路径，根据MirrorHost生成完整URL
+	mirrorHost := n.Tweet.MirrorHost
+	if mirrorHost == "" {
+		// 默认使用Twitter的图片主机
+		mirrorHost = XImgHost
+	}
+
+	// 处理nitter的/pic/代理路径，剔除前缀以便还原
+	if mirrorHost == XImgHost {
+		unescape = strings.TrimLeft(unescape, "/pic/")
+	}
+
+	// 构造完整URL
+	var fullUrl string
+	if mirrorHost == XImgHost {
+		// 如果是Twitter的图片主机，直接使用pbs.twimg.com
+		fullUrl = fmt.Sprintf("https://pbs.twimg.com/%s", unescape)
+	} else {
+		// 其他主机直接拼接
+		fullUrl = fmt.Sprintf("https://%s%s", mirrorHost, unescape)
+	}
+
+	// 规范化媒体URL
+	if mediaType == "image" {
+		fullUrl = NormalizeMediaURLToPBSOrig(fullUrl)
+	}
+
+	return fullUrl
+}
+
+// processMediaFile 处理媒体文件，下载并保存到本地
+func (n *ConcernNewsNotify) processMediaFile(media *Media) (string, error) {
+	// 处理媒体URL，确保是完整的HTTP URL
+	mediaUrl := n.processMediaUrl(media.Url, media.Type)
+
+	var localPath string
+	var err error
+
+	// 根据媒体类型选择不同的处理方式
+	switch media.Type {
+	case "image":
+		// 处理图片文件
+		localPath, err = n.processImageFile(mediaUrl)
+	case "gif":
+		// 处理GIF文件
+		localPath, err = n.processGifFile(mediaUrl)
+	case "video", "video(m3u8)":
+		// 处理视频文件
+		localPath, err = n.processVideoFile(mediaUrl, media.Type)
+	default:
+		// 不支持的媒体类型
+		err = fmt.Errorf("unsupported media type: %s", media.Type)
+	}
+
+	if err != nil {
+		logger.WithField("mediaUrl", mediaUrl).
+			WithField("mediaType", media.Type).
+			Errorf("processMediaFile failed: %v", err)
+		return "", err
+	}
+
+	return localPath, nil
+}
+
+// processImageFile 处理图片文件，下载并保存到本地
+func (n *ConcernNewsNotify) processImageFile(url string) (string, error) {
+	// 规范化图片URL
+	finalURL := NormalizeMediaURLToPBSOrig(url)
+
+	// 尝试下载最佳质量的图片
+	filePath, err := tryDownloadBestImage(finalURL)
+	if err != nil {
+		logger.WithField("url", url).Errorf("tryDownloadBestImage failed: %v", err)
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+// processGifFile 处理GIF文件，下载并保存到本地
+func (n *ConcernNewsNotify) processGifFile(url string) (string, error) {
+	// GIF文件处理逻辑，复用原始代码中的实现
+	// 确保保留动画效果
+	filePath, err := downloadMedia(url, true)
+	if err != nil {
+		logger.WithField("url", url).Errorf("downloadMedia failed: %v", err)
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+// processVideoFile 处理视频文件，下载并保存到本地
+func (n *ConcernNewsNotify) processVideoFile(url string, mediaType string) (string, error) {
+	// 视频文件处理逻辑，复用原始代码中的实现
+	// 支持直接MP4和M3U8格式
+	filePath, err := downloadMedia(url, false)
+	if err != nil {
+		logger.WithField("url", url).
+			WithField("mediaType", mediaType).
+			Errorf("downloadMedia failed: %v", err)
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+// fallbackMSG 模板加载失败时的回退消息生成
+func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
+	m := mmsg.NewMSG()
 	var addedUrl bool
 	if n.shouldCompact {
 		// 先推送了转发，才推送原文
 		// 这种直接放弃，避免二次推送
 		if n.Tweet.OrgUser == nil && n.Tweet.QuoteTweet == nil {
 			logger.Debug("compact notify ignored: already pushed.")
-			m = nil
-			return
+			return nil
 		}
 		// 通过回复之前消息的方式简化推送
 		msg, _ := n.concern.GetNotifyMsg(n.GroupCode, n.compactKey)
@@ -74,7 +354,7 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	} else {
 		// 构造消息
 		if n.Tweet.ID == "" {
-			return
+			return nil
 		}
 		var CreatedAt time.Time
 		if n.Tweet.RtType() == RETWEET {
@@ -114,7 +394,7 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 		}
 		addTweetUrl(m, n.Tweet.Url, &addedUrl)
 	}
-	return
+	return m
 }
 
 func (n *ConcernNewsNotify) IsLive() bool {

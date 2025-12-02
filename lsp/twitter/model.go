@@ -1,18 +1,26 @@
 package twitter
 
 import (
-	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
-	"github.com/sirupsen/logrus"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/sirupsen/logrus"
 )
 
 const MaxLatestWteetIds = 20
 
 type NewsInfo struct {
 	*UserInfo
-	Tweet *Tweet
+	dynamic TwitterDynamic
+	Tweet   *Tweet
+	once    sync.Once
 }
 
 func (e *NewsInfo) Site() string {
@@ -34,6 +42,48 @@ func (e *NewsInfo) Logger() *logrus.Entry {
 		"Uid":  e.GetUid(),
 		"Name": e.UserInfo.Name,
 	})
+}
+
+func (e *NewsInfo) GetMSG(n *ConcernNewsNotify) (m *mmsg.MSG) {
+	defer func() {
+		if err := recover(); err != nil {
+			logger.WithField("stack", string(debug.Stack())).
+				WithField("tweet", n.Tweet).
+				Errorf("concern notify recoverd %v", err)
+		}
+	}()
+
+	e.once.Do(func() {
+		// 构造TwitterDynamic数据
+		e.dynamic = n.buildTwitterDynamic()
+		return
+	})
+	var msg *message.GroupMessage
+	if n.shouldCompact {
+		// 先推送了转发，才推送原文
+		// 这种直接放弃，避免二次推送
+		if n.Tweet.OrgUser == nil && n.Tweet.QuoteTweet == nil {
+			logger.Debug("compact notify ignored: already pushed.")
+		} else {
+			// 通过回复之前消息的方式简化推送
+			msg, _ = n.concern.GetNotifyMsg(n.GroupCode, n.compactKey)
+		}
+	}
+
+	// 使用模板渲染消息
+	var data = map[string]interface{}{
+		"dynamic": e.dynamic,
+		"msg":     msg,
+	}
+
+	var err error
+	m, err = template.LoadAndExec("notify.group.twitter.news.tmpl", data)
+	if err != nil {
+		logger.Errorf("twitter: NewsInfo LoadAndExec error %v", err)
+		// 如果模板加载失败，回退到默认消息
+		m = n.fallbackMSG()
+	}
+	return
 }
 
 type LatestTweetIds struct {
