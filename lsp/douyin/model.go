@@ -2,13 +2,14 @@ package douyin
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
-	"sync"
 )
 
 type UserInfo struct {
@@ -50,8 +51,10 @@ func (u *UserInfo) GetRoomId() string {
 
 type LiveInfo struct {
 	UserInfo
-	IsLiving  bool  `json:"living"`
-	GroupCode int64 `json:"group_code"`
+	IsLiving  bool   `json:"living"`
+	GroupCode int64  `json:"group_code"`
+	Cover     string `json:"cover"`
+	LiveTitle string `json:"live_title"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -100,6 +103,8 @@ func (l *LiveInfo) GetMSG() *mmsg.MSG {
 			"name":       l.NikeName,
 			"roomId":     l.WebRoomId,
 			"living":     l.Living(),
+			"title":      l.LiveTitle,
+			"cover":      l.Cover,
 			"url":        BaseLiveHost + "/" + l.WebRoomId,
 			"group_code": l.GroupCode,
 		}

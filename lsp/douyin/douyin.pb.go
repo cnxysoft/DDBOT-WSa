@@ -105,6 +105,654 @@ func (x *UserPostsResponse) GetLogPb() *UserPostsResponse_LogPb {
 	return nil
 }
 
+// 顶层响应
+type RoomDataResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          *RoomData              `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Extra         *Extra                 `protobuf:"bytes,2,opt,name=extra,proto3" json:"extra,omitempty"`
+	StatusCode    int32                  `protobuf:"varint,3,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoomDataResponse) Reset() {
+	*x = RoomDataResponse{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoomDataResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoomDataResponse) ProtoMessage() {}
+
+func (x *RoomDataResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoomDataResponse.ProtoReflect.Descriptor instead.
+func (*RoomDataResponse) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RoomDataResponse) GetData() *RoomData {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *RoomDataResponse) GetExtra() *Extra {
+	if x != nil {
+		return x.Extra
+	}
+	return nil
+}
+
+func (x *RoomDataResponse) GetStatusCode() int32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+type Extra struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Now           int64                  `protobuf:"varint,1,opt,name=now,proto3" json:"now,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Extra) Reset() {
+	*x = Extra{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Extra) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Extra) ProtoMessage() {}
+
+func (x *Extra) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Extra.ProtoReflect.Descriptor instead.
+func (*Extra) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Extra) GetNow() int64 {
+	if x != nil {
+		return x.Now
+	}
+	return 0
+}
+
+type RoomData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []*Room                `protobuf:"bytes,1,rep,name=data,proto3" json:"data,omitempty"` // 对应原 JSON 的 data.data
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoomData) Reset() {
+	*x = RoomData{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoomData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoomData) ProtoMessage() {}
+
+func (x *RoomData) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoomData.ProtoReflect.Descriptor instead.
+func (*RoomData) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RoomData) GetData() []*Room {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// 直播间（用于推送展示的最小且直观字段）
+type Room struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	IdStr            string                 `protobuf:"bytes,1,opt,name=id_str,json=idStr,proto3" json:"id_str,omitempty"`                                      // 房间 id
+	Status           int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`                                                // 房间状态
+	StatusStr        string                 `protobuf:"bytes,3,opt,name=status_str,json=statusStr,proto3" json:"status_str,omitempty"`                          // 状态字符串
+	Title            string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`                                                   // 房间标题
+	UserCountStr     string                 `protobuf:"bytes,5,opt,name=user_count_str,json=userCountStr,proto3" json:"user_count_str,omitempty"`               // 在线人数字符串（展示用）
+	Stats            *Stats                 `protobuf:"bytes,6,opt,name=stats,proto3" json:"stats,omitempty"`                                                   // 统计信息
+	Cover            *Cover                 `protobuf:"bytes,7,opt,name=cover,proto3" json:"cover,omitempty"`                                                   // 封面图
+	StreamUrl        *StreamURL             `protobuf:"bytes,8,opt,name=stream_url,json=streamUrl,proto3" json:"stream_url,omitempty"`                          // 拉流地址（FLV/HLS）
+	Owner            *Owner                 `protobuf:"bytes,9,opt,name=owner,proto3" json:"owner,omitempty"`                                                   // 主播信息
+	RoomViewStats    *RoomViewStats         `protobuf:"bytes,10,opt,name=room_view_stats,json=roomViewStats,proto3" json:"room_view_stats,omitempty"`           // 展示用的观众显示文本
+	HasCommerceGoods bool                   `protobuf:"varint,11,opt,name=has_commerce_goods,json=hasCommerceGoods,proto3" json:"has_commerce_goods,omitempty"` // 是否有商品（可用于展示角标）
+	ShortDesc        string                 `protobuf:"bytes,12,opt,name=short_desc,json=shortDesc,proto3" json:"short_desc,omitempty"`                         // 简短描述或摘要（如存在）
+	// 预留原始 stream_data（有时为转义 JSON），便于后续解析
+	RawStreamData string `protobuf:"bytes,100,opt,name=raw_stream_data,json=rawStreamData,proto3" json:"raw_stream_data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Room) Reset() {
+	*x = Room{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Room) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Room) ProtoMessage() {}
+
+func (x *Room) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Room.ProtoReflect.Descriptor instead.
+func (*Room) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Room) GetIdStr() string {
+	if x != nil {
+		return x.IdStr
+	}
+	return ""
+}
+
+func (x *Room) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *Room) GetStatusStr() string {
+	if x != nil {
+		return x.StatusStr
+	}
+	return ""
+}
+
+func (x *Room) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *Room) GetUserCountStr() string {
+	if x != nil {
+		return x.UserCountStr
+	}
+	return ""
+}
+
+func (x *Room) GetStats() *Stats {
+	if x != nil {
+		return x.Stats
+	}
+	return nil
+}
+
+func (x *Room) GetCover() *Cover {
+	if x != nil {
+		return x.Cover
+	}
+	return nil
+}
+
+func (x *Room) GetStreamUrl() *StreamURL {
+	if x != nil {
+		return x.StreamUrl
+	}
+	return nil
+}
+
+func (x *Room) GetOwner() *Owner {
+	if x != nil {
+		return x.Owner
+	}
+	return nil
+}
+
+func (x *Room) GetRoomViewStats() *RoomViewStats {
+	if x != nil {
+		return x.RoomViewStats
+	}
+	return nil
+}
+
+func (x *Room) GetHasCommerceGoods() bool {
+	if x != nil {
+		return x.HasCommerceGoods
+	}
+	return false
+}
+
+func (x *Room) GetShortDesc() string {
+	if x != nil {
+		return x.ShortDesc
+	}
+	return ""
+}
+
+func (x *Room) GetRawStreamData() string {
+	if x != nil {
+		return x.RawStreamData
+	}
+	return ""
+}
+
+// 封面
+type Cover struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UrlList       []string               `protobuf:"bytes,1,rep,name=url_list,json=urlList,proto3" json:"url_list,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Cover) Reset() {
+	*x = Cover{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Cover) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Cover) ProtoMessage() {}
+
+func (x *Cover) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Cover.ProtoReflect.Descriptor instead.
+func (*Cover) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Cover) GetUrlList() []string {
+	if x != nil {
+		return x.UrlList
+	}
+	return nil
+}
+
+// 拉流地址
+type StreamURL struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	FlvPullUrl        map[string]string      `protobuf:"bytes,1,rep,name=flv_pull_url,json=flvPullUrl,proto3" json:"flv_pull_url,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`            // e.g. "HD1": "http://..."
+	HlsPullUrlMap     map[string]string      `protobuf:"bytes,2,rep,name=hls_pull_url_map,json=hlsPullUrlMap,proto3" json:"hls_pull_url_map,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // e.g. "HD1": "http://.../playlist.m3u8"
+	HlsPullUrl        string                 `protobuf:"bytes,3,opt,name=hls_pull_url,json=hlsPullUrl,proto3" json:"hls_pull_url,omitempty"`                                                                                      // 默认 hls 地址
+	DefaultResolution string                 `protobuf:"bytes,4,opt,name=default_resolution,json=defaultResolution,proto3" json:"default_resolution,omitempty"`                                                                   // 默认分辨率键
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *StreamURL) Reset() {
+	*x = StreamURL{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamURL) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamURL) ProtoMessage() {}
+
+func (x *StreamURL) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamURL.ProtoReflect.Descriptor instead.
+func (*StreamURL) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *StreamURL) GetFlvPullUrl() map[string]string {
+	if x != nil {
+		return x.FlvPullUrl
+	}
+	return nil
+}
+
+func (x *StreamURL) GetHlsPullUrlMap() map[string]string {
+	if x != nil {
+		return x.HlsPullUrlMap
+	}
+	return nil
+}
+
+func (x *StreamURL) GetHlsPullUrl() string {
+	if x != nil {
+		return x.HlsPullUrl
+	}
+	return ""
+}
+
+func (x *StreamURL) GetDefaultResolution() string {
+	if x != nil {
+		return x.DefaultResolution
+	}
+	return ""
+}
+
+// 主播信息
+type Owner struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IdStr         string                 `protobuf:"bytes,1,opt,name=id_str,json=idStr,proto3" json:"id_str,omitempty"`
+	SecUid        string                 `protobuf:"bytes,2,opt,name=sec_uid,json=secUid,proto3" json:"sec_uid,omitempty"`
+	Nickname      string                 `protobuf:"bytes,3,opt,name=nickname,proto3" json:"nickname,omitempty"`
+	AvatarThumb   *Avatar                `protobuf:"bytes,4,opt,name=avatar_thumb,json=avatarThumb,proto3" json:"avatar_thumb,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Owner) Reset() {
+	*x = Owner{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Owner) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Owner) ProtoMessage() {}
+
+func (x *Owner) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Owner.ProtoReflect.Descriptor instead.
+func (*Owner) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Owner) GetIdStr() string {
+	if x != nil {
+		return x.IdStr
+	}
+	return ""
+}
+
+func (x *Owner) GetSecUid() string {
+	if x != nil {
+		return x.SecUid
+	}
+	return ""
+}
+
+func (x *Owner) GetNickname() string {
+	if x != nil {
+		return x.Nickname
+	}
+	return ""
+}
+
+func (x *Owner) GetAvatarThumb() *Avatar {
+	if x != nil {
+		return x.AvatarThumb
+	}
+	return nil
+}
+
+type Avatar struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UrlList       []string               `protobuf:"bytes,1,rep,name=url_list,json=urlList,proto3" json:"url_list,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Avatar) Reset() {
+	*x = Avatar{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Avatar) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Avatar) ProtoMessage() {}
+
+func (x *Avatar) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Avatar.ProtoReflect.Descriptor instead.
+func (*Avatar) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Avatar) GetUrlList() []string {
+	if x != nil {
+		return x.UrlList
+	}
+	return nil
+}
+
+// 统计信息（展示用）
+type Stats struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TotalUserStr  string                 `protobuf:"bytes,1,opt,name=total_user_str,json=totalUserStr,proto3" json:"total_user_str,omitempty"` // 累计观看或类似展示
+	UserCountStr  string                 `protobuf:"bytes,2,opt,name=user_count_str,json=userCountStr,proto3" json:"user_count_str,omitempty"` // 当前在线（重复但便于直接取）
+	LikeCount     int64                  `protobuf:"varint,3,opt,name=like_count,json=likeCount,proto3" json:"like_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Stats) Reset() {
+	*x = Stats{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Stats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Stats) ProtoMessage() {}
+
+func (x *Stats) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Stats.ProtoReflect.Descriptor instead.
+func (*Stats) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *Stats) GetTotalUserStr() string {
+	if x != nil {
+		return x.TotalUserStr
+	}
+	return ""
+}
+
+func (x *Stats) GetUserCountStr() string {
+	if x != nil {
+		return x.UserCountStr
+	}
+	return ""
+}
+
+func (x *Stats) GetLikeCount() int64 {
+	if x != nil {
+		return x.LikeCount
+	}
+	return 0
+}
+
+// 房间展示统计
+type RoomViewStats struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DisplayShort  string                 `protobuf:"bytes,1,opt,name=display_short,json=displayShort,proto3" json:"display_short,omitempty"`
+	DisplayMiddle string                 `protobuf:"bytes,2,opt,name=display_middle,json=displayMiddle,proto3" json:"display_middle,omitempty"`
+	DisplayLong   string                 `protobuf:"bytes,3,opt,name=display_long,json=displayLong,proto3" json:"display_long,omitempty"`
+	DisplayValue  int32                  `protobuf:"varint,4,opt,name=display_value,json=displayValue,proto3" json:"display_value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RoomViewStats) Reset() {
+	*x = RoomViewStats{}
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RoomViewStats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RoomViewStats) ProtoMessage() {}
+
+func (x *RoomViewStats) ProtoReflect() protoreflect.Message {
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RoomViewStats.ProtoReflect.Descriptor instead.
+func (*RoomViewStats) Descriptor() ([]byte, []int) {
+	return file_lsp_douyin_douyin_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RoomViewStats) GetDisplayShort() string {
+	if x != nil {
+		return x.DisplayShort
+	}
+	return ""
+}
+
+func (x *RoomViewStats) GetDisplayMiddle() string {
+	if x != nil {
+		return x.DisplayMiddle
+	}
+	return ""
+}
+
+func (x *RoomViewStats) GetDisplayLong() string {
+	if x != nil {
+		return x.DisplayLong
+	}
+	return ""
+}
+
+func (x *RoomViewStats) GetDisplayValue() int32 {
+	if x != nil {
+		return x.DisplayValue
+	}
+	return 0
+}
+
 // 作者信息
 type UserPostsResponse_Author struct {
 	state         protoimpl.MessageState         `protogen:"open.v1"`
@@ -118,7 +766,7 @@ type UserPostsResponse_Author struct {
 
 func (x *UserPostsResponse_Author) Reset() {
 	*x = UserPostsResponse_Author{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[1]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -130,7 +778,7 @@ func (x *UserPostsResponse_Author) String() string {
 func (*UserPostsResponse_Author) ProtoMessage() {}
 
 func (x *UserPostsResponse_Author) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[1]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -187,7 +835,7 @@ type UserPostsResponse_AvatarThumb struct {
 
 func (x *UserPostsResponse_AvatarThumb) Reset() {
 	*x = UserPostsResponse_AvatarThumb{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[2]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -199,7 +847,7 @@ func (x *UserPostsResponse_AvatarThumb) String() string {
 func (*UserPostsResponse_AvatarThumb) ProtoMessage() {}
 
 func (x *UserPostsResponse_AvatarThumb) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[2]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -262,7 +910,7 @@ type UserPostsResponse_Music struct {
 
 func (x *UserPostsResponse_Music) Reset() {
 	*x = UserPostsResponse_Music{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[3]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -274,7 +922,7 @@ func (x *UserPostsResponse_Music) String() string {
 func (*UserPostsResponse_Music) ProtoMessage() {}
 
 func (x *UserPostsResponse_Music) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[3]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -373,7 +1021,7 @@ type UserPostsResponse_CoverThumb struct {
 
 func (x *UserPostsResponse_CoverThumb) Reset() {
 	*x = UserPostsResponse_CoverThumb{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[4]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +1033,7 @@ func (x *UserPostsResponse_CoverThumb) String() string {
 func (*UserPostsResponse_CoverThumb) ProtoMessage() {}
 
 func (x *UserPostsResponse_CoverThumb) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[4]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -443,7 +1091,7 @@ type UserPostsResponse_PlayUrl struct {
 
 func (x *UserPostsResponse_PlayUrl) Reset() {
 	*x = UserPostsResponse_PlayUrl{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[5]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -455,7 +1103,7 @@ func (x *UserPostsResponse_PlayUrl) String() string {
 func (*UserPostsResponse_PlayUrl) ProtoMessage() {}
 
 func (x *UserPostsResponse_PlayUrl) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[5]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -523,7 +1171,7 @@ type UserPostsResponse_Video struct {
 
 func (x *UserPostsResponse_Video) Reset() {
 	*x = UserPostsResponse_Video{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[6]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +1183,7 @@ func (x *UserPostsResponse_Video) String() string {
 func (*UserPostsResponse_Video) ProtoMessage() {}
 
 func (x *UserPostsResponse_Video) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[6]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -623,7 +1271,7 @@ type UserPostsResponse_PlayAddr struct {
 
 func (x *UserPostsResponse_PlayAddr) Reset() {
 	*x = UserPostsResponse_PlayAddr{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[7]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -635,7 +1283,7 @@ func (x *UserPostsResponse_PlayAddr) String() string {
 func (*UserPostsResponse_PlayAddr) ProtoMessage() {}
 
 func (x *UserPostsResponse_PlayAddr) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[7]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +1361,7 @@ type UserPostsResponse_Cover struct {
 
 func (x *UserPostsResponse_Cover) Reset() {
 	*x = UserPostsResponse_Cover{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[8]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -725,7 +1373,7 @@ func (x *UserPostsResponse_Cover) String() string {
 func (*UserPostsResponse_Cover) ProtoMessage() {}
 
 func (x *UserPostsResponse_Cover) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[8]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -782,7 +1430,7 @@ type UserPostsResponse_DynamicCover struct {
 
 func (x *UserPostsResponse_DynamicCover) Reset() {
 	*x = UserPostsResponse_DynamicCover{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[9]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +1442,7 @@ func (x *UserPostsResponse_DynamicCover) String() string {
 func (*UserPostsResponse_DynamicCover) ProtoMessage() {}
 
 func (x *UserPostsResponse_DynamicCover) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[9]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -851,7 +1499,7 @@ type UserPostsResponse_OriginCover struct {
 
 func (x *UserPostsResponse_OriginCover) Reset() {
 	*x = UserPostsResponse_OriginCover{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[10]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -863,7 +1511,7 @@ func (x *UserPostsResponse_OriginCover) String() string {
 func (*UserPostsResponse_OriginCover) ProtoMessage() {}
 
 func (x *UserPostsResponse_OriginCover) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[10]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -921,7 +1569,7 @@ type UserPostsResponse_Statistics struct {
 
 func (x *UserPostsResponse_Statistics) Reset() {
 	*x = UserPostsResponse_Statistics{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[11]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -933,7 +1581,7 @@ func (x *UserPostsResponse_Statistics) String() string {
 func (*UserPostsResponse_Statistics) ProtoMessage() {}
 
 func (x *UserPostsResponse_Statistics) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[11]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -997,7 +1645,7 @@ type UserPostsResponse_Status struct {
 
 func (x *UserPostsResponse_Status) Reset() {
 	*x = UserPostsResponse_Status{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[12]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1009,7 +1657,7 @@ func (x *UserPostsResponse_Status) String() string {
 func (*UserPostsResponse_Status) ProtoMessage() {}
 
 func (x *UserPostsResponse_Status) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[12]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1063,7 +1711,7 @@ type UserPostsResponse_ReviewResult struct {
 
 func (x *UserPostsResponse_ReviewResult) Reset() {
 	*x = UserPostsResponse_ReviewResult{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[13]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1723,7 @@ func (x *UserPostsResponse_ReviewResult) String() string {
 func (*UserPostsResponse_ReviewResult) ProtoMessage() {}
 
 func (x *UserPostsResponse_ReviewResult) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[13]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1767,7 @@ type UserPostsResponse_AwemeList struct {
 
 func (x *UserPostsResponse_AwemeList) Reset() {
 	*x = UserPostsResponse_AwemeList{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[14]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1131,7 +1779,7 @@ func (x *UserPostsResponse_AwemeList) String() string {
 func (*UserPostsResponse_AwemeList) ProtoMessage() {}
 
 func (x *UserPostsResponse_AwemeList) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[14]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1240,7 +1888,7 @@ type UserPostsResponse_LogPb struct {
 
 func (x *UserPostsResponse_LogPb) Reset() {
 	*x = UserPostsResponse_LogPb{}
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[15]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1252,7 +1900,7 @@ func (x *UserPostsResponse_LogPb) String() string {
 func (*UserPostsResponse_LogPb) ProtoMessage() {}
 
 func (x *UserPostsResponse_LogPb) ProtoReflect() protoreflect.Message {
-	mi := &file_lsp_douyin_douyin_proto_msgTypes[15]
+	mi := &file_lsp_douyin_douyin_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1464,8 +2112,105 @@ var file_lsp_douyin_douyin_proto_rawDesc = []byte{
 	0x18, 0x16, 0x20, 0x01, 0x28, 0x05, 0x52, 0x09, 0x61, 0x77, 0x65, 0x6d, 0x65, 0x54, 0x79, 0x70,
 	0x65, 0x1a, 0x20, 0x0a, 0x05, 0x4c, 0x6f, 0x67, 0x50, 0x62, 0x12, 0x17, 0x0a, 0x07, 0x69, 0x6d,
 	0x70, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x69, 0x6d, 0x70,
-	0x72, 0x49, 0x64, 0x42, 0x0c, 0x5a, 0x0a, 0x6c, 0x73, 0x70, 0x2f, 0x64, 0x6f, 0x75, 0x79, 0x69,
-	0x6e, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x72, 0x49, 0x64, 0x22, 0x7e, 0x0a, 0x10, 0x52, 0x6f, 0x6f, 0x6d, 0x44, 0x61, 0x74, 0x61, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x24, 0x0a, 0x04, 0x64, 0x61, 0x74, 0x61, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x52,
+	0x6f, 0x6f, 0x6d, 0x44, 0x61, 0x74, 0x61, 0x52, 0x04, 0x64, 0x61, 0x74, 0x61, 0x12, 0x23, 0x0a,
+	0x05, 0x65, 0x78, 0x74, 0x72, 0x61, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0d, 0x2e, 0x64,
+	0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x45, 0x78, 0x74, 0x72, 0x61, 0x52, 0x05, 0x65, 0x78, 0x74,
+	0x72, 0x61, 0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x5f, 0x63, 0x6f, 0x64,
+	0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0a, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x43,
+	0x6f, 0x64, 0x65, 0x22, 0x19, 0x0a, 0x05, 0x45, 0x78, 0x74, 0x72, 0x61, 0x12, 0x10, 0x0a, 0x03,
+	0x6e, 0x6f, 0x77, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x03, 0x6e, 0x6f, 0x77, 0x22, 0x2c,
+	0x0a, 0x08, 0x52, 0x6f, 0x6f, 0x6d, 0x44, 0x61, 0x74, 0x61, 0x12, 0x20, 0x0a, 0x04, 0x64, 0x61,
+	0x74, 0x61, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x0c, 0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69,
+	0x6e, 0x2e, 0x52, 0x6f, 0x6f, 0x6d, 0x52, 0x04, 0x64, 0x61, 0x74, 0x61, 0x22, 0xe5, 0x03, 0x0a,
+	0x04, 0x52, 0x6f, 0x6f, 0x6d, 0x12, 0x15, 0x0a, 0x06, 0x69, 0x64, 0x5f, 0x73, 0x74, 0x72, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x69, 0x64, 0x53, 0x74, 0x72, 0x12, 0x16, 0x0a, 0x06,
+	0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x52, 0x06, 0x73, 0x74,
+	0x61, 0x74, 0x75, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x5f, 0x73,
+	0x74, 0x72, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73,
+	0x53, 0x74, 0x72, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x18, 0x04, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x12, 0x24, 0x0a, 0x0e, 0x75, 0x73, 0x65,
+	0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x73, 0x74, 0x72, 0x18, 0x05, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x0c, 0x75, 0x73, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x53, 0x74, 0x72, 0x12,
+	0x23, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x73, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0d,
+	0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x53, 0x74, 0x61, 0x74, 0x73, 0x52, 0x05, 0x73,
+	0x74, 0x61, 0x74, 0x73, 0x12, 0x23, 0x0a, 0x05, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x18, 0x07, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x0d, 0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x43, 0x6f, 0x76,
+	0x65, 0x72, 0x52, 0x05, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x12, 0x30, 0x0a, 0x0a, 0x73, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x08, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x11, 0x2e,
+	0x64, 0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x55, 0x52, 0x4c,
+	0x52, 0x09, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x55, 0x72, 0x6c, 0x12, 0x23, 0x0a, 0x05, 0x6f,
+	0x77, 0x6e, 0x65, 0x72, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0d, 0x2e, 0x64, 0x6f, 0x75,
+	0x79, 0x69, 0x6e, 0x2e, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x52, 0x05, 0x6f, 0x77, 0x6e, 0x65, 0x72,
+	0x12, 0x3d, 0x0a, 0x0f, 0x72, 0x6f, 0x6f, 0x6d, 0x5f, 0x76, 0x69, 0x65, 0x77, 0x5f, 0x73, 0x74,
+	0x61, 0x74, 0x73, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x15, 0x2e, 0x64, 0x6f, 0x75, 0x79,
+	0x69, 0x6e, 0x2e, 0x52, 0x6f, 0x6f, 0x6d, 0x56, 0x69, 0x65, 0x77, 0x53, 0x74, 0x61, 0x74, 0x73,
+	0x52, 0x0d, 0x72, 0x6f, 0x6f, 0x6d, 0x56, 0x69, 0x65, 0x77, 0x53, 0x74, 0x61, 0x74, 0x73, 0x12,
+	0x2c, 0x0a, 0x12, 0x68, 0x61, 0x73, 0x5f, 0x63, 0x6f, 0x6d, 0x6d, 0x65, 0x72, 0x63, 0x65, 0x5f,
+	0x67, 0x6f, 0x6f, 0x64, 0x73, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x08, 0x52, 0x10, 0x68, 0x61, 0x73,
+	0x43, 0x6f, 0x6d, 0x6d, 0x65, 0x72, 0x63, 0x65, 0x47, 0x6f, 0x6f, 0x64, 0x73, 0x12, 0x1d, 0x0a,
+	0x0a, 0x73, 0x68, 0x6f, 0x72, 0x74, 0x5f, 0x64, 0x65, 0x73, 0x63, 0x18, 0x0c, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x09, 0x73, 0x68, 0x6f, 0x72, 0x74, 0x44, 0x65, 0x73, 0x63, 0x12, 0x26, 0x0a, 0x0f,
+	0x72, 0x61, 0x77, 0x5f, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x18,
+	0x64, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x72, 0x61, 0x77, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x44, 0x61, 0x74, 0x61, 0x22, 0x22, 0x0a, 0x05, 0x43, 0x6f, 0x76, 0x65, 0x72, 0x12, 0x19, 0x0a,
+	0x08, 0x75, 0x72, 0x6c, 0x5f, 0x6c, 0x69, 0x73, 0x74, 0x18, 0x01, 0x20, 0x03, 0x28, 0x09, 0x52,
+	0x07, 0x75, 0x72, 0x6c, 0x4c, 0x69, 0x73, 0x74, 0x22, 0xf1, 0x02, 0x0a, 0x09, 0x53, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x55, 0x52, 0x4c, 0x12, 0x43, 0x0a, 0x0c, 0x66, 0x6c, 0x76, 0x5f, 0x70, 0x75,
+	0x6c, 0x6c, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x64,
+	0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x55, 0x52, 0x4c, 0x2e,
+	0x46, 0x6c, 0x76, 0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52,
+	0x0a, 0x66, 0x6c, 0x76, 0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x12, 0x4d, 0x0a, 0x10, 0x68,
+	0x6c, 0x73, 0x5f, 0x70, 0x75, 0x6c, 0x6c, 0x5f, 0x75, 0x72, 0x6c, 0x5f, 0x6d, 0x61, 0x70, 0x18,
+	0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69, 0x6e, 0x2e, 0x53,
+	0x74, 0x72, 0x65, 0x61, 0x6d, 0x55, 0x52, 0x4c, 0x2e, 0x48, 0x6c, 0x73, 0x50, 0x75, 0x6c, 0x6c,
+	0x55, 0x72, 0x6c, 0x4d, 0x61, 0x70, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x0d, 0x68, 0x6c, 0x73,
+	0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x4d, 0x61, 0x70, 0x12, 0x20, 0x0a, 0x0c, 0x68, 0x6c,
+	0x73, 0x5f, 0x70, 0x75, 0x6c, 0x6c, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x0a, 0x68, 0x6c, 0x73, 0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x12, 0x2d, 0x0a, 0x12,
+	0x64, 0x65, 0x66, 0x61, 0x75, 0x6c, 0x74, 0x5f, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x75, 0x74, 0x69,
+	0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x11, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c,
+	0x74, 0x52, 0x65, 0x73, 0x6f, 0x6c, 0x75, 0x74, 0x69, 0x6f, 0x6e, 0x1a, 0x3d, 0x0a, 0x0f, 0x46,
+	0x6c, 0x76, 0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x10,
+	0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79,
+	0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x1a, 0x40, 0x0a, 0x12, 0x48, 0x6c,
+	0x73, 0x50, 0x75, 0x6c, 0x6c, 0x55, 0x72, 0x6c, 0x4d, 0x61, 0x70, 0x45, 0x6e, 0x74, 0x72, 0x79,
+	0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03, 0x6b,
+	0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x22, 0x86, 0x01, 0x0a,
+	0x05, 0x4f, 0x77, 0x6e, 0x65, 0x72, 0x12, 0x15, 0x0a, 0x06, 0x69, 0x64, 0x5f, 0x73, 0x74, 0x72,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x69, 0x64, 0x53, 0x74, 0x72, 0x12, 0x17, 0x0a,
+	0x07, 0x73, 0x65, 0x63, 0x5f, 0x75, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06,
+	0x73, 0x65, 0x63, 0x55, 0x69, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x6e, 0x69, 0x63, 0x6b, 0x6e, 0x61,
+	0x6d, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6e, 0x69, 0x63, 0x6b, 0x6e, 0x61,
+	0x6d, 0x65, 0x12, 0x31, 0x0a, 0x0c, 0x61, 0x76, 0x61, 0x74, 0x61, 0x72, 0x5f, 0x74, 0x68, 0x75,
+	0x6d, 0x62, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0e, 0x2e, 0x64, 0x6f, 0x75, 0x79, 0x69,
+	0x6e, 0x2e, 0x41, 0x76, 0x61, 0x74, 0x61, 0x72, 0x52, 0x0b, 0x61, 0x76, 0x61, 0x74, 0x61, 0x72,
+	0x54, 0x68, 0x75, 0x6d, 0x62, 0x22, 0x23, 0x0a, 0x06, 0x41, 0x76, 0x61, 0x74, 0x61, 0x72, 0x12,
+	0x19, 0x0a, 0x08, 0x75, 0x72, 0x6c, 0x5f, 0x6c, 0x69, 0x73, 0x74, 0x18, 0x01, 0x20, 0x03, 0x28,
+	0x09, 0x52, 0x07, 0x75, 0x72, 0x6c, 0x4c, 0x69, 0x73, 0x74, 0x22, 0x72, 0x0a, 0x05, 0x53, 0x74,
+	0x61, 0x74, 0x73, 0x12, 0x24, 0x0a, 0x0e, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x5f, 0x75, 0x73, 0x65,
+	0x72, 0x5f, 0x73, 0x74, 0x72, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x74, 0x6f, 0x74,
+	0x61, 0x6c, 0x55, 0x73, 0x65, 0x72, 0x53, 0x74, 0x72, 0x12, 0x24, 0x0a, 0x0e, 0x75, 0x73, 0x65,
+	0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x73, 0x74, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x0c, 0x75, 0x73, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x53, 0x74, 0x72, 0x12,
+	0x1d, 0x0a, 0x0a, 0x6c, 0x69, 0x6b, 0x65, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x03, 0x20,
+	0x01, 0x28, 0x03, 0x52, 0x09, 0x6c, 0x69, 0x6b, 0x65, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x22, 0xa3,
+	0x01, 0x0a, 0x0d, 0x52, 0x6f, 0x6f, 0x6d, 0x56, 0x69, 0x65, 0x77, 0x53, 0x74, 0x61, 0x74, 0x73,
+	0x12, 0x23, 0x0a, 0x0d, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x5f, 0x73, 0x68, 0x6f, 0x72,
+	0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79,
+	0x53, 0x68, 0x6f, 0x72, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79,
+	0x5f, 0x6d, 0x69, 0x64, 0x64, 0x6c, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x64,
+	0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x4d, 0x69, 0x64, 0x64, 0x6c, 0x65, 0x12, 0x21, 0x0a, 0x0c,
+	0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x5f, 0x6c, 0x6f, 0x6e, 0x67, 0x18, 0x03, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x4c, 0x6f, 0x6e, 0x67, 0x12,
+	0x23, 0x0a, 0x0d, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x5f, 0x76, 0x61, 0x6c, 0x75, 0x65,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0c, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x56,
+	0x61, 0x6c, 0x75, 0x65, 0x42, 0x0c, 0x5a, 0x0a, 0x6c, 0x73, 0x70, 0x2f, 0x64, 0x6f, 0x75, 0x79,
+	0x69, 0x6e, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1480,46 +2225,69 @@ func file_lsp_douyin_douyin_proto_rawDescGZIP() []byte {
 	return file_lsp_douyin_douyin_proto_rawDescData
 }
 
-var file_lsp_douyin_douyin_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_lsp_douyin_douyin_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_lsp_douyin_douyin_proto_goTypes = []any{
 	(*UserPostsResponse)(nil),              // 0: douyin.UserPostsResponse
-	(*UserPostsResponse_Author)(nil),       // 1: douyin.UserPostsResponse.Author
-	(*UserPostsResponse_AvatarThumb)(nil),  // 2: douyin.UserPostsResponse.AvatarThumb
-	(*UserPostsResponse_Music)(nil),        // 3: douyin.UserPostsResponse.Music
-	(*UserPostsResponse_CoverThumb)(nil),   // 4: douyin.UserPostsResponse.CoverThumb
-	(*UserPostsResponse_PlayUrl)(nil),      // 5: douyin.UserPostsResponse.PlayUrl
-	(*UserPostsResponse_Video)(nil),        // 6: douyin.UserPostsResponse.Video
-	(*UserPostsResponse_PlayAddr)(nil),     // 7: douyin.UserPostsResponse.PlayAddr
-	(*UserPostsResponse_Cover)(nil),        // 8: douyin.UserPostsResponse.Cover
-	(*UserPostsResponse_DynamicCover)(nil), // 9: douyin.UserPostsResponse.DynamicCover
-	(*UserPostsResponse_OriginCover)(nil),  // 10: douyin.UserPostsResponse.OriginCover
-	(*UserPostsResponse_Statistics)(nil),   // 11: douyin.UserPostsResponse.Statistics
-	(*UserPostsResponse_Status)(nil),       // 12: douyin.UserPostsResponse.Status
-	(*UserPostsResponse_ReviewResult)(nil), // 13: douyin.UserPostsResponse.ReviewResult
-	(*UserPostsResponse_AwemeList)(nil),    // 14: douyin.UserPostsResponse.AwemeList
-	(*UserPostsResponse_LogPb)(nil),        // 15: douyin.UserPostsResponse.LogPb
+	(*RoomDataResponse)(nil),               // 1: douyin.RoomDataResponse
+	(*Extra)(nil),                          // 2: douyin.Extra
+	(*RoomData)(nil),                       // 3: douyin.RoomData
+	(*Room)(nil),                           // 4: douyin.Room
+	(*Cover)(nil),                          // 5: douyin.Cover
+	(*StreamURL)(nil),                      // 6: douyin.StreamURL
+	(*Owner)(nil),                          // 7: douyin.Owner
+	(*Avatar)(nil),                         // 8: douyin.Avatar
+	(*Stats)(nil),                          // 9: douyin.Stats
+	(*RoomViewStats)(nil),                  // 10: douyin.RoomViewStats
+	(*UserPostsResponse_Author)(nil),       // 11: douyin.UserPostsResponse.Author
+	(*UserPostsResponse_AvatarThumb)(nil),  // 12: douyin.UserPostsResponse.AvatarThumb
+	(*UserPostsResponse_Music)(nil),        // 13: douyin.UserPostsResponse.Music
+	(*UserPostsResponse_CoverThumb)(nil),   // 14: douyin.UserPostsResponse.CoverThumb
+	(*UserPostsResponse_PlayUrl)(nil),      // 15: douyin.UserPostsResponse.PlayUrl
+	(*UserPostsResponse_Video)(nil),        // 16: douyin.UserPostsResponse.Video
+	(*UserPostsResponse_PlayAddr)(nil),     // 17: douyin.UserPostsResponse.PlayAddr
+	(*UserPostsResponse_Cover)(nil),        // 18: douyin.UserPostsResponse.Cover
+	(*UserPostsResponse_DynamicCover)(nil), // 19: douyin.UserPostsResponse.DynamicCover
+	(*UserPostsResponse_OriginCover)(nil),  // 20: douyin.UserPostsResponse.OriginCover
+	(*UserPostsResponse_Statistics)(nil),   // 21: douyin.UserPostsResponse.Statistics
+	(*UserPostsResponse_Status)(nil),       // 22: douyin.UserPostsResponse.Status
+	(*UserPostsResponse_ReviewResult)(nil), // 23: douyin.UserPostsResponse.ReviewResult
+	(*UserPostsResponse_AwemeList)(nil),    // 24: douyin.UserPostsResponse.AwemeList
+	(*UserPostsResponse_LogPb)(nil),        // 25: douyin.UserPostsResponse.LogPb
+	nil,                                    // 26: douyin.StreamURL.FlvPullUrlEntry
+	nil,                                    // 27: douyin.StreamURL.HlsPullUrlMapEntry
 }
 var file_lsp_douyin_douyin_proto_depIdxs = []int32{
-	14, // 0: douyin.UserPostsResponse.aweme_list:type_name -> douyin.UserPostsResponse.AwemeList
-	15, // 1: douyin.UserPostsResponse.log_pb:type_name -> douyin.UserPostsResponse.LogPb
-	2,  // 2: douyin.UserPostsResponse.Author.avatar_thumb:type_name -> douyin.UserPostsResponse.AvatarThumb
-	4,  // 3: douyin.UserPostsResponse.Music.cover_thumb:type_name -> douyin.UserPostsResponse.CoverThumb
-	5,  // 4: douyin.UserPostsResponse.Music.play_url:type_name -> douyin.UserPostsResponse.PlayUrl
-	7,  // 5: douyin.UserPostsResponse.Video.play_addr:type_name -> douyin.UserPostsResponse.PlayAddr
-	8,  // 6: douyin.UserPostsResponse.Video.cover:type_name -> douyin.UserPostsResponse.Cover
-	9,  // 7: douyin.UserPostsResponse.Video.dynamic_cover:type_name -> douyin.UserPostsResponse.DynamicCover
-	10, // 8: douyin.UserPostsResponse.Video.origin_cover:type_name -> douyin.UserPostsResponse.OriginCover
-	13, // 9: douyin.UserPostsResponse.Status.review_result:type_name -> douyin.UserPostsResponse.ReviewResult
-	1,  // 10: douyin.UserPostsResponse.AwemeList.author:type_name -> douyin.UserPostsResponse.Author
-	3,  // 11: douyin.UserPostsResponse.AwemeList.music:type_name -> douyin.UserPostsResponse.Music
-	6,  // 12: douyin.UserPostsResponse.AwemeList.video:type_name -> douyin.UserPostsResponse.Video
-	11, // 13: douyin.UserPostsResponse.AwemeList.statistics:type_name -> douyin.UserPostsResponse.Statistics
-	12, // 14: douyin.UserPostsResponse.AwemeList.status:type_name -> douyin.UserPostsResponse.Status
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	24, // 0: douyin.UserPostsResponse.aweme_list:type_name -> douyin.UserPostsResponse.AwemeList
+	25, // 1: douyin.UserPostsResponse.log_pb:type_name -> douyin.UserPostsResponse.LogPb
+	3,  // 2: douyin.RoomDataResponse.data:type_name -> douyin.RoomData
+	2,  // 3: douyin.RoomDataResponse.extra:type_name -> douyin.Extra
+	4,  // 4: douyin.RoomData.data:type_name -> douyin.Room
+	9,  // 5: douyin.Room.stats:type_name -> douyin.Stats
+	5,  // 6: douyin.Room.cover:type_name -> douyin.Cover
+	6,  // 7: douyin.Room.stream_url:type_name -> douyin.StreamURL
+	7,  // 8: douyin.Room.owner:type_name -> douyin.Owner
+	10, // 9: douyin.Room.room_view_stats:type_name -> douyin.RoomViewStats
+	26, // 10: douyin.StreamURL.flv_pull_url:type_name -> douyin.StreamURL.FlvPullUrlEntry
+	27, // 11: douyin.StreamURL.hls_pull_url_map:type_name -> douyin.StreamURL.HlsPullUrlMapEntry
+	8,  // 12: douyin.Owner.avatar_thumb:type_name -> douyin.Avatar
+	12, // 13: douyin.UserPostsResponse.Author.avatar_thumb:type_name -> douyin.UserPostsResponse.AvatarThumb
+	14, // 14: douyin.UserPostsResponse.Music.cover_thumb:type_name -> douyin.UserPostsResponse.CoverThumb
+	15, // 15: douyin.UserPostsResponse.Music.play_url:type_name -> douyin.UserPostsResponse.PlayUrl
+	17, // 16: douyin.UserPostsResponse.Video.play_addr:type_name -> douyin.UserPostsResponse.PlayAddr
+	18, // 17: douyin.UserPostsResponse.Video.cover:type_name -> douyin.UserPostsResponse.Cover
+	19, // 18: douyin.UserPostsResponse.Video.dynamic_cover:type_name -> douyin.UserPostsResponse.DynamicCover
+	20, // 19: douyin.UserPostsResponse.Video.origin_cover:type_name -> douyin.UserPostsResponse.OriginCover
+	23, // 20: douyin.UserPostsResponse.Status.review_result:type_name -> douyin.UserPostsResponse.ReviewResult
+	11, // 21: douyin.UserPostsResponse.AwemeList.author:type_name -> douyin.UserPostsResponse.Author
+	13, // 22: douyin.UserPostsResponse.AwemeList.music:type_name -> douyin.UserPostsResponse.Music
+	16, // 23: douyin.UserPostsResponse.AwemeList.video:type_name -> douyin.UserPostsResponse.Video
+	21, // 24: douyin.UserPostsResponse.AwemeList.statistics:type_name -> douyin.UserPostsResponse.Statistics
+	22, // 25: douyin.UserPostsResponse.AwemeList.status:type_name -> douyin.UserPostsResponse.Status
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_lsp_douyin_douyin_proto_init() }
@@ -1533,7 +2301,7 @@ func file_lsp_douyin_douyin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_lsp_douyin_douyin_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

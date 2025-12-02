@@ -1,6 +1,8 @@
 {{ if .living -}}
-Douyin-{{ .name }}正在直播
-{{ .url -}}
+Douyin-{{ .name }}正在直播【{{ .title }}】
+{{ pic .cover "[封面]" }}
+{{- .url -}}
 {{- else -}}
 Douyin-{{ .name }}直播结束了
+{{ pic .cover "[封面]" -}}
 {{- end -}}

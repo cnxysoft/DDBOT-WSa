@@ -148,3 +148,76 @@ message UserPostsResponse {
   repeated AwemeList aweme_list = 5;
   LogPb log_pb = 7;
 }
+
+// 顶层响应
+message RoomDataResponse {
+  RoomData data = 1;
+  Extra extra = 2;
+  int32 status_code = 3;
+}
+
+message Extra {
+  int64 now = 1;
+}
+
+message RoomData {
+  repeated Room data = 1; // 对应原 JSON 的 data.data
+}
+
+// 直播间（用于推送展示的最小且直观字段）
+message Room {
+  string id_str = 1;                 // 房间 id
+  int32 status = 2;                  // 房间状态
+  string status_str = 3;             // 状态字符串
+  string title = 4;                  // 房间标题
+  string user_count_str = 5;         // 在线人数字符串（展示用）
+  Stats stats = 6;                   // 统计信息
+  Cover cover = 7;                   // 封面图
+  StreamURL stream_url = 8;          // 拉流地址（FLV/HLS）
+  Owner owner = 9;                   // 主播信息
+  RoomViewStats room_view_stats = 10;// 展示用的观众显示文本
+  bool has_commerce_goods = 11;      // 是否有商品（可用于展示角标）
+  string short_desc = 12;            // 简短描述或摘要（如存在）
+  // 预留原始 stream_data（有时为转义 JSON），便于后续解析
+  string raw_stream_data = 100;
+}
+
+// 封面
+message Cover {
+  repeated string url_list = 1;
+}
+
+// 拉流地址
+message StreamURL {
+  map<string, string> flv_pull_url = 1;      // e.g. "HD1": "http://..."
+  map<string, string> hls_pull_url_map = 2;  // e.g. "HD1": "http://.../playlist.m3u8"
+  string hls_pull_url = 3;                   // 默认 hls 地址
+  string default_resolution = 4;             // 默认分辨率键
+}
+
+// 主播信息
+message Owner {
+  string id_str = 1;
+  string sec_uid = 2;
+  string nickname = 3;
+  Avatar avatar_thumb = 4;
+}
+
+message Avatar {
+  repeated string url_list = 1;
+}
+
+// 统计信息（展示用）
+message Stats {
+  string total_user_str = 1; // 累计观看或类似展示
+  string user_count_str = 2; // 当前在线（重复但便于直接取）
+  int64 like_count = 3;
+}
+
+// 房间展示统计
+message RoomViewStats {
+  string display_short = 1;
+  string display_middle = 2;
+  string display_long = 3;
+  int32 display_value = 4;
+}

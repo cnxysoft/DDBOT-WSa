@@ -52,6 +52,7 @@ var (
 		PathGetUserInfo:         BaseHost,
 		PathCheckUserLiveStatus: BaseLiveHost,
 		PathGetUserPosts:        BaseHost,
+		PathWebcastRoomWebEnter: BaseLiveHost,
 	}
 )
 
@@ -434,9 +435,15 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 				}
 			}
 			if time.Since(time.Unix(oldFreshTime, 0)) < 30*time.Minute || oldFreshTime == 0 {
+				roomData, err := GetRoomData(usrInfo.GetRoomId())
+				if err != nil {
+					return nil, err
+				}
 				live := &LiveInfo{
 					UserInfo:          *usrInfo,
 					IsLiving:          isLive,
+					LiveTitle:         roomData.GetData().GetData()[0].GetTitle(),
+					Cover:             roomData.GetData().GetData()[0].GetCover().GetUrlList()[0],
 					liveStatusChanged: true,
 				}
 				result = append(result, live)
