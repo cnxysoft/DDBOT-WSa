@@ -214,6 +214,7 @@ func builtins() FuncMap {
 		"find":       strings.Index,
 		"findLast":   strings.LastIndex,
 		"count":      strings.Count,
+		"substr":     substr,
 
 		"snakecase": xstrings.ToSnakeCase,
 		"camelcase": xstrings.ToCamelCase,
@@ -982,4 +983,30 @@ func evalArgs(args []interface{}) string {
 		s = fmt.Sprint(args...)
 	}
 	return s
+}
+
+// substr returns a substring of the given string.
+// If start is negative, it counts from the end of the string.
+// If length is not specified, it returns the substring from start to the end.
+func substr(str string, start int, length ...int) string {
+	if start < 0 {
+		start = len(str) + start
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(str) {
+		return ""
+	}
+	if len(length) == 0 {
+		return str[start:]
+	}
+	end := start + length[0]
+	if end > len(str) {
+		end = len(str)
+	}
+	if end <= start {
+		return ""
+	}
+	return str[start:end]
 }
