@@ -12,6 +12,11 @@ import (
 const PathWebcastRoomWebEnter = "/webcast/room/web/enter/"
 
 func GetRoomData(roomId string) (*RoomDataResponse, error) {
+	if roomId == "" {
+		logger.WithField("roomId", roomId).
+			Error("roomId 不能为空")
+		return nil, errors.New("roomId 不能为空")
+	}
 	Url := DPath(PathWebcastRoomWebEnter)
 	param := make(map[string]string)
 	param["aid"] = "6383"
@@ -38,12 +43,14 @@ func GetRoomData(roomId string) (*RoomDataResponse, error) {
 	}
 
 	err = protoJsonOpts.Unmarshal(body, roomData)
-	if err != nil || roomData.StatusCode != 0 {
+	if err != nil {
 		logger.WithField("roomId", roomId).Errorf("解析直播间数据失败：%v", err)
 		return nil, err
 	}
-	if len(roomData.GetData().GetData()) < 1 {
-		logger.WithField("roomId", roomId).Errorf("解析直播间数据失败：%v", err)
+	if roomData.StatusCode != 0 || len(roomData.GetData().GetData()) < 1 {
+		logger.WithField("roomId", roomId).
+			WithField("status_code", roomData.StatusCode).
+			Errorf("解析直播间数据失败：%v", err)
 		return nil, errors.New("数据为空")
 	}
 	return roomData, nil

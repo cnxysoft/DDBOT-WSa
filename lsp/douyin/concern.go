@@ -425,13 +425,28 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 				logger.Errorf("内部错误 - 推送状态更新失败：%v", err)
 				return nil, err
 			}
-			if isLive && usrInfo.GetRoomId() == "" {
+			getRoomId := func() string {
 				newUserInfo, err := GetUserInfo(userId)
 				if err != nil {
-					return nil, err
+					logger.WithField("User", userId).
+						WithError(err).Error("内部错误 - 获取直播间号失败")
+					return ""
 				}
 				if newUserInfo.GetRoomId() != "" {
-					usrInfo = newUserInfo
+					return newUserInfo.GetRoomId()
+				}
+				return ""
+			}
+			if isLive && usrInfo.GetRoomId() == "" {
+				for {
+					roomId := getRoomId()
+					if roomId != "" {
+						logger.Debugf("获取 %v 的直播间号成功", userId)
+						usrInfo.SetRoomId(roomId)
+						break
+					}
+					logger.Debugf("获取 %v 的直播间号失败，5s 后重试...", userId)
+					time.Sleep(time.Second * 5)
 				}
 			}
 			if time.Since(time.Unix(oldFreshTime, 0)) < 30*time.Minute || oldFreshTime == 0 {
