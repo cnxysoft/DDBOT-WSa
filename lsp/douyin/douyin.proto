@@ -221,3 +221,70 @@ message RoomViewStats {
   string display_long = 3;
   int32 display_value = 4;
 }
+
+// 顶层响应，包含 status_code 与 data
+message ProfileResponse {
+  int32 status_code = 1;
+  ProfileData data = 2;
+}
+
+message ProfileData {
+  UserData user_data = 1;
+}
+
+// 精简且面向展示的 user_data
+message UserData {
+  int64 id = 1;
+  string id_str = 2;
+  int64 short_id = 3;
+  string nickname = 4;
+  string display_id = 5;
+  string sec_uid = 6;
+  string signature = 7;
+
+  // 性别 0/1/2 或者直接 string 展示由客户端决定
+  int32 gender = 8;
+
+  // 头像集合（保留 url_list 以便客户端选择合适尺寸）
+  Image avatar_thumb = 9;
+  Image avatar_medium = 10;
+  Image avatar_large = 11;
+
+  // 认证与等级
+  bool verified = 12;
+  string verified_content = 13;
+  int32 pay_grade_level = 14; // 来自 pay_grade.level 或 badge_image_list.content.level
+
+  // 社交统计（来自 follow_info）
+  int32 follower_count = 15;
+  int32 following_count = 16;
+  string follower_count_str = 17;
+
+  // 粉丝团 / 会员
+  int32 fans_club_count = 18; // fans_club.data.level 或 fans_club.total_fans_count（若有）
+  bool subscribe_is_member = 19;
+  int32 subscribe_level = 20;
+
+  // 地理与时间
+  string city = 21;
+  string location_city = 22;
+  int64 create_time = 23;
+  int64 modify_time = 24;
+
+  // 直播相关（关键字段）
+  string web_rid = 25;
+
+  // 徽章图标（可用于 UI 展示）
+  repeated Image badge_image_list = 26;
+
+  // 备用字段，保留以便需要时展示或调试
+  string signature_short = 27;
+}
+
+message Image {
+  repeated string url_list = 1;
+  string uri = 2;
+  int32 height = 3;
+  int32 width = 4;
+  bool is_animated = 5;
+}

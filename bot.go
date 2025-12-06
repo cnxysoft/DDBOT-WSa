@@ -218,8 +218,7 @@ twitter:
   userAgent: 
 
 # 抖音直播推送（测试）
-# 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce两个cookies和你的浏览器UA
-# 如需订阅视频更新，需再加一个Cookie，登录www.douyin.com后取得sessionId并填入
+# 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce、sessionId共三个cookies和你的浏览器UA
 douyin:
   acSignature: 
   acNonce: 

@@ -14,10 +14,12 @@ import (
 
 type UserInfo struct {
 	Uid       string `json:"uid"`
-	SecUid    string `json:"secUid"`
+	SecUid    string `json:"sec_uid"`
+	Gender    int32  `json:"gender"`
 	NikeName  string `json:"nickname"`
-	RealName  string `json:"realName"`
-	Desc      string `json:"desc"`
+	AvatarUrl string `json:"avatar_url"`
+	DisplayId string `json:"display_id"`
+	Signature string `json:"signature"`
 	WebRoomId string `json:"web_rid"`
 }
 

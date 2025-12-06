@@ -37,10 +37,10 @@ const (
 	// 当像这样定义的时候，支持 /watch -s mysite -t type1 id
 	// 当实现的时候，请修改上面的定义
 	// API Base URL
-	BaseHost     = "https://www.douyin.com"
-	BaseLiveHost = "https://live.douyin.com"
-	ErrNotFound  = "not found"
-
+	BaseHost          = "https://www.douyin.com"
+	BaseLiveHost      = "https://live.douyin.com"
+	ErrNotFound       = "not found"
+	PathGetUserInfo   = "/user/"
 	CompactExpireTime = time.Minute * 60
 )
 
@@ -53,6 +53,7 @@ var (
 		PathCheckUserLiveStatus: BaseLiveHost,
 		PathGetUserPosts:        BaseHost,
 		PathWebcastRoomWebEnter: BaseLiveHost,
+		PathWebcastUserProfile:  BaseLiveHost,
 	}
 )
 
@@ -198,6 +199,11 @@ func (d *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype c
 		log.Errorf("FindOrLoadUserInfo error %v", err)
 		return nil, fmt.Errorf("查询用户信息失败 %v - %v", id, err)
 	}
+	if ctype.ContainAny(Live) {
+		if info.WebRoomId == "" {
+			return nil, fmt.Errorf("用户 %v 未绑定直播房间", id)
+		}
+	}
 	_, err = d.GetStateManager().AddGroupConcern(groupCode, id, ctype)
 	if err != nil {
 		log.Errorf("AddGroupConcern error %v", err)
@@ -209,7 +215,7 @@ func (d *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype c
 	}
 	if ctype.ContainAny(Live) {
 		// 其他群关注了同一uid，并且推送过Living，那么给新watch的群也推一份
-		if liveInfo != nil && liveInfo.WebRoomId != "" {
+		if liveInfo != nil {
 			if ctx.GetTarget().TargetType().IsGroup() {
 				defer d.GroupWatchNotify(groupCode, uid)
 			}
@@ -425,41 +431,19 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 				logger.Errorf("内部错误 - 推送状态更新失败：%v", err)
 				return nil, err
 			}
-			getRoomId := func() string {
-				newUserInfo, err := GetUserInfo(userId)
-				if err != nil {
-					logger.WithField("User", userId).
-						WithError(err).Error("内部错误 - 获取直播间号失败")
-					return ""
-				}
-				if newUserInfo.GetRoomId() != "" {
-					return newUserInfo.GetRoomId()
-				}
-				return ""
-			}
-			if isLive && usrInfo.GetRoomId() == "" {
-				for {
-					roomId := getRoomId()
-					if roomId != "" {
-						logger.Debugf("获取 %v 的直播间号成功", userId)
-						usrInfo.SetRoomId(roomId)
-						break
-					}
-					logger.Debugf("获取 %v 的直播间号失败，5s 后重试...", userId)
-					time.Sleep(time.Second * 5)
-				}
-			}
 			if time.Since(time.Unix(oldFreshTime, 0)) < 30*time.Minute || oldFreshTime == 0 {
-				roomData, err := GetRoomData(usrInfo.GetRoomId())
-				if err != nil {
-					return nil, err
-				}
 				live := &LiveInfo{
 					UserInfo:          *usrInfo,
 					IsLiving:          isLive,
-					LiveTitle:         roomData.GetData().GetData()[0].GetTitle(),
-					Cover:             roomData.GetData().GetData()[0].GetCover().GetUrlList()[0],
 					liveStatusChanged: true,
+				}
+				roomData, err := GetRoomData(usrInfo.GetRoomId())
+				if err != nil {
+					logger.Warnf("内部错误 - 获取直播间数据失败：%v", err)
+				}
+				if roomData != nil {
+					live.LiveTitle = roomData.GetData().GetData()[0].GetTitle()
+					live.Cover = roomData.GetData().GetData()[0].GetCover().GetUrlList()[0]
 				}
 				result = append(result, live)
 			}
