@@ -231,9 +231,10 @@ func (d *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype c
 func (d *Concern) GroupWatchNotify(groupCode int64, mid string) {
 	userInfo, _ := d.GetUserInfo(mid)
 	if userInfo.WebRoomId != "" {
-		var liveInfo *LiveInfo
-		liveInfo.IsLiving = true
-		liveInfo.UserInfo = *userInfo
+		var liveInfo = &LiveInfo{
+			IsLiving: true,
+			UserInfo: *userInfo,
+		}
 		d.notify <- NewConcernLiveNotify(groupCode, liveInfo)
 	}
 }
