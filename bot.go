@@ -213,8 +213,8 @@ twitter:
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
-	- "https://nitter.poast.org/"
-  interval: 300s # 查询间隔，过快可能导致ip被暂时封禁
+    - "https://nitter.poast.org/"
+  interval: 30s # 查询间隔，过快可能导致ip被暂时封禁
   userAgent: 
 
 # 抖音直播推送（测试）
