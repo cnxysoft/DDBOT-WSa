@@ -277,22 +277,22 @@ func (msg *SendingMessage) ToFragmented() [][]IMessageElement {
 }
 
 // 单条消息发送的大小限制（QQNT测试）
-const MaxMessageSize = 4500
+const MaxMessageSize = 4280
 
 func EstimateLength(elems []IMessageElement) int {
 	sum := 0
 	for _, elem := range elems {
 		switch e := elem.(type) {
 		case *TextElement:
-			sum += len(e.Content)
+			sum += len([]rune(e.Content))
 		case *AtElement:
-			sum += len(e.Display)
+			sum += len([]rune(e.Display))
 		case *ReplyElement:
 			sum += 444 + EstimateLength(e.Elements)
 		case *GroupImageElement, *FriendImageElement:
-			sum += 100
+			sum += 175
 		default:
-			sum += len(ToReadableString([]IMessageElement{elem}))
+			sum += len([]rune(ToReadableString([]IMessageElement{elem})))
 		}
 	}
 	return sum
