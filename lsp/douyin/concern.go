@@ -362,7 +362,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 				}()
 				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Live) })
 				for _, userId := range ids {
-					events, err := d.freshInfo(Live, userId)
+					events, err := d.freshInfo(Live, userId, eventChan)
 					if err != nil {
 						continue
 					}
@@ -381,7 +381,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 				}()
 				_, ids, _, _ := d.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(News) })
 				for _, userId := range ids {
-					events, err := d.freshInfo(News, userId)
+					events, err := d.freshInfo(News, userId, eventChan)
 					if err != nil {
 						continue
 					}
@@ -405,7 +405,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 	}
 }
 
-func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {
+func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}, eventChan chan<- concern.Event) ([]concern.Event, error) {
 	var start = time.Now()
 	var result []concern.Event
 	userId := id.(string)
@@ -444,7 +444,13 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 				}
 				if roomData != nil {
 					live.LiveTitle = roomData.GetData().GetData()[0].GetTitle()
-					live.Cover = roomData.GetData().GetData()[0].GetCover().GetUrlList()[0]
+					if roomData.GetData().GetData()[0].GetStatus() == 2 {
+						live.Cover = roomData.GetData().GetData()[0].GetCover().GetUrlList()[0]
+					} else {
+						go d.DelayPush(usrInfo, live, eventChan)
+						logger.Warnf("用户 %s 直播间封面为空，尝试稍后推送", usrInfo.SecUid)
+						return nil, fmt.Errorf("用户 %s 直播间封面为空，尝试稍后推送", usrInfo.SecUid)
+					}
 				}
 				result = append(result, live)
 			}
@@ -495,6 +501,40 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}) ([]concern.
 		return nil, err
 	}
 	return result, nil
+}
+
+func (d *Concern) DelayPush(usrInfo *UserInfo, live *LiveInfo, eventChan chan<- concern.Event) {
+	var tryCount int = 1
+retry:
+	roomData, err := GetRoomData(live.GetRoomId())
+	if err != nil {
+		logger.Errorf("内部错误 - 获取直播间数据失败：%v", err)
+		return
+	}
+	if roomData == nil || roomData.GetData().GetData()[0].GetStatus() != 2 {
+		logger.Warnf("用户 %s 直播间封面为空，尝试重新获取", usrInfo.SecUid)
+		time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
+		tryCount++
+		if tryCount > 3 {
+			logger.Warnf("用户 %s 直播间封面为空，尝试重新获取失败，将使用头像作为Cover", usrInfo.SecUid)
+			live.Cover = usrInfo.AvatarUrl
+		} else {
+			goto retry
+		}
+	} else {
+		live.Cover = roomData.GetData().GetData()[0].GetCover().GetUrlList()[0]
+	}
+	err = d.SetFreshTime(live.SecUid, time.Now())
+	if err != nil {
+		logger.Errorf("内部错误 - 刷新时间更新失败：%v", err)
+		return
+	}
+	err = d.AddUserInfo(usrInfo)
+	if err != nil {
+		logger.Errorf("内部错误 - 用户信息更新失败：%v", err)
+		return
+	}
+	eventChan <- live
 }
 
 func (d *Concern) SetFreshTime(id string, ts time.Time) error {
