@@ -6,16 +6,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/config"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"math/rand"
 	"net/http/cookiejar"
 	"net/url"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/Sora233/MiraiGo-Template/config"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 
 	templUtils "github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
@@ -393,7 +394,7 @@ func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) 
 	if ctype.ContainAll(Tweets) {
 		userInfo, err := t.FindOrLoadUserInfo(userId)
 		if err != nil {
-			logger.Errorf("查找用户信息失败：%v", err)
+			return nil, err
 		}
 		newTweets, err := t.GetTweets(userId)
 		if err != nil {

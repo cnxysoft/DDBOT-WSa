@@ -411,7 +411,7 @@ func (d *Concern) freshInfo(ctype concern_type.Type, id interface{}, eventChan c
 	userId := id.(string)
 	usrInfo, err := d.FindOrLoadUserInfo(userId)
 	if err != nil {
-		logger.Errorf("查找用户信息失败：%v", err)
+		return nil, err
 	}
 	if ctype.ContainAll(Live) {
 		isLive, err := FreshLiveStatus(usrInfo.Uid)
