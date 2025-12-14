@@ -610,6 +610,21 @@ type DynamicDetail struct {
 		Title string `json:"title"`
 		Type  int32  `json:"type"`
 	} `json:"archive,omitempty"`
+	Live struct {
+		Badge struct {
+			BgColor string `json:"bg_color"`
+			Color   string `json:"color"`
+			Text    string `json:"text"`
+		} `json:"badge"`
+		Cover       string `json:"cover"`
+		DescFirst   string `json:"desc_first"`
+		DescSecond  string `json:"desc_second"`
+		Id          int    `json:"id"`
+		JumpUrl     string `json:"jump_url"`
+		LiveState   int    `json:"live_state"`
+		ReserveType int    `json:"reserve_type"`
+		Title       string `json:"title"`
+	} `json:"live"`
 	Title     string `json:"title"`
 	TopicName string `json:"topic_name"`
 	Content   string `json:"content"`
@@ -825,9 +840,17 @@ func (c *CacheCard) prepare() {
 				c.dynamic.Default.Title = originDetail.PGC.Title
 				c.dynamic.Default.CoverUrl = originDetail.PGC.CoverUrl
 			} else if cardOrigin.GetOrigin() == "源动态不见了" {
-				c.dynamic.Default.TypeName = "不支持的"
-				c.dynamic.Default.Title = "未知动态"
-				c.dynamic.Default.Desc = "源动态不见了"
+				if originDetail.Live.Title != "" {
+					c.dynamic.WithOrigin = true
+					c.dynamic.Type = DynamicDescType_WithLive
+					c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
+					c.dynamic.Live.Title = originDetail.Live.Title
+					c.dynamic.Live.CoverUrl = originDetail.Live.Cover
+				} else {
+					c.dynamic.Default.TypeName = "不支持的"
+					c.dynamic.Default.Title = "未知动态"
+					c.dynamic.Default.Desc = "源动态不见了"
+				}
 			} else {
 				log.WithField("content", card.GetCard()).Info("found new type with origin")
 				c.dynamic.OriginUser.Name = originName
@@ -1162,6 +1185,20 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 				}
 				if strings.HasPrefix(res.Archive.JumpUrl, "//") {
 					res.Archive.JumpUrl = "https:" + res.Archive.JumpUrl
+				}
+			}
+
+			if live, ok := major["live"].(map[string]interface{}); ok {
+				Json, err := json.Marshal(live)
+				if err != nil {
+					logger.WithError(err).Error("func:getLiveDesc, json.Marshal failed")
+				}
+				err = json.Unmarshal(Json, &res.Live)
+				if err != nil {
+					return DynamicDetail{}
+				}
+				if strings.HasPrefix(res.Live.JumpUrl, "//") {
+					res.Live.JumpUrl = "https:" + res.Live.JumpUrl
 				}
 			}
 		}
