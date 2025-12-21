@@ -584,6 +584,11 @@ type Addon struct {
 }
 
 type DynamicDetail struct {
+	Author struct {
+		Uid  int64  `json:"uid"`
+		Name string `json:"name"`
+		Face string `json:"face"`
+	} `json:"author,omitempty"`
 	Reserve struct {
 		Title string `json:"title"`
 		Desc1 string `json:"desc1"`
@@ -846,6 +851,9 @@ func (c *CacheCard) prepare() {
 					c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 					c.dynamic.Live.Title = originDetail.Live.Title
 					c.dynamic.Live.CoverUrl = originDetail.Live.Cover
+					c.dynamic.OriginUser.Name = originDetail.Author.Name
+					c.dynamic.OriginUser.Face = originDetail.Author.Face
+					c.dynamic.OriginUser.Uid = originDetail.Author.Uid
 				} else {
 					c.dynamic.Default.TypeName = "不支持的"
 					c.dynamic.Default.Title = "未知动态"
@@ -1114,6 +1122,15 @@ func SecAnalysis(id string) (result map[string]interface{}) {
 		logger.WithError(err).Error("SecAnalysis unmarshal failed")
 		return
 	}
+	if code, ok := result["code"].(float64); ok && code != 0 {
+		m, ok := result["message"].(string)
+		if ok {
+			logger.WithField("dynamic_id", id).Warnf("SecAnalysis code: %v, message: %s", code, m)
+		} else {
+			logger.WithField("dynamic_id", id).Warnf("SecAnalysis code: %v", code)
+		}
+		return
+	}
 	return
 }
 
@@ -1134,6 +1151,20 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 		if modules == nil {
 			return
 		}
+		author, ok := modules["module_author"].(map[string]interface{})
+		if !ok {
+			return
+		}
+		if uid, ok := author["mid"].(float64); ok {
+			res.Author.Uid = int64(uid)
+		}
+		if name, ok := author["name"].(string); ok {
+			res.Author.Name = name
+		}
+		if face, ok := author["face"].(string); ok {
+			res.Author.Face = face
+		}
+
 		dynamic, ok := modules["module_dynamic"].(map[string]interface{})
 		if !ok {
 			return
