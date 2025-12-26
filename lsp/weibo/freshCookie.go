@@ -96,6 +96,15 @@ func FreshCookie() ([]*http.Cookie, error) {
 	if err != nil {
 		panic(fmt.Sprintf("path %v url parse error", pathWeibo))
 	}
-	cookies := jar.Cookies(baseUrl)
+	cookieUrl, err := url.Parse(pathPassportGenvisitor)
+	if err != nil {
+		panic(fmt.Sprintf("path %v url parse error", pathPassportGenvisitor))
+	}
+	cookies := jar.Cookies(cookieUrl)
+	for _, cookie := range jar.Cookies(baseUrl) {
+		if cookie.Name == "XSRF-TOKEN" || cookie.Name == "WBPSESS" {
+			cookies = append(cookies, cookie)
+		}
+	}
 	return cookies, nil
 }
