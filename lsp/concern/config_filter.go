@@ -65,17 +65,22 @@ type GroupConcernFilterConfig struct {
 
 // ensureRulesFromLegacy 将旧版单规则数据迁移到 Rules 中，保持向前兼容
 func (g *GroupConcernFilterConfig) ensureRulesFromLegacy() {
-	if g.Type != "" && g.Config != "" {
-		if len(g.Rules) == 0 {
-			g.Rules = append(g.Rules, GroupConcernFilterRule{
-				Type:   g.Type,
-				Config: g.Config,
-			})
-		} else {
-			g.Rules[0].Type = g.Type
-			g.Rules[0].Config = g.Config
-		}
+	if g.Type == "" && g.Config == "" {
+		// legacy字段缺失或为空，视为无规则并清空
+		g.Rules = nil
+		return
 	}
+	if len(g.Rules) == 0 {
+		// legacy 存在但规则为空，迁移到 Rules
+		g.Rules = append(g.Rules, GroupConcernFilterRule{
+			Type:   g.Type,
+			Config: g.Config,
+		})
+		return
+	}
+	// 如果已有规则但 legacy 有值，更新首条保持兼容
+	g.Rules[0].Type = g.Type
+	g.Rules[0].Config = g.Config
 }
 
 // syncLegacyFields 用于在保存时把第一条规则同步到旧字段，兼容旧结构的读取
@@ -127,21 +132,29 @@ func (g *GroupConcernFilterConfig) Clear() {
 // GetFilterByType 获取首个类型过滤规则的配置
 func (g *GroupConcernFilterConfig) GetFilterByType() (*GroupConcernFilterConfigByType, error) {
 	g.ensureRulesFromLegacy()
+	if len(g.Rules) == 0 {
+		return nil, nil
+	}
 	for _, r := range g.Rules {
 		if r.Type == FilterTypeType || r.Type == FilterTypeNotType {
 			return r.GetFilterByType()
 		}
 	}
-	return nil, nil
+	// 存在规则但无类型过滤规则，返回空配置表示“当前有规则但非类型规则”
+	return &GroupConcernFilterConfigByType{}, nil
 }
 
 // GetFilterByText 获取首个文本过滤规则的配置
 func (g *GroupConcernFilterConfig) GetFilterByText() (*GroupConcernFilterConfigByText, error) {
 	g.ensureRulesFromLegacy()
+	if len(g.Rules) == 0 {
+		return nil, nil
+	}
 	for _, r := range g.Rules {
 		if r.Type == FilterTypeText || r.Type == FilterTypeNotText {
 			return r.GetFilterByText()
 		}
 	}
-	return nil, nil
+	// 存在规则但无文本过滤规则，按照旧语义返回类型不匹配错误
+	return nil, errors.New("filter type mismatched")
 }
