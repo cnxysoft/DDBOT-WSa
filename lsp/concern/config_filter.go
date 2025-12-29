@@ -65,11 +65,16 @@ type GroupConcernFilterConfig struct {
 
 // ensureRulesFromLegacy 将旧版单规则数据迁移到 Rules 中，保持向前兼容
 func (g *GroupConcernFilterConfig) ensureRulesFromLegacy() {
-	if len(g.Rules) == 0 && g.Type != "" && g.Config != "" {
-		g.Rules = append(g.Rules, GroupConcernFilterRule{
-			Type:   g.Type,
-			Config: g.Config,
-		})
+	if g.Type != "" && g.Config != "" {
+		if len(g.Rules) == 0 {
+			g.Rules = append(g.Rules, GroupConcernFilterRule{
+				Type:   g.Type,
+				Config: g.Config,
+			})
+		} else {
+			g.Rules[0].Type = g.Type
+			g.Rules[0].Config = g.Config
+		}
 	}
 }
 
@@ -127,7 +132,7 @@ func (g *GroupConcernFilterConfig) GetFilterByType() (*GroupConcernFilterConfigB
 			return r.GetFilterByType()
 		}
 	}
-	return nil, errors.New("filter type mismatched")
+	return nil, nil
 }
 
 // GetFilterByText 获取首个文本过滤规则的配置
@@ -138,5 +143,5 @@ func (g *GroupConcernFilterConfig) GetFilterByText() (*GroupConcernFilterConfigB
 			return r.GetFilterByText()
 		}
 	}
-	return nil, errors.New("filter type mismatched")
+	return nil, nil
 }

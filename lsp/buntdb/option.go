@@ -69,11 +69,12 @@ func (o *option) setPrevious(previous string) {
 	switch ptr := o.previous.(type) {
 	case *int64:
 		i, err := strconv.ParseInt(previous, 10, 64)
-		if err == nil {
-			*ptr = i
-		} else {
-			logger.Errorf("setPrevious int64 on value %v error %v", previous, err)
+		if err != nil {
+			// ignore invalid numeric input gracefully
+			logger.Debugf("skip setPrevious int64 on value %v error %v", previous, err)
+			return
 		}
+		*ptr = i
 	case *string:
 		*ptr = previous
 	default:
