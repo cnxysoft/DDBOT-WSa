@@ -1,6 +1,7 @@
 package concern
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
@@ -30,9 +31,13 @@ type GroupConcernConfig struct {
 // 默认支持 GroupConcernNotifyConfig GroupConcernAtConfig
 // GroupConcernFilterConfig 默认只支持 text
 func (g *GroupConcernConfig) Validate() error {
-	if !g.GetGroupConcernFilter().Empty() &&
-		(g.GetGroupConcernFilter().Type != FilterTypeText && g.GetGroupConcernFilter().Type != FilterTypeNotText) {
-		return ErrConfigNotSupported
+	for _, r := range g.GetGroupConcernFilter().RulesNormalized() {
+		switch r.Type {
+		case FilterTypeText, FilterTypeNotText:
+			// allow
+		default:
+			return ErrConfigNotSupported
+		}
 	}
 	return nil
 }
@@ -43,39 +48,47 @@ func (g *GroupConcernConfig) FilterHook(notify Notify) *HookResult {
 	if g.GetGroupConcernFilter().Empty() {
 		return HookResultPass
 	}
-	logger := notify.Logger().WithField("FilterType", g.GetGroupConcernFilter().Type)
-	switch g.GetGroupConcernFilter().Type {
-	case FilterTypeText, FilterTypeNotText:
-		textFilter, err := g.GetGroupConcernFilter().GetFilterByText()
-		if err != nil {
-			logger.WithField("Content", g.GetGroupConcernFilter().Config).
-				Errorf("GetFilterByText() error %v", err)
-		} else {
-			var hook = new(HookResult)
-			msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
+	var combinedResult = new(HookResult)
+	combinedResult.Pass = true
+	msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
+	logger := notify.Logger().WithField("FilterRules", g.GetGroupConcernFilter().RulesNormalized())
+	for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
+		switch rule.Type {
+		case FilterTypeText, FilterTypeNotText:
+			textFilter, err := rule.GetFilterByText()
+			if err != nil {
+				logger.WithField("Content", rule.Config).
+					Errorf("GetFilterByText() error %v", err)
+				continue
+			}
+			rulePass := rule.Type == FilterTypeNotText // default allow for not_text unless hit
 			for _, text := range textFilter.Text {
 				if strings.Contains(msgString, text) {
-					if g.GetGroupConcernFilter().Type == FilterTypeText {
-						hook.Pass = true
-					} else if g.GetGroupConcernFilter().Type == FilterTypeNotText {
-						hook.Pass = false
+					if rule.Type == FilterTypeText {
+						rulePass = true
+					} else {
+						rulePass = false
 					}
 					break
-				} else if g.GetGroupConcernFilter().Type == FilterTypeNotText {
-					hook.Pass = true
 				}
 			}
-			if !hook.Pass {
+			if !rulePass {
+				combinedResult.Pass = false
+				combinedResult.Reason = "TextFilter pattern not matched"
 				logger.WithField("TextFilter", textFilter.Text).
 					Debug("news notify filtered by textFilter")
-				hook.Reason = "TextFilter All pattern match failed"
-			} else {
-				logger.Debugf("news notify FilterHook pass")
+				return combinedResult
 			}
-			return hook
+		default:
+			// unsupported types are already blocked by Validate
+			continue
 		}
 	}
-	return HookResultPass
+	if combinedResult.Pass {
+		logger.Debugf("news notify FilterHook pass")
+		return combinedResult
+	}
+	return combinedResult
 }
 
 // AtBeforeHook 默认为Pass

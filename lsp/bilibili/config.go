@@ -2,11 +2,13 @@ package bilibili
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/Mrs4s/MiraiGo/message"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
-	"strconv"
-	"strings"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 )
 
 type GroupConcernConfig struct {
@@ -15,10 +17,10 @@ type GroupConcernConfig struct {
 }
 
 func (g *GroupConcernConfig) Validate() error {
-	if !g.GetGroupConcernFilter().Empty() {
-		switch g.GetGroupConcernFilter().Type {
+	for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
+		switch rule.Type {
 		case concern.FilterTypeNotType, concern.FilterTypeType:
-			filterByType, err := g.GetGroupConcernFilter().GetFilterByType()
+			filterByType, err := rule.GetFilterByType()
 			if err != nil {
 				return err
 			}
@@ -26,10 +28,13 @@ func (g *GroupConcernConfig) Validate() error {
 			if len(invalid) != 0 {
 				return fmt.Errorf("未定义的类型：\n%v", strings.Join(invalid, " "))
 			}
-			return nil
+		case concern.FilterTypeText, concern.FilterTypeNotText:
+			// base type supports text, nothing to validate
+		default:
+			return concern.ErrConfigNotSupported
 		}
 	}
-	return g.IConfig.Validate()
+	return nil
 }
 
 func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {
@@ -98,15 +103,18 @@ func (g *GroupConcernConfig) FilterHook(notify concern.Notify) (hook *concern.Ho
 			return
 		}
 
-		logger := notify.Logger().WithField("FilterType", g.GetGroupConcernFilter().Type)
-		switch g.GetGroupConcernFilter().Type {
-		case concern.FilterTypeType, concern.FilterTypeNotType:
-			typeFilter, err := g.GetGroupConcernFilter().GetFilterByType()
-			if err != nil {
-				logger.WithField("GroupConcernFilterConfig", g.GetGroupConcernFilter().Config).
-					Errorf("get type filter error %v", err)
-				hook.Pass = true
-			} else {
+		logger := notify.Logger().WithField("FilterRules", g.GetGroupConcernFilter().RulesNormalized())
+		msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
+
+		for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
+			switch rule.Type {
+			case concern.FilterTypeType, concern.FilterTypeNotType:
+				typeFilter, err := rule.GetFilterByType()
+				if err != nil {
+					logger.WithField("GroupConcernFilterConfig", rule.Config).
+						Errorf("get type filter error %v", err)
+					continue
+				}
 				var convTypes []DynamicDescType
 				for _, tp := range typeFilter.Type {
 					if types, _ := PredefinedType[tp]; types != nil {
@@ -119,7 +127,7 @@ func (g *GroupConcernConfig) FilterHook(notify concern.Notify) (hook *concern.Ho
 				}
 
 				var ok bool
-				switch g.GetGroupConcernFilter().Type {
+				switch rule.Type {
 				case concern.FilterTypeType:
 					ok = false
 					for _, tp := range convTypes {
@@ -137,18 +145,39 @@ func (g *GroupConcernConfig) FilterHook(notify concern.Notify) (hook *concern.Ho
 						}
 					}
 				}
-				if ok {
-					logger.Debugf("news notify FilterHook pass")
-					hook.Pass = true
-				} else {
+				if !ok {
 					logger.WithField("TypeFilter", convTypes).
 						Debug("news notify FilterHook filtered")
 					hook.Reason = "filtered by TypeFilter"
+					return
 				}
+			case concern.FilterTypeText, concern.FilterTypeNotText:
+				textFilter, err := rule.GetFilterByText()
+				if err != nil {
+					logger.WithField("GroupConcernFilterConfig", rule.Config).
+						Errorf("get text filter error %v", err)
+					continue
+				}
+				rulePass := rule.Type == concern.FilterTypeNotText
+				for _, t := range textFilter.Text {
+					if strings.Contains(msgString, t) {
+						rulePass = rule.Type == concern.FilterTypeText
+						break
+					}
+				}
+				if !rulePass {
+					logger.WithField("TextFilter", textFilter.Text).
+						Debug("news notify filtered by textFilter")
+					hook.Reason = "filtered by TextFilter"
+					return
+				}
+			default:
+				logger.WithField("rule_type", rule.Type).Debug("unknown filter rule type, skip")
 			}
-		default:
-			hook = g.IConfig.FilterHook(notify)
 		}
+
+		logger.Debugf("news notify FilterHook pass")
+		hook.Pass = true
 		return
 	default:
 		hook.Reason = "unknown notify type"
