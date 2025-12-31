@@ -43,10 +43,53 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 func (c *Concern) Start() error {
 	sub := GetSettingCookie()
 	if sub == "" {
-		logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
-		return nil
+		if GetQRLoginEnable() {
+			logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
+			obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
+			if err != nil {
+				logger.Errorf("扫码登录获取微博SUB失败: %v", err)
+				logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
+				return nil
+			}
+			sub = obtained
+			logger.Infof("扫码登录成功，已获取 SUB。请写入 application.yaml -> weibo.sub 以便下次启动：%s", sub)
+		} else {
+			logger.Warn("微博Cookie未设置，将关闭微博推送功能。开启 weibo.qrlogin 可自动扫码获取。")
+			return nil
+		}
 	}
 	freshCookieOpt(sub)
+
+	// 测试微博cookie是否有效，并显示登录信息
+	go func() {
+		// 等待cookie刷新完成
+		time.Sleep(2 * time.Second)
+
+		// 微博没有直接获取当前登录用户信息的API
+		// 通过访问一个测试用户页面来验证cookie有效性
+		testUid := int64(5462373877) // 捞穹苍的信息试试[doge]
+		profileResp, err := ApiContainerGetIndexProfile(testUid)
+		if err != nil {
+			logger.Errorf("微博Cookie验证失败 - %v，微博功能可能无法正常使用", err)
+			return
+		}
+
+		if profileResp.GetOk() != 1 {
+			logger.Errorf("微博Cookie验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
+			return
+		}
+
+		// 如果能够成功获取用户信息，说明cookie有效
+		if profileResp.GetData() != nil && profileResp.GetData().GetUser() != nil {
+			user := profileResp.GetData().GetUser()
+			logger.Infof("微博启动成功，Cookie验证通过",
+				user.GetId(),
+				user.GetScreenName())
+		} else {
+			logger.Info("微博启动成功，Cookie验证通过")
+		}
+	}()
+
 	go func() {
 		for range time.Tick(time.Hour) {
 			freshCookieOpt(sub)

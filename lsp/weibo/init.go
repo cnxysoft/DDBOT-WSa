@@ -38,3 +38,7 @@ func freshCookieOpt(sub string) {
 func GetSettingCookie() string {
 	return config.GlobalConfig.GetString("weibo.sub")
 }
+
+func GetQRLoginEnable() bool {
+	return config.GlobalConfig.GetBool("weibo.qrlogin")
+}
