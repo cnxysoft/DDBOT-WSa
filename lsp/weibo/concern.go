@@ -82,7 +82,7 @@ func (c *Concern) Start() error {
 		// 如果能够成功获取用户信息，说明cookie有效
 		if profileResp.GetData() != nil && profileResp.GetData().GetUser() != nil {
 			user := profileResp.GetData().GetUser()
-			logger.Infof("微博启动成功，Cookie验证通过",
+			logger.Infof("微博启动成功，Cookie验证通过 uid=%d name=%s",
 				user.GetId(),
 				user.GetScreenName())
 		} else {
