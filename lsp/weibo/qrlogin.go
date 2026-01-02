@@ -324,27 +324,59 @@ func writeBackConfig(sub string) error {
 	}
 
 	content := string(data)
+	lines := strings.Split(content, "\n")
 
-	// If sub exists, replace the line only.
-	subLineRe := regexp.MustCompile(`(?m)^(\s*sub:\s*).*$`)
-	if subLineRe.MatchString(content) {
-		content = subLineRe.ReplaceAllString(content, fmt.Sprintf("${1}\"%s\"", sub))
-		return os.WriteFile(cfgFile, []byte(content), 0o644)
+	// Line-by-line rewrite to avoid touching其他块
+	var out []string
+	inWeibo := false
+	indentWeibo := ""
+	inserted := false
+
+	for i, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "weibo:") && !inWeibo {
+			inWeibo = true
+			indentWeibo = line[:strings.Index(line, "weibo:")]
+			out = append(out, line)
+			continue
+		}
+
+		if inWeibo {
+			// 退出 weibo 块：遇到非缩进行或空缩进变化
+			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
+				// 退出前若未插入sub则补一行
+				if !inserted {
+					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
+					inserted = true
+				}
+				inWeibo = false
+			} else {
+				// 在 weibo 块内
+				subLineRe := regexp.MustCompile(`^\s*sub:\s*`)
+				if subLineRe.MatchString(line) {
+					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
+					inserted = true
+					continue
+				}
+			}
+		}
+		out = append(out, line)
+
+		// 最后一行且在weibo块且未插入
+		if i == len(lines)-1 && inWeibo && !inserted {
+			out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
+			inserted = true
+		}
 	}
 
-	// If weibo block exists, append sub under it.
-	weiboRe := regexp.MustCompile(`(?m)^(?P<indent>\s*)weibo:\s*$`)
-	if loc := weiboRe.FindStringSubmatchIndex(content); loc != nil {
-		indent := weiboRe.ReplaceAllString(content[loc[0]:loc[1]], "${indent}")
-		insert := fmt.Sprintf("\n%s  sub: \"%s\"", indent, sub)
-		// insert right after the weibo: line
-		insertPos := loc[1]
-		content = content[:insertPos] + insert + content[insertPos:]
-		return os.WriteFile(cfgFile, []byte(content), 0o644)
+	if !inserted {
+		// 未找到 weibo 块，追加新块
+		if len(out) > 0 && out[len(out)-1] != "" {
+			out = append(out, "")
+		}
+		out = append(out, "weibo:")
+		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub))
 	}
 
-	// Otherwise append a new weibo block.
-	appendBlock := fmt.Sprintf("\nweibo:\n  sub: \"%s\"\n", sub)
-	content += appendBlock
-	return os.WriteFile(cfgFile, []byte(content), 0o644)
+	return os.WriteFile(cfgFile, []byte(strings.Join(out, "\n")), 0o644)
 }
