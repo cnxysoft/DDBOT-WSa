@@ -574,9 +574,8 @@ func IConfigFilterCmdType(c *MessageContext, groupCode int64, id string, site st
 			return
 		}
 		err = iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
-			config.GetGroupConcernFilter().Type = concern.FilterTypeType
 			filterConfig := &concern.GroupConcernFilterConfigByType{Type: types}
-			config.GetGroupConcernFilter().Config = filterConfig.ToString()
+			config.GetGroupConcernFilter().SetRule(concern.FilterTypeType, filterConfig.ToString())
 			return true
 		})
 	}
@@ -599,9 +598,8 @@ func IConfigFilterCmdNotType(c *MessageContext, groupCode int64, id string, site
 			return
 		}
 		err = iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
-			config.GetGroupConcernFilter().Type = concern.FilterTypeNotType
 			filterConfig := &concern.GroupConcernFilterConfigByType{Type: types}
-			config.GetGroupConcernFilter().Config = filterConfig.ToString()
+			config.GetGroupConcernFilter().SetRule(concern.FilterTypeNotType, filterConfig.ToString())
 			return true
 		})
 	}
@@ -623,9 +621,8 @@ func IConfigFilterCmdText(c *MessageContext, groupCode int64, id string, site st
 			return
 		}
 		err = iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
-			config.GetGroupConcernFilter().Type = concern.FilterTypeText
 			filterConfig := &concern.GroupConcernFilterConfigByText{Text: keywords}
-			config.GetGroupConcernFilter().Config = filterConfig.ToString()
+			config.GetGroupConcernFilter().SetRule(concern.FilterTypeText, filterConfig.ToString())
 			return true
 		})
 	}
@@ -647,9 +644,8 @@ func IConfigFilterCmdNotText(c *MessageContext, groupCode int64, id string, site
 			return
 		}
 		err = iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
-			config.GetGroupConcernFilter().Type = concern.FilterTypeNotText
 			filterConfig := &concern.GroupConcernFilterConfigByText{Text: keywords}
-			config.GetGroupConcernFilter().Config = filterConfig.ToString()
+			config.GetGroupConcernFilter().SetRule(concern.FilterTypeNotText, filterConfig.ToString())
 			return true
 		})
 	}
@@ -665,7 +661,7 @@ func IConfigFilterCmdNotText(c *MessageContext, groupCode int64, id string, site
 
 func IConfigFilterCmdClear(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type) {
 	err := iConfigCmd(c, groupCode, id, site, ctype, func(config concern.IConfig) bool {
-		*config.GetGroupConcernFilter() = concern.GroupConcernFilterConfig{}
+		config.GetGroupConcernFilter().Clear()
 		return true
 	})
 	if localdb.IsRollback(err) || permission.IsPermissionError(err) {
@@ -686,37 +682,43 @@ func IConfigFilterCmdShow(c *MessageContext, groupCode int64, id string, site st
 		}
 		sb := strings.Builder{}
 		sb.WriteString("当前配置：\n")
-		switch config.GetGroupConcernFilter().Type {
-		case concern.FilterTypeText, concern.FilterTypeNotText:
-			filter, err := config.GetGroupConcernFilter().GetFilterByText()
-			if err != nil {
-				logger.WithField("filter_config", config.GetGroupConcernFilter().Config).Errorf("get filter failed %v", err)
-				c.TextReply("查询失败 - 内部错误")
-				return false
-			}
-			if config.GetGroupConcernFilter().Type == concern.FilterTypeText {
-				sb.WriteString("关键字过滤模式 - 只推送以下关键字的动态：\n")
-			} else if config.GetGroupConcernFilter().Type == concern.FilterTypeNotText {
-				sb.WriteString("关键字过滤模式 - 不推送以下关键字的动态：\n")
-			}
-			for _, kw := range filter.Text {
-				sb.WriteString(kw)
-				sb.WriteRune('\n')
-			}
-		case concern.FilterTypeType, concern.FilterTypeNotType:
-			filter, err := config.GetGroupConcernFilter().GetFilterByType()
-			if err != nil {
-				logger.WithField("filter_config", config.GetGroupConcernFilter().Config).Errorf("get filter failed %v", err)
-				c.TextReply("查询失败 - 内部错误")
-				return false
-			}
-			if config.GetGroupConcernFilter().Type == concern.FilterTypeType {
-				sb.WriteString("动态类型过滤模式 - 只推送以下种类的动态：\n")
-			} else if config.GetGroupConcernFilter().Type == concern.FilterTypeNotType {
-				sb.WriteString("动态类型过滤模式 - 不推送以下种类的动态：\n")
-			}
-			for _, tp := range filter.Type {
-				sb.WriteString(tp)
+		for _, rule := range config.GetGroupConcernFilter().RulesNormalized() {
+			switch rule.Type {
+			case concern.FilterTypeText, concern.FilterTypeNotText:
+				filter, err := rule.GetFilterByText()
+				if err != nil {
+					logger.WithField("filter_config", rule.Config).Errorf("get filter failed %v", err)
+					c.TextReply("查询失败 - 内部错误")
+					return false
+				}
+				if rule.Type == concern.FilterTypeText {
+					sb.WriteString("关键字过滤模式 - 只推送以下关键字的动态：\n")
+				} else if rule.Type == concern.FilterTypeNotText {
+					sb.WriteString("关键字过滤模式 - 不推送以下关键字的动态：\n")
+				}
+				for _, kw := range filter.Text {
+					sb.WriteString(kw)
+					sb.WriteRune('\n')
+				}
+			case concern.FilterTypeType, concern.FilterTypeNotType:
+				filter, err := rule.GetFilterByType()
+				if err != nil {
+					logger.WithField("filter_config", rule.Config).Errorf("get filter failed %v", err)
+					c.TextReply("查询失败 - 内部错误")
+					return false
+				}
+				if rule.Type == concern.FilterTypeType {
+					sb.WriteString("动态类型过滤模式 - 只推送以下种类的动态：\n")
+				} else if rule.Type == concern.FilterTypeNotType {
+					sb.WriteString("动态类型过滤模式 - 不推送以下种类的动态：\n")
+				}
+				for _, tp := range filter.Type {
+					sb.WriteString(tp)
+					sb.WriteRune('\n')
+				}
+			default:
+				sb.WriteString("未知规则类型：")
+				sb.WriteString(rule.Type)
 				sb.WriteRune('\n')
 			}
 		}

@@ -679,7 +679,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithImage
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithImage)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).
 					Errorf("Unmarshal origin cardWithImage failed %v", err)
@@ -709,7 +709,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_TextOnly
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardTextOnly)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithText failed %v", err)
 				return
@@ -719,7 +719,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithVideo
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithVideo)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithVideo failed %v", err)
 				return
@@ -733,7 +733,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithPost
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithPost)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin cardWithPost failed %v", err)
 				return
@@ -749,7 +749,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithMusic
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithMusic)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithMusic failed %v", err)
 				return
@@ -762,7 +762,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithSketch
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithSketch)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithSketch failed %v", err)
 				return
@@ -777,7 +777,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithLive
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithLive)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithLive failed %v", err)
 				return
@@ -788,7 +788,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithLiveV2
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithLiveV2)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithLiveV2 failed %v", err)
 				return
@@ -799,7 +799,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithMylist
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithMylist)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithMylist failed %v", err)
 				return
@@ -817,7 +817,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithCourse
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			origin := new(CardWithCourse)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err != nil {
 				log.WithField("origin", cardOrigin.GetOrigin()).Errorf("Unmarshal origin CardWithCourse failed %v", err)
 				return
@@ -831,7 +831,7 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			// 试试media
 			origin := new(CardWithMedia)
-			err := json.Unmarshal([]byte(cardOrigin.GetOrigin()), origin)
+			err := safeUnmarshalCard(cardOrigin.GetOrigin(), origin)
 			if err == nil && origin.GetApiSeasonInfo() != nil {
 				var desc = origin.GetNewDesc()
 				if len(desc) == 0 {

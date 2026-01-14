@@ -73,7 +73,7 @@ func TestGroupConcernConfig_ToString(t *testing.T) {
 				"title_change_notify": "bilibiliLive", "offline_notify": "douyuLive", "extend_notify": ""
 			},
 			"group_concern_filter": {
-				"type": "", "config":""
+				"type": "", "config":"", "rules": null
 			}
 		}`,
 	}
@@ -222,8 +222,9 @@ func TestGroupConcernFilterConfig_GetFilter(t *testing.T) {
 	assert.NotNil(t, g.GetGroupConcernAt())
 	assert.NotNil(t, g.GetGroupConcernFilter())
 
-	_, err := g.GetGroupConcernFilter().GetFilterByType()
-	assert.NotNil(t, err)
+	resType, err := g.GetGroupConcernFilter().GetFilterByType()
+	assert.Nil(t, err)
+	assert.Nil(t, resType)
 
 	assert.True(t, g.GroupConcernFilter.Empty())
 
@@ -244,8 +245,9 @@ func TestGroupConcernFilterConfig_GetFilter(t *testing.T) {
 	_, err = g.GetGroupConcernFilter().GetFilterByText()
 	assert.Nil(t, err)
 
-	_, err = g.GetGroupConcernFilter().GetFilterByType()
-	assert.NotNil(t, err)
+	resType, err = g.GetGroupConcernFilter().GetFilterByType()
+	assert.NotNil(t, resType)
+	assert.Nil(t, err)
 
 	assert.False(t, g.GetGroupConcernFilter().Empty())
 }
