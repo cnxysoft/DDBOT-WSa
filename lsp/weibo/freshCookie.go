@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	pathWeiboCN            = "https://weibo.cn/pub/"
 	pathWeiboMobile        = "https://m.weibo.cn/"
 	pathPassportGenvisitor = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
 )
@@ -59,6 +60,13 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	return resp, err
 }
 
+func refreshFrom(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeiboCN, nil, nil,
+		requests.AddUAOption(),
+		requests.WithCookieJar(jar),
+	)
+}
+
 func refreshXsrfToken(jar *cookiejar.Jar) error {
 	return requests.Get(pathWeiboMobile, nil, nil,
 		requests.WithCookieJar(jar),
@@ -79,6 +87,12 @@ func FreshCookie() ([]*http.Cookie, error) {
 		}).Errorf("incarnateResp error")
 		return nil, fmt.Errorf("genvisitor response error %v - %v",
 			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
+	}
+
+	err = refreshFrom(jar)
+	if err != nil {
+		logger.Errorf("refreshFrom error %v", err)
+		return nil, err
 	}
 
 	err = refreshXsrfToken(jar)
