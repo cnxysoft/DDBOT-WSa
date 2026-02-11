@@ -1113,6 +1113,7 @@ func SecAnalysis(id string) (result map[string]interface{}) {
 		requests.ProxyOption(proxy_pool.PreferNone),
 		requests.RetryOption(3),
 	}
+	opts = append(opts, GetVerifyOption()...)
 	err := requests.Get(Url, params, &resp, opts...)
 	if err != nil {
 		logger.WithField("url", Url).Errorf("SecAnalysis get failed %v", err)
