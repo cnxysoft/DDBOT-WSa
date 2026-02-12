@@ -253,6 +253,7 @@ type ApiContainerGetIndexCardsResponse struct {
 	Ok            int32                                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
 	Msg           string                                  `protobuf:"bytes,3,opt,name=msg,proto3" json:"msg,omitempty"`
 	Data          *ApiContainerGetIndexCardsResponse_Data `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Url           string                                  `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -306,6 +307,13 @@ func (x *ApiContainerGetIndexCardsResponse) GetData() *ApiContainerGetIndexCards
 		return x.Data
 	}
 	return nil
+}
+
+func (x *ApiContainerGetIndexCardsResponse) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
 }
 
 type Card struct {
@@ -944,7 +952,7 @@ type Card_Mblog_Pics struct {
 	Url           string                 `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
 	Size          string                 `protobuf:"bytes,3,opt,name=size,proto3" json:"size,omitempty"`
 	Large         *Card_Mblog_Pics_Large `protobuf:"bytes,5,opt,name=large,proto3" json:"large,omitempty"`
-	Type          string                 `protobuf:"bytes,6,opt,name=type,proto3" json:"type,omitempty"`
+	Type          string                 `protobuf:"bytes,6,opt,name=type,proto3" json:"type,omitempty"` // video、livephoto
 	VideoSrc      string                 `protobuf:"bytes,7,opt,name=videoSrc,proto3" json:"videoSrc,omitempty"`
 	Duration      float32                `protobuf:"fixed32,8,opt,name=duration,proto3" json:"duration,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1032,7 +1040,7 @@ func (x *Card_Mblog_Pics) GetDuration() float32 {
 
 type Card_Mblog_PageInfo struct {
 	state            protoimpl.MessageState         `protogen:"open.v1"`
-	Type             string                         `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Type             string                         `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // video、topic（超话）
 	UrlOri           string                         `protobuf:"bytes,2,opt,name=url_ori,json=urlOri,proto3" json:"url_ori,omitempty"`
 	PagePic          *Card_Mblog_PageInfo_PagePic   `protobuf:"bytes,3,opt,name=page_pic,json=pagePic,proto3" json:"page_pic,omitempty"`
 	MediaInfo        *Card_Mblog_PageInfo_MediaInfo `protobuf:"bytes,4,opt,name=media_info,json=mediaInfo,proto3" json:"media_info,omitempty"`
@@ -1360,11 +1368,12 @@ const file_lsp_weibo_weibo_proto_rawDesc = "" +
 	"screenName\x12*\n" +
 	"\x11profile_image_url\x18\x03 \x01(\tR\x0fprofileImageUrl\x12\x1f\n" +
 	"\vprofile_url\x18\x04 \x01(\tR\n" +
-	"profileUrl\"\xa1\x03\n" +
+	"profileUrl\"\xb3\x03\n" +
 	"!ApiContainerGetIndexCardsResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\x05R\x02ok\x12\x10\n" +
 	"\x03msg\x18\x03 \x01(\tR\x03msg\x12A\n" +
-	"\x04data\x18\x02 \x01(\v2-.weibo.ApiContainerGetIndexCardsResponse.DataR\x04data\x1a\x96\x02\n" +
+	"\x04data\x18\x02 \x01(\v2-.weibo.ApiContainerGetIndexCardsResponse.DataR\x04data\x12\x10\n" +
+	"\x03url\x18\x04 \x01(\tR\x03url\x1a\x96\x02\n" +
 	"\x04Data\x12^\n" +
 	"\fcardlistInfo\x18\x01 \x01(\v2:.weibo.ApiContainerGetIndexCardsResponse.Data.CardListInfoR\fcardlistInfo\x12!\n" +
 	"\x05cards\x18\x02 \x03(\v2\v.weibo.CardR\x05cards\x1a\x8a\x01\n" +

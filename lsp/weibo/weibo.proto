@@ -60,6 +60,7 @@ message ApiContainerGetIndexCardsResponse {
     repeated Card cards = 2;
   }
   Data data = 2;
+  string url = 4;
 }
 
 message Card {

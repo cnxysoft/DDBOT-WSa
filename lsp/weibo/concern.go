@@ -157,7 +157,12 @@ func (c *Concern) freshNews(uid int64) (*NewsInfo, error) {
 		log.Errorf("ApiContainerGetIndexCards error %v", err)
 		return nil, err
 	}
-	if cardResp.GetOk() != 1 {
+	if cardResp.GetOk() == -100 {
+		log.WithField("状态", cardResp.GetOk()).
+			WithField("验证URL", cardResp.GetUrl()).
+			Errorf("获取用户微博失败：触发了滑块验证")
+		return nil, errors.New("ApiContainerGetIndexCards not success")
+	} else if cardResp.GetOk() != 1 {
 		log.WithField("respOk", cardResp.GetOk()).
 			WithField("respMsg", cardResp.GetMsg()).
 			Errorf("ApiContainerGetIndexCards not ok")
