@@ -3,6 +3,7 @@ package weibo
 import (
 	"errors"
 	"fmt"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -36,6 +37,10 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 }
 
 func (c *Concern) Start() error {
+	var weiboSW bool = config.GlobalConfig.GetBool("weibo.enable")
+	if !weiboSW {
+		return nil
+	}
 	c.UseEmitQueue()
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
 		uid := id.(int64)
