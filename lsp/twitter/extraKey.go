@@ -25,6 +25,9 @@ func (e *ExtraKey) CompactMarkKey(keys ...interface{}) string {
 func (e *ExtraKey) NotifyMsgKey(keys ...interface{}) string {
 	return buntdb.TwitterNotifyMsgKey(keys...)
 }
+func (e *ExtraKey) MarkTweetIdKey(keys ...interface{}) string {
+	return buntdb.TwitterMarkTweetIdKey(keys...)
+}
 func NewExtraKey() *ExtraKey {
 	return &ExtraKey{}
 }

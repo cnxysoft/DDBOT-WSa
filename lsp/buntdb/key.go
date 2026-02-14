@@ -195,6 +195,9 @@ func TwitterCompactMarkKey(keys ...interface{}) string {
 func TwitterNotifyMsgKey(keys ...interface{}) string {
 	return NamedKey("TwitterNotifyMsg", keys)
 }
+func TwitterMarkTweetIdKey(keys ...interface{}) string {
+	return NamedKey("TwitterMarkTweetId", keys)
+}
 func DouyinUserInfoKey(keys ...interface{}) string {
 	return NamedKey("DouyinUserInfo", keys)
 }
