@@ -51,6 +51,12 @@ require (
 )
 
 require (
+	github.com/maruel/rs v1.1.0 // indirect
+	github.com/tuotoo/qrcode v0.0.0-20220425170535-52ccc2bebf5d // indirect
+	rsc.io/qr v0.2.0 // indirect
+)
+
+require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/sagikazarmark/locafero v0.10.0 // indirect
