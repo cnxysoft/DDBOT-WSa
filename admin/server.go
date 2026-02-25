@@ -292,8 +292,15 @@ func (s *Server) handleAddSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 添加订阅
+	parsedId, err := targetConcern.ParseId(fmt.Sprintf("%v", req.ID))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
+		return
+	}
+
 	sm := targetConcern.GetStateManager()
-	_, err := sm.AddGroupConcern(req.GroupCode, req.ID, concernType)
+	_, err = sm.AddGroupConcern(req.GroupCode, parsedId, concernType)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -342,8 +349,15 @@ func (s *Server) handleRemoveSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 删除订阅
+	parsedId, err := targetConcern.ParseId(fmt.Sprintf("%v", req.ID))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
+		return
+	}
+
 	sm := targetConcern.GetStateManager()
-	_, err := sm.RemoveGroupConcern(req.GroupCode, req.ID, concernType)
+	_, err = sm.RemoveGroupConcern(req.GroupCode, parsedId, concernType)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
