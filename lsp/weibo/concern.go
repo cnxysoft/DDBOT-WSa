@@ -45,7 +45,7 @@ func (c *Concern) Start() error {
 	if sub == "" {
 		if GetQRLoginEnable() {
 			logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
-			obtained, err := RunQRLogin(QRLoginOption{OutputDir: "."})
+			obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
 			if err != nil {
 				logger.Errorf("扫码登录获取微博SUB失败: %v", err)
 				logger.Warn("微博Cookie未设置，将关闭微博推送功能。")

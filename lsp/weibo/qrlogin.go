@@ -1,25 +1,30 @@
 package weibo
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
-	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/mattn/go-colorable"
 )
 
+// QRLoginOption controls the QR login helper behavior.
 type QRLoginOption struct {
 	OutputDir string
+	AutoOpen  bool
 }
 
 type qrImageResp struct {
@@ -37,52 +42,33 @@ type qrCheckResp struct {
 	Msg     string                 `json:"msg"`
 }
 
-type profileInfoResp struct {
-	Ok   int `json:"ok"`
-	Data struct {
-		User interface{} `json:"user"`
-	} `json:"data"`
-}
-
 var (
 	qrLogger      = utils.GetModuleLogger("weibo-qr")
 	jsonpRegex    = regexp.MustCompile(`\((.*)\)`)
 	altRegex      = regexp.MustCompile(`(ALT-[\w-]+)`)
-	defaultUA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	defaultUA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 	defaultRefer  = "https://weibo.com/newlogin?tabtype=weibo&gid=102803&url=https%3A%2F%2Fweibo.com%2F"
 	qrImageURL    = "https://login.sina.com.cn/sso/qrcode/image"
 	qrCheckURL    = "https://passport.weibo.com/sso/v2/qrcode/check"
 	qrLoginURL    = "https://passport.weibo.com/sso/v2/login"
 	qrLoginTarget = "https://weibo.com/newlogin?tabtype=weibo&gid=102803&openLoginLayer=0&url=https%3A%2F%2Fweibo.com%2F"
-
-	currentSUB             string
-	subLastChecked         time.Time
-	lastSuccessfulValidate time.Time
-	subMutex               sync.Mutex
-	lastRefreshErr         time.Time
-	retryCount             int
-
-	keepAliveInterval = 3 * time.Hour // 保活间隔：每3小时尝试一次轻量访问
-	checkInterval     = 8 * time.Hour // 严格失效检查间隔
-	maxRetryDelay     = 4 * time.Hour // 指数退避最大等待
 )
 
-const profileCheckURL = "https://weibo.com/ajax/profile/info"
-
-// RunQRLogin 下载二维码、等待扫码、兑换 ALT 并返回 SUB
+// RunQRLogin downloads a QR code, waits for scan, exchanges ALT for cookies, and returns SUB.
+// It also saves the QR image to outputDir/weibo_debug.png and SUB to outputDir/weibo_sub.txt.
 func RunQRLogin(opt QRLoginOption) (string, error) {
 	if opt.OutputDir == "" {
 		opt.OutputDir = "."
 	}
-	if err := os.MkdirAll(opt.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(opt.OutputDir, 0o755); err != nil {
 		return "", err
 	}
 	if !filepath.IsAbs(opt.OutputDir) {
-		if abs, err := filepath.Abs(opt.OutputDir); err == nil {
+		abs, err := filepath.Abs(opt.OutputDir)
+		if err == nil {
 			opt.OutputDir = abs
 		}
 	}
-
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar:     jar,
@@ -104,21 +90,6 @@ func RunQRLogin(opt QRLoginOption) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	subMutex.Lock()
-	currentSUB = sub
-	lastSuccessfulValidate = time.Now()
-	subMutex.Unlock()
-
-	// 删除二维码图片文件
-	imgPath := filepath.Join(opt.OutputDir, "weibo_debug.png")
-	_ = os.Remove(imgPath)
-
-	qrLogger.Infof("SUB 登录/刷新成功 | 上次验证: %s | 下次检查 ≈ %s (间隔 %v)",
-		lastSuccessfulValidate.Format("2006-01-02 15:04:05"),
-		time.Now().Add(checkInterval).Format("2006-01-02 15:04:05"),
-		checkInterval)
-
 	return sub, nil
 }
 
@@ -145,7 +116,6 @@ func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
 	if len(m) < 2 {
 		return "", fmt.Errorf("unexpected response: %s", string(body))
 	}
-
 	var qrResp qrImageResp
 	if err := json.Unmarshal([]byte(m[1]), &qrResp); err != nil {
 		return "", err
@@ -153,12 +123,11 @@ func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
 	if qrResp.Retcode != 20000000 {
 		return "", fmt.Errorf("qr image retcode=%d msg=%s", qrResp.Retcode, qrResp.Msg)
 	}
-
 	imageURL := qrResp.Data.Image
 	if !strings.HasPrefix(imageURL, "http") {
 		imageURL = "https:" + imageURL
 	}
-
+	// download image
 	imgReq, _ := http.NewRequest(http.MethodGet, imageURL, nil)
 	imgReq.Header.Set("User-Agent", defaultUA)
 	imgReq.Header.Set("Referer", defaultRefer)
@@ -170,11 +139,14 @@ func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
 	imgData, _ := io.ReadAll(imgResp.Body)
 
 	imgPath := filepath.Join(opt.OutputDir, "weibo_debug.png")
-	if err := os.WriteFile(imgPath, imgData, 0644); err != nil {
+	if err := os.WriteFile(imgPath, imgData, 0o644); err != nil {
 		return "", err
 	}
-
-	qrLogger.Infof("二维码已保存至 %s，请扫码登录", imgPath)
+	printQRCode(imgData)
+	qrLogger.Infof("二维码已保存: %s (如控制台无法扫，请用此文件)", imgPath)
+	if opt.AutoOpen {
+		_ = exec.Command("cmd", "/C", "start", imgPath).Start()
+	}
 	return qrResp.Data.Qrid, nil
 }
 
@@ -194,7 +166,6 @@ func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
 		req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
 		req.Header.Set("User-Agent", defaultUA)
 		req.Header.Set("Referer", defaultRefer)
-
 		resp, err := client.Do(req)
 		if err != nil {
 			qrLogger.Debugf("轮询异常: %v", err)
@@ -202,7 +173,6 @@ func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-
 		var c qrCheckResp
 		if err := json.Unmarshal(body, &c); err != nil {
 			qrLogger.Debugf("轮询解析失败: %v - %s", err, string(body))
@@ -217,8 +187,10 @@ func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
 		case 20000000:
 			qrLogger.Info("扫码成功，等待登录完成")
 			return &c, nil
-		case 50114002, 50114001:
-			// 静音
+		case 50114002:
+			// 静音轮询，避免刷屏
+		case 50114001:
+			// 静音轮询，避免刷屏
 		case 50114004:
 			return nil, fmt.Errorf("二维码已过期，请重试")
 		default:
@@ -259,17 +231,14 @@ func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (str
 	if sub == "" {
 		return "", fmt.Errorf("未找到SUB cookie")
 	}
-
 	subPath := filepath.Join(outputDir, "weibo_sub.txt")
-	_ = os.WriteFile(subPath, []byte(sub), 0644)
+	_ = os.WriteFile(subPath, []byte(sub), 0o644)
 	qrLogger.Infof("SUB 已保存到: %s", subPath)
-
 	if err := writeBackConfig(sub); err != nil {
-		qrLogger.Warnf("写回配置失败: %v (请手动写入 application.yaml weibo.sub)", err)
+		qrLogger.Warnf("SUB 已获取，但写回配置失败: %v (请手动写入 application.yaml weibo.sub)", err)
 	} else {
-		qrLogger.Infof("已写入配置 weibo.sub")
+		qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
 	}
-
 	return sub, nil
 }
 
@@ -277,10 +246,10 @@ func extractALT(raw *qrCheckResp) string {
 	if raw == nil || raw.Data == nil {
 		return ""
 	}
-	if v, ok := raw.Data["alt"].(string); ok && v != "" {
+	if v, ok := raw.Data["alt"].(string); ok {
 		return v
 	}
-	if v, ok := raw.Data["ticket"].(string); ok && v != "" {
+	if v, ok := raw.Data["ticket"].(string); ok {
 		return v
 	}
 	str := fmt.Sprintf("%v", raw.Data)
@@ -308,52 +277,42 @@ func pickSUB(client *http.Client, u *url.URL) string {
 	return ""
 }
 
-func isValidSUB(sub string) bool {
-	if sub == "" {
-		return false
-	}
-
-	jar, _ := cookiejar.New(nil)
-	u, _ := url.Parse("https://weibo.com")
-	jar.SetCookies(u, []*http.Cookie{{
-		Name:   "SUB",
-		Value:  sub,
-		Domain: ".weibo.com",
-		Path:   "/",
-	}})
-
-	client := &http.Client{Jar: jar, Timeout: 10 * time.Second}
-
-	req, _ := http.NewRequest(http.MethodGet, profileCheckURL, nil)
-	req.Header.Set("User-Agent", defaultUA)
-	req.Header.Set("Referer", "https://weibo.com/")
-
-	resp, err := client.Do(req)
+// printQRCode renders PNG QR to console; falls back silently on error.
+func printQRCode(imgData []byte) {
+	const (
+		black = "\033[48;5;0m  \033[0m"
+		white = "\033[48;5;7m  \033[0m"
+	)
+	img, err := png.Decode(bytes.NewReader(imgData))
 	if err != nil {
-		qrLogger.Debugf("检查 SUB 网络异常: %v", err)
-		return false
+		qrLogger.Debugf("二维码控制台打印失败: %v", err)
+		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false
+	gray, ok := img.(*image.Gray)
+	if !ok {
+		qrLogger.Debug("二维码控制台打印失败: 非灰度图")
+		return
 	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var info profileInfoResp
-	if err := json.Unmarshal(body, &info); err != nil {
-		return false
+	data := gray.Pix
+	bound := img.Bounds().Max.X
+	buf := make([]byte, 0, (bound*4+1)*bound)
+	i := 0
+	for y := 0; y < bound; y++ {
+		i = y * bound
+		for x := 0; x < bound; x++ {
+			if data[i] != 255 {
+				buf = append(buf, white...)
+			} else {
+				buf = append(buf, black...)
+			}
+			i++
+		}
+		buf = append(buf, '\n')
 	}
-
-	if info.Ok == 1 && info.Data.User != nil {
-		subMutex.Lock()
-		lastSuccessfulValidate = time.Now()
-		subMutex.Unlock()
-		return true
-	}
-	return false
+	_, _ = colorable.NewColorableStdout().Write(buf)
 }
 
+// writeBackConfig writes SUB into application.yaml, touching only weibo.sub.
 func writeBackConfig(sub string) error {
 	cfgFile := config.GlobalConfig.ConfigFileUsed()
 	if cfgFile == "" {
@@ -367,6 +326,7 @@ func writeBackConfig(sub string) error {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 
+	// Line-by-line rewrite to avoid touching其他块
 	var out []string
 	inWeibo := false
 	indentWeibo := ""
@@ -382,13 +342,16 @@ func writeBackConfig(sub string) error {
 		}
 
 		if inWeibo {
-			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") && !strings.HasPrefix(line, indentWeibo+"\t") {
+			// 退出 weibo 块：遇到非缩进行或空缩进变化
+			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
+				// 退出前若未插入sub则补一行
 				if !inserted {
 					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
 					inserted = true
 				}
 				inWeibo = false
 			} else {
+				// 在 weibo 块内
 				subLineRe := regexp.MustCompile(`^\s*sub:\s*`)
 				if subLineRe.MatchString(line) {
 					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
@@ -399,6 +362,7 @@ func writeBackConfig(sub string) error {
 		}
 		out = append(out, line)
 
+		// 最后一行且在weibo块且未插入
 		if i == len(lines)-1 && inWeibo && !inserted {
 			out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
 			inserted = true
@@ -406,6 +370,7 @@ func writeBackConfig(sub string) error {
 	}
 
 	if !inserted {
+		// 未找到 weibo 块，追加新块
 		if len(out) > 0 && out[len(out)-1] != "" {
 			out = append(out, "")
 		}
@@ -413,168 +378,5 @@ func writeBackConfig(sub string) error {
 		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub))
 	}
 
-	return os.WriteFile(cfgFile, []byte(strings.Join(out, "\n")), 0644)
-}
-
-// keepAliveTryRenew 尝试通过访问轻量接口续期 session
-func keepAliveTryRenew(sub string) (renewed bool, invalid bool, err error) {
-	if sub == "" {
-		return false, true, fmt.Errorf("sub 为空")
-	}
-
-	jar, _ := cookiejar.New(nil)
-	baseURL, _ := url.Parse("https://weibo.com")
-	jar.SetCookies(baseURL, []*http.Cookie{{
-		Name:   "SUB",
-		Value:  sub,
-		Domain: ".weibo.com",
-		Path:   "/",
-	}})
-
-	client := &http.Client{
-		Jar:     jar,
-		Timeout: 12 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if strings.Contains(req.URL.String(), "passport.weibo.com") ||
-				strings.Contains(req.URL.String(), "login.sina.com.cn") {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-
-	req, err := http.NewRequest("GET", profileCheckURL, nil)
-	if err != nil {
-		return false, false, err
-	}
-	req.Header.Set("User-Agent", defaultUA)
-	req.Header.Set("Referer", "https://weibo.com/")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, false, err
-	}
-	defer resp.Body.Close()
-
-	location := resp.Header.Get("Location")
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 &&
-		(strings.Contains(location, "passport.weibo.com") || strings.Contains(location, "login")) {
-		return false, true, fmt.Errorf("重定向到登录页，cookie 很可能已失效")
-	}
-
-	if len(resp.Header.Values("Set-Cookie")) > 0 {
-		renewed = true
-		qrLogger.Infof("保活获得 %d 条 Set-Cookie → 可能续期成功", len(resp.Header.Values("Set-Cookie")))
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var info profileInfoResp
-	if json.Unmarshal(body, &info) == nil && info.Ok == 1 && info.Data.User != nil {
-		renewed = true
-	} else {
-		invalid = true
-	}
-
-	return renewed, invalid, nil
-}
-
-func AutoRefreshSUB() (string, error) {
-	opt := QRLoginOption{
-		OutputDir: ".",
-	}
-	newSub, err := RunQRLogin(opt)
-	return newSub, err
-}
-
-func GetCurrentSUB() string {
-	subMutex.Lock()
-	defer subMutex.Unlock()
-	return currentSUB
-}
-
-func InitSUB() {
-	subMutex.Lock()
-	currentSUB = config.GlobalConfig.GetString("weibo.sub")
-	subMutex.Unlock()
-
-	if currentSUB == "" || !isValidSUB(currentSUB) {
-		qrLogger.Warn("SUB 不存在或已失效，启动自动登录...")
-		_, _ = AutoRefreshSUB()
-	} else {
-		subMutex.Lock()
-		lastSuccessfulValidate = time.Now()
-		subMutex.Unlock()
-		qrLogger.Infof("启动检测：SUB 有效 | 上次验证: %s | 下次检查 ≈ %s",
-			lastSuccessfulValidate.Format("2006-01-02 15:04"),
-			time.Now().Add(checkInterval).Format("2006-01-02 15:04"))
-	}
-	subLastChecked = time.Now()
-	retryCount = 0
-}
-
-func StartSUBMonitor() {
-	go func() {
-		checkTicker := time.NewTicker(checkInterval)
-		keepAliveTicker := time.NewTicker(keepAliveInterval)
-
-		for {
-			select {
-			case <-checkTicker.C:
-				subMutex.Lock()
-				sub := currentSUB
-				subMutex.Unlock()
-
-				if isValidSUB(sub) {
-					subMutex.Lock()
-					lastSuccessfulValidate = time.Now()
-					subMutex.Unlock()
-					qrLogger.Infof("周期检查：SUB 仍有效 | 上次验证: %s | 下次检查 ≈ %s",
-						lastSuccessfulValidate.Format("2006-01-02 15:04"),
-						time.Now().Add(checkInterval).Format("2006-01-02 15:04"))
-				} else {
-					qrLogger.Warn("周期检查：SUB 已失效，尝试自动刷新...")
-					now := time.Now()
-					delaySec := math.Min(float64(retryCount*retryCount*30), float64(maxRetryDelay/time.Second))
-					delay := time.Duration(delaySec) * time.Second
-					if now.Sub(lastRefreshErr) < delay {
-						qrLogger.Infof("退避等待 %.0f 秒...", delay.Seconds())
-						time.Sleep(delay)
-					}
-
-					_, err := AutoRefreshSUB()
-					if err == nil {
-						retryCount = 0
-						lastRefreshErr = time.Time{}
-					} else {
-						retryCount++
-						lastRefreshErr = now
-					}
-				}
-				subLastChecked = time.Now()
-
-			case <-keepAliveTicker.C:
-				subMutex.Lock()
-				sub := currentSUB
-				subMutex.Unlock()
-
-				if sub == "" {
-					continue
-				}
-
-				renewed, invalid, err := keepAliveTryRenew(sub)
-				if err != nil {
-					qrLogger.Debugf("保活异常: %v", err)
-				}
-				if invalid {
-					qrLogger.Warn("保活检测到登录跳转，提前判定失效 → 触发刷新")
-					_, _ = AutoRefreshSUB()
-				} else if renewed {
-					qrLogger.Infof("保活成功，可能已续期 session")
-				} else {
-					qrLogger.Debug("保活完成，无明显续期迹象")
-				}
-			}
-		}
-	}()
+	return os.WriteFile(cfgFile, []byte(strings.Join(out, "\n")), 0o644)
 }

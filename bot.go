@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/admin"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -142,6 +143,8 @@ func Run() {
 	// 初始化 Modules
 	bot.StartService()
 
+	_, _ = admin.Start(&bot.Instance.Online, nil)
+
 	// 登录 跳过登录
 	//bot.Login()
 
@@ -265,6 +268,10 @@ websocket:
   token:
   ws-server: 0.0.0.0:15630
   ws-reverse: ws://localhost:3001
+admin:
+  enable: false
+  addr: "127.0.0.1:15631"
+  token: ""
 
 # 延迟加载好友、群组、群员信息
 reloadDelay:
