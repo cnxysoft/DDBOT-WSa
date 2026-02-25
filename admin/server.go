@@ -57,6 +57,7 @@ type SubInfo struct {
 	Type      string      `json:"type"`
 	Site      string      `json:"site"`
 	GroupCode int64       `json:"groupCode"`
+	Name      string      `json:"name"`
 }
 
 type ConfigInfo struct {
@@ -235,11 +236,16 @@ func (s *Server) handleSubsList(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range ids {
 			if i < len(groupCodes) && i < len(ctypes) {
+				name := ""
+				if info, err := c.Get(ids[i]); err == nil && info != nil {
+					name = info.GetName()
+				}
 				subs = append(subs, SubInfo{
 					ID:        ids[i],
 					Type:      ctypes[i].String(),
 					Site:      c.Site(),
 					GroupCode: groupCodes[i],
+					Name:      name,
 				})
 			}
 		}
@@ -1175,7 +1181,7 @@ func (s *Server) serveApiDebugger(w http.ResponseWriter, r *http.Request) {
                 
                 <div class="form-group">
                     <label>基础URL:</label>
-                    <input type="text" id="baseUrl" class="form-control" value="http://` + s.addr + `" placeholder="http://localhost:15631">
+                    <input type="text" id="baseUrl" class="form-control" value="http://` + strings.TrimPrefix(s.addr, "http://") + `" placeholder="http://localhost:15631">
                 </div>
                 
                 <div class="form-row">
