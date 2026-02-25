@@ -10,19 +10,46 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/ghodss/yaml"
+	"github.com/sirupsen/logrus"
 )
 
 // 请求和响应结构体
+
+type mockMsgCtx struct {
+	groupCode int64
+}
+
+func (m *mockMsgCtx) TextSend(text string) interface{}  { return nil }
+func (m *mockMsgCtx) TextReply(text string) interface{} { return nil }
+func (m *mockMsgCtx) Reply(msg *mmsg.MSG) interface{}   { return nil }
+func (m *mockMsgCtx) Send(msg *mmsg.MSG) interface{}    { return nil }
+func (m *mockMsgCtx) NoPermissionReply() interface{}    { return nil }
+func (m *mockMsgCtx) GetLog() *logrus.Entry             { return logrus.NewEntry(logrus.StandardLogger()) }
+func (m *mockMsgCtx) GetTarget() mmsg.Target            { return mmsg.NewGroupTarget(m.groupCode) }
+func (m *mockMsgCtx) GetSender() *message.Sender        { return &message.Sender{Uin: 10000} }
 
 type AddSubRequest struct {
 	Site      string      `json:"site"`
 	ID        interface{} `json:"id"`
 	Type      string      `json:"type"`
 	GroupCode int64       `json:"groupCode"`
+}
+
+func parseIdToString(id interface{}) string {
+	switch v := id.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	case int, int32, int64:
+		return fmt.Sprintf("%d", v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 type RemoveSubRequest struct {
@@ -292,15 +319,15 @@ func (s *Server) handleAddSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 添加订阅
-	parsedId, err := targetConcern.ParseId(fmt.Sprintf("%v", req.ID))
+	parsedId, err := targetConcern.ParseId(parseIdToString(req.ID))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
 		return
 	}
 
-	sm := targetConcern.GetStateManager()
-	_, err = sm.AddGroupConcern(req.GroupCode, parsedId, concernType)
+	ctx := &mockMsgCtx{groupCode: req.GroupCode}
+	_, err = targetConcern.Add(ctx, req.GroupCode, parsedId, concernType)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -349,15 +376,15 @@ func (s *Server) handleRemoveSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 删除订阅
-	parsedId, err := targetConcern.ParseId(fmt.Sprintf("%v", req.ID))
+	parsedId, err := targetConcern.ParseId(parseIdToString(req.ID))
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
 		return
 	}
 
-	sm := targetConcern.GetStateManager()
-	_, err = sm.RemoveGroupConcern(req.GroupCode, parsedId, concernType)
+	ctx := &mockMsgCtx{groupCode: req.GroupCode}
+	_, err = targetConcern.Remove(ctx, req.GroupCode, parsedId, concernType)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
