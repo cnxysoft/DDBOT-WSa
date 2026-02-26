@@ -43,6 +43,8 @@ type AddSubRequest struct {
 
 func parseIdToString(id interface{}) string {
 	switch v := id.(type) {
+	case json.Number:
+		return v.String()
 	case float64:
 		return fmt.Sprintf("%.0f", v)
 	case int, int32, int64:
@@ -57,6 +59,21 @@ type RemoveSubRequest struct {
 	ID        interface{} `json:"id"`
 	Type      string      `json:"type"`
 	GroupCode int64       `json:"groupCode"`
+}
+
+type GetSubConfigRequest struct {
+	Site      string      `json:"site"`
+	ID        interface{} `json:"id"`
+	Type      string      `json:"type"`
+	GroupCode int64       `json:"groupCode"`
+}
+
+type SetSubConfigRequest struct {
+	Site      string                      `json:"site"`
+	ID        interface{}                 `json:"id"`
+	Type      string                      `json:"type"`
+	GroupCode int64                       `json:"groupCode"`
+	Config    *concern.GroupConcernConfig `json:"config"`
 }
 
 type ConfigUpdateRequest struct {
@@ -161,6 +178,7 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	mux.HandleFunc("/api/v1/subs/add", s.withAuth(s.handleAddSub))
 	mux.HandleFunc("/api/v1/subs/remove", s.withAuth(s.handleRemoveSub))
 	mux.HandleFunc("/api/v1/subs/detail/{id}", s.withAuth(s.handleSubDetail))
+	mux.HandleFunc("/api/admin/sub/config", s.withAuth(s.handleSubConfig))
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
@@ -282,7 +300,9 @@ func (s *Server) handleSubsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAddSub(w http.ResponseWriter, r *http.Request) {
 	var req AddSubRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 		return
@@ -339,7 +359,9 @@ func (s *Server) handleAddSub(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRemoveSub(w http.ResponseWriter, r *http.Request) {
 	var req RemoveSubRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 		return
@@ -427,6 +449,92 @@ func (s *Server) handleSubDetail(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNotFound)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": "Subscription not found"})
+}
+
+func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		site := r.URL.Query().Get("site")
+		id := r.URL.Query().Get("id")
+		groupCodeStr := r.URL.Query().Get("groupCode")
+
+		var targetConcern concern.Concern
+		for _, c := range concern.ListConcern() {
+			if c.Site() == site {
+				targetConcern = c
+				break
+			}
+		}
+
+		if targetConcern == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid site"})
+			return
+		}
+
+		parsedId, err := targetConcern.ParseId(id)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
+			return
+		}
+
+		var groupCode int64
+		fmt.Sscanf(groupCodeStr, "%d", &groupCode)
+
+		sm := targetConcern.GetStateManager()
+		cfg := sm.GetGroupConcernConfig(groupCode, parsedId)
+
+		_ = json.NewEncoder(w).Encode(cfg)
+		return
+	}
+
+	if r.Method == "POST" {
+		var req SetSubConfigRequest
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		if err := decoder.Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request: " + err.Error()})
+			return
+		}
+
+		var targetConcern concern.Concern
+		for _, c := range concern.ListConcern() {
+			if c.Site() == req.Site {
+				targetConcern = c
+				break
+			}
+		}
+
+		if targetConcern == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid site"})
+			return
+		}
+
+		parsedId, err := targetConcern.ParseId(parseIdToString(req.ID))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID format: " + err.Error()})
+			return
+		}
+
+		sm := targetConcern.GetStateManager()
+		err = sm.OperateGroupConcernConfig(req.GroupCode, parsedId, req.Config, func(IConfig concern.IConfig) bool {
+			return true
+		})
+
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		return
+	}
+
+	w.WriteHeader(http.StatusMethodNotAllowed)
 }
 
 // 配置管理 API 处理函数
