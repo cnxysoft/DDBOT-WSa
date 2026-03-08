@@ -615,7 +615,10 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	var proxyStr string
 	proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
 	if err != nil {
-		return "", err
+		if err != proxy_pool.ErrNil {
+			return "", err
+		}
+		logger.WithError(err).Debug("proxy pool disabled, downloading without proxy")
 	} else {
 		proxyStr = proxy.ProxyString()
 	}
