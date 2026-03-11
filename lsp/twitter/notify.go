@@ -337,11 +337,13 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		logger.WithField("compact_key", n.compactKey).Debug("compact notify")
 		Tips := "转发"
 		var OrgUserName string
-		if n.Tweet.QuoteTweet != nil {
+		if n.Tweet.QuoteTweet != nil && n.Tweet.QuoteTweet.OrgUser != nil {
 			OrgUserName = n.Tweet.QuoteTweet.OrgUser.Name
 			Tips = "引用"
-		} else {
+		} else if n.Tweet.OrgUser != nil {
 			OrgUserName = n.Tweet.OrgUser.Name
+		} else {
+			OrgUserName = "Unknown User"
 		}
 		m.Textf("X-%s%s了%s的推文：\n%s\n%s\n",
 			n.Name,
@@ -359,8 +361,11 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		var CreatedAt time.Time
 		if n.Tweet.RtType() == RETWEET {
 			CreatedAt = time.Now().UTC()
-			m.Textf("X-%s转发了%s的推文：\n",
-				n.Name, n.Tweet.OrgUser.Name)
+			OrgUserName := "Unknown User"
+			if n.Tweet.OrgUser != nil {
+				OrgUserName = n.Tweet.OrgUser.Name
+			}
+			m.Textf("X-%s 转发了%s的推文：\n", n.Name, OrgUserName)
 		} else {
 			CreatedAt = n.Tweet.CreatedAt
 			m.Textf("X-%s发布了新推文：\n", n.Name)
@@ -381,9 +386,17 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 			var CreatedAt time.Time
 			quoteTxt := "\n%v引用了%v的推文：\n"
 			CreatedAt = QuoteTweet.CreatedAt
-			// 检查是否需要插入cut
+			// 检查是否需要插入 cut
 			addCut(m, &quoteTxt)
-			m.Textf(quoteTxt, n.Tweet.OrgUser.Name, QuoteTweet.OrgUser.Name)
+			MainUserName := "Unknown User"
+			QuoteUserName := "Unknown User"
+			if n.Tweet.OrgUser != nil {
+				MainUserName = n.Tweet.OrgUser.Name
+			}
+			if QuoteTweet.OrgUser != nil {
+				QuoteUserName = QuoteTweet.OrgUser.Name
+			}
+			m.Textf(quoteTxt, MainUserName, QuoteUserName)
 			m.Text(CSTTime(CreatedAt).Format(time.DateTime) + "\n")
 			// msg加入推文
 			if QuoteTweet.Content != "" {

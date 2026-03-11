@@ -6,16 +6,25 @@
     {{ end -}}
 
     {{ $tips := "转发" -}}
-    {{ $orgUserName := $dynamic.Retweet.User.Name -}}
+    {{ $orgUserName := "Unknown User" -}}
+    {{ if $dynamic.Retweet.User.Name -}}
+        {{ $orgUserName = $dynamic.Retweet.User.Name -}}
+    {{ end -}}
     {{ if $dynamic.WithQuote -}}
-        {{ $orgUserName = $dynamic.Quote.User.Name -}}
-        {{ $tips = "引用" -}}
+        {{ if $dynamic.Quote.User.Name -}}
+            {{ $orgUserName = $dynamic.Quote.User.Name -}}
+            {{ $tips = "引用" -}}
+        {{ end -}}
     {{ end -}}
 
     {{ printf "X-%s%s了%s的推文：\n%s\n%s\n" $dynamic.User.Name $tips $orgUserName $dynamic.Date $dynamic.Content -}}
 {{ else -}}
-    {{ if eq $dynamic.Type 2 -}}
-        {{ printf "X-%s转发了%s的推文：\n" $dynamic.User.Name $dynamic.Retweet.User.Name -}}
+   {{ if eq $dynamic.Type 2 -}}
+        {{ $retweetUser := "Unknown User" -}}
+        {{ if $dynamic.Retweet.User.Name -}}
+            {{ $retweetUser = $dynamic.Retweet.User.Name -}}
+        {{ end -}}
+        {{ printf "X-%s 转发了%s的推文：\n" $dynamic.User.Name $retweetUser -}}
     {{ else -}}
         {{ printf "X-%s发布了新推文：\n" $dynamic.User.Name -}}
     {{ end -}}
@@ -56,7 +65,15 @@
     {{ end -}}
 
     {{ if $dynamic.WithQuote -}}
-        {{ printf "\n%s引用了%s的推文：\n" $dynamic.User.Name $dynamic.Quote.User.Name -}}
+        {{ $mainUser := "Unknown User" -}}
+        {{ if $dynamic.User.Name -}}
+            {{ $mainUser = $dynamic.User.Name -}}
+        {{ end -}}
+        {{ $quoteUser := "Unknown User" -}}
+        {{ if $dynamic.Quote.User.Name -}}
+            {{ $quoteUser = $dynamic.Quote.User.Name -}}
+        {{ end -}}
+        {{ printf "\n%s引用了%s的推文：\n" $mainUser $quoteUser -}}
         {{ printf "%s\n" $dynamic.Quote.Date -}}
         {{ if ne $dynamic.Quote.Content "" -}}
             {{ printf "%s\n" $dynamic.Quote.Content -}}
