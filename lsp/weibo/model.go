@@ -90,7 +90,7 @@ func NewConcernNewsNotify(groupCode int64, info *NewsInfo) []*ConcernNewsNotify 
 		result = append(result, &ConcernNewsNotify{
 			GroupCode: groupCode,
 			UserInfo:  info.UserInfo,
-			Card:      NewCacheCard(card, info.GetName()),
+			Card:      NewCacheCard(card, info.GetName(), info.Uid),
 		})
 	}
 	return result
@@ -142,77 +142,58 @@ type WeiboPage struct {
 type CacheCard struct {
 	*Card
 	Name string
+	Uid  int64
 
 	once     sync.Once
 	msgCache *mmsg.MSG
 	dynamic  WeiboDynamic
 }
 
-func NewCacheCard(card *Card, name string) *CacheCard {
-	return &CacheCard{Card: card, Name: name}
+func NewCacheCard(card *Card, name string, uid int64) *CacheCard {
+	return &CacheCard{Card: card, Name: name, Uid: uid}
 }
 
 func (c *CacheCard) prepare() {
-	// 初始化动态数据结构
 	dynamic := WeiboDynamic{}
 
-	// 填充用户信息
 	dynamic.User = WeiboUser{
-		Name: c.Name,
-		Id:   c.Card.GetUser().GetId(),
+		Name: c.resolveUserName(c.Card),
+		Id:   c.resolveUserID(c.Card),
 	}
 
-	// 填充微博基本信息
 	dynamic.Type = c.Card.GetMblogtype()
 	dynamic.Date = getTimeString(c.Card.GetCreatedAt())
-	dynamic.Url = getWeiboUrl(c.Card.GetUser().GetId(), c.Card.Mblogid)
-
-	// 填充微博内容
-	if len(c.Card.GetRawText()) > 0 {
-		rawText := parseHTML(c.Card.GetRawText())
-		dynamic.Content = localutils.RemoveHtmlTag(rawText)
-	} else {
-		text := parseHTML(c.Card.GetText())
-		dynamic.Content = localutils.RemoveHtmlTag(text)
-	}
-
-	// 收集微博图片
+	dynamic.Url = getWeiboUrl(dynamic.User.Id, resolveMblogID(c.Card))
+	dynamic.Content = normalizeCardContent(c.Card)
 	dynamic.Images = findPicUrlsForCard(c.Card.GetPicInfos())
 
-	// 处理转发微博
 	if c.Card.GetRetweetedStatus() != nil {
 		dynamic.WithRetweet = true
 		retweetStatus := c.Card.GetRetweetedStatus()
 
-		// 填充转发用户信息
 		dynamic.Retweet.User = WeiboUser{
 			Name: retweetStatus.GetUser().GetScreenName(),
 			Id:   retweetStatus.GetUser().GetId(),
 		}
-
-		// 填充转发内容
-		if len(retweetStatus.GetRawText()) > 0 {
-			rawText := parseHTML(retweetStatus.GetRawText())
-			dynamic.Retweet.Content = localutils.RemoveHtmlTag(rawText)
-		} else {
-			text := parseHTML(retweetStatus.GetText())
-			dynamic.Retweet.Content = localutils.RemoveHtmlTag(text)
-		}
-
-		// 收集转发微博图片
+		dynamic.Retweet.Content = normalizeCardContent(retweetStatus)
 		dynamic.Retweet.Images = findPicUrlsForCard(retweetStatus.GetPicInfos())
 		if retweetStatus.GetMixMediaInfo() != nil {
 			dynamic.Retweet.Images = append(dynamic.Retweet.Images, findPicUrlsForMix(retweetStatus.GetMixMediaInfo().GetItems())...)
 		}
+		if retweetStatus.GetPageInfo() != nil {
+			if pagePic := retweetStatus.GetPageInfo().GetPagePic(); pagePic != "" && !isTopicPageInfo(retweetStatus.GetPageInfo()) {
+				dynamic.Retweet.Images = append(dynamic.Retweet.Images, pagePic)
+			}
+		}
 	}
 
-	// 处理页面信息（视频、文章等）
 	if c.GetPageInfo() != nil {
 		dynamic.Page.Type = c.GetPageInfo().GetObjectType()
-		dynamic.Page.CoverUrl = c.GetPageInfo().GetPagePic()
+		if !isTopicPageInfo(c.GetPageInfo()) {
+			dynamic.Page.CoverUrl = c.GetPageInfo().GetPagePic()
+		}
 		dynamic.Page.Content1 = c.GetPageInfo().GetContent1()
 
-		// 处理视频页面
 		if c.GetPageInfo().GetObjectType() == "video" {
 			mediaInfo := c.GetPageInfo().GetMediaInfo()
 			dynamic.Video.Title = mediaInfo.GetName()
@@ -220,13 +201,80 @@ func (c *CacheCard) prepare() {
 			dynamic.Video.PublishTime = time.Unix(mediaInfo.GetVideoPublishTime(), 0).Format(time.DateTime)
 			dynamic.Video.OnlineUsers = mediaInfo.GetOnlineUsers()
 		}
-	} else if c.Card.GetMixMediaInfo() != nil {
-		// 处理混合媒体信息
+	}
+
+	if c.Card.GetMixMediaInfo() != nil {
 		dynamic.Images = append(dynamic.Images, findPicUrlsForMix(c.Card.GetMixMediaInfo().GetItems())...)
 	}
 
-	// 保存动态数据
 	c.dynamic = dynamic
+}
+
+func normalizeCardContent(card *Card) string {
+	if len(card.GetRawText()) > 0 {
+		rawText := parseHTML(card.GetRawText())
+		return localutils.RemoveHtmlTag(rawText)
+	}
+	text := parseHTML(card.GetText())
+	return localutils.RemoveHtmlTag(text)
+}
+
+func getPageInfoTypeString(pageInfo *Card_PageInfo) string {
+	if pageInfo == nil || pageInfo.GetType() == nil {
+		return ""
+	}
+
+	switch value := pageInfo.GetType().AsInterface().(type) {
+	case string:
+		return value
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	default:
+		return ""
+	}
+}
+
+func isTopicPageInfo(pageInfo *Card_PageInfo) bool {
+	return strings.EqualFold(getPageInfoTypeString(pageInfo), "topic")
+}
+
+func (c *CacheCard) resolveUserID(card *Card) int64 {
+	uid := card.GetUser().GetId()
+	if uid != 0 {
+		return uid
+	}
+	if c.Uid != 0 {
+		return c.Uid
+	}
+	if card.GetRetweetedStatus() != nil {
+		if uid := card.GetRetweetedStatus().GetUser().GetId(); uid != 0 {
+			return uid
+		}
+	}
+	return 0
+}
+
+func (c *CacheCard) resolveUserName(card *Card) string {
+	if c.Name != "" {
+		return c.Name
+	}
+	if name := card.GetUser().GetScreenName(); name != "" {
+		return name
+	}
+	return "unknown"
+}
+
+func resolveMblogID(card *Card) string {
+	if mblogID := card.GetMblogid(); mblogID != "" {
+		return mblogID
+	}
+	if mid := card.GetMid(); mid != "" {
+		return mid
+	}
+	if idStr := strconv.FormatInt(card.GetId(), 10); idStr != "0" {
+		return idStr
+	}
+	return ""
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
@@ -303,7 +351,7 @@ func (c *CacheCard) fallbackMSG() {
 			findPicForMix(c.Card.GetMixMediaInfo().GetItems(), m)
 			findVideoForMix(c.Card.GetMixMediaInfo().GetItems(), m)
 		}
-		m.Text("\n" + getWeiboUrl(c.Card.GetUser().GetId(), c.Card.Mblogid))
+		m.Text("\n" + getWeiboUrl(c.Card.GetUser().GetId(), resolveMblogID(c.Card)))
 	default:
 		logger.WithField("Type", c.Mblogtype.String()).Debug("found new card_types")
 	}
@@ -334,12 +382,50 @@ func getTimeString(t string) string {
 // findPicUrlsForCard 收集卡片中的图片URL
 func findPicUrlsForCard(picInfos map[string]*Card_PicInfo) []string {
 	var urls []string
+	isHTTPURL := func(url string) bool {
+		return strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
+	}
+
+	getByOrder := func(pic *Card_PicInfo, preferOriginal bool) string {
+		type sizeGetter struct {
+			name string
+			get  func() string
+		}
+
+		ordered := []sizeGetter{
+			{name: "large", get: func() string { return pic.GetLarge().GetUrl() }},
+			{name: "largest", get: func() string { return pic.GetLargest().GetUrl() }},
+			{name: "mw2000", get: func() string { return pic.GetMw2000().GetUrl() }},
+			{name: "largecover", get: func() string { return pic.GetLargecover().GetUrl() }},
+			{name: "original", get: func() string { return pic.GetOriginal().GetUrl() }},
+			{name: "bmiddle", get: func() string { return pic.GetBmiddle().GetUrl() }},
+			{name: "thumbnail", get: func() string { return pic.GetThumbnail().GetUrl() }},
+		}
+
+		if preferOriginal {
+			ordered = append([]sizeGetter{{name: "original", get: func() string { return pic.GetOriginal().GetUrl() }}}, ordered...)
+		}
+
+		seen := map[string]struct{}{}
+		for _, candidate := range ordered {
+			if _, exists := seen[candidate.name]; exists {
+				continue
+			}
+			seen[candidate.name] = struct{}{}
+
+			url := candidate.get()
+			if isHTTPURL(url) {
+				return url
+			}
+		}
+
+		return ""
+	}
+
 	for _, pic := range picInfos {
-		switch pic.Type {
-		case "pic":
-			urls = append(urls, pic.GetLarge().GetUrl())
-		case "gif":
-			urls = append(urls, pic.GetOriginal().GetUrl())
+		url := getByOrder(pic, pic.GetType() == "gif" || pic.GetType() == "pic/gif")
+		if url != "" {
+			urls = append(urls, url)
 		}
 	}
 	return urls
@@ -349,6 +435,9 @@ func findPicUrlsForCard(picInfos map[string]*Card_PicInfo) []string {
 func findPicUrlsForMix(items []*Card_MixMediaInfo_Items) []string {
 	var urls []string
 	for _, item := range items {
+		if item.GetData() == nil {
+			continue
+		}
 		raw := item.Data.AsMap()
 		switch item.Type {
 		case "pic", "gif":
@@ -385,6 +474,9 @@ func findPicForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
 
 func findVideoForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
 	for _, item := range Item {
+		if item.GetData() == nil {
+			continue
+		}
 		raw := item.Data.AsMap()
 		switch item.Type {
 		case "video":
