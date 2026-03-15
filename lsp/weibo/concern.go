@@ -1,9 +1,11 @@
 package weibo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/utils"
@@ -18,6 +20,32 @@ import (
 
 var online bool
 var logger = utils.GetModuleLogger("weibo-concern")
+
+type freshTimer interface {
+	Chan() <-chan time.Time
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
+type defaultFreshTimer struct {
+	timer *time.Timer
+}
+
+func (t *defaultFreshTimer) Chan() <-chan time.Time {
+	return t.timer.C
+}
+
+func (t *defaultFreshTimer) Reset(d time.Duration) bool {
+	return t.timer.Reset(d)
+}
+
+func (t *defaultFreshTimer) Stop() bool {
+	return t.timer.Stop()
+}
+
+var newFreshTimer = func(d time.Duration) freshTimer {
+	return &defaultFreshTimer{timer: time.NewTimer(d)}
+}
 
 type Concern struct {
 	*StateManager
@@ -41,76 +69,68 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 }
 
 func (c *Concern) Start() error {
-	sub := GetSettingCookie()
-	if sub == "" {
-		if GetQRLoginEnable() {
-			logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
-			obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
-			if err != nil {
-				logger.Errorf("扫码登录获取微博SUB失败: %v", err)
-				logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
+	mode := cfg.GetWeiboMode()
+	isGuest := strings.EqualFold(mode, "guest")
+	sub := ""
+	if !isGuest {
+		sub = GetSettingCookie()
+		if sub == "" {
+			if GetQRLoginEnable() {
+				logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
+				obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
+				if err != nil {
+					logger.Errorf("扫码登录获取微博SUB失败: %v", err)
+					logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
+					return nil
+				}
+				sub = obtained
+				logger.Infof("扫码登录成功，已获取 SUB。请写入 application.yaml -> weibo.sub 以便下次启动：%s", sub)
+			} else {
+				logger.Warn("微博Cookie未设置，将关闭微博推送功能。开启 weibo.qrlogin 可自动扫码获取。")
 				return nil
 			}
-			sub = obtained
-			logger.Infof("扫码登录成功，已获取 SUB。请写入 application.yaml -> weibo.sub 以便下次启动：%s", sub)
-		} else {
-			logger.Warn("微博Cookie未设置，将关闭微博推送功能。开启 weibo.qrlogin 可自动扫码获取。")
-			return nil
 		}
 	}
 	freshCookieOpt(sub)
 
-	// 测试微博cookie是否有效，并显示登录信息
-	go func() {
-		// 等待cookie刷新完成
-		time.Sleep(2 * time.Second)
+	if !isGuest {
+		// 测试微博cookie是否有效，并显示登录信息
+		go func() {
+			// 等待cookie刷新完成
+			time.Sleep(2 * time.Second)
 
-		// 微博没有直接获取当前登录用户信息的API
-		// 通过访问一个测试用户页面来验证cookie有效性
-		testUid := int64(5462373877) // 捞穹苍的信息试试[doge]
-		profileResp, err := ApiContainerGetIndexProfile(testUid)
-		if err != nil {
-			logger.Errorf("微博Cookie验证失败 - %v，微博功能可能无法正常使用", err)
-			return
-		}
+			// 微博没有直接获取当前登录用户信息的API
+			// 通过访问一个测试用户页面来验证cookie有效性
+			testUid := int64(5462373877) // 捞穹苍的信息试试[doge]
+			profileResp, err := ApiContainerGetIndexProfile(testUid)
+			if err != nil {
+				logger.Errorf("微博Cookie验证失败 - %v，微博功能可能无法正常使用", err)
+				return
+			}
 
-		if profileResp.GetOk() != 1 {
-			logger.Errorf("微博Cookie验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
-			return
-		}
+			if profileResp.GetOk() != 1 {
+				logger.Errorf("微博Cookie验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
+				return
+			}
 
-		// 如果能够成功获取用户信息，说明cookie有效
-		if profileResp.GetData() != nil && profileResp.GetData().GetUser() != nil {
-			user := profileResp.GetData().GetUser()
-			logger.Infof("微博启动成功，Cookie验证通过 uid=%d name=%s",
-				user.GetId(),
-				user.GetScreenName())
-		} else {
-			logger.Info("微博启动成功，Cookie验证通过")
-		}
-	}()
+			// 如果能够成功获取用户信息，说明cookie有效
+			if profileResp.GetData() != nil && profileResp.GetData().GetUser() != nil {
+				user := profileResp.GetData().GetUser()
+				logger.Infof("微博启动成功，Cookie验证通过 uid=%d name=%s",
+					user.GetId(),
+					user.GetScreenName())
+			} else {
+				logger.Info("微博启动成功，Cookie验证通过")
+			}
+		}()
+	}
 
 	go func() {
 		for range time.Tick(time.Hour) {
 			freshCookieOpt(sub)
 		}
 	}()
-	c.UseEmitQueue()
-	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
-		uid := id.(int64)
-		if p.ContainAny(News) {
-			newsInfo, err := c.freshNews(uid)
-			if err != nil {
-				return nil, err
-			}
-			if len(newsInfo.Cards) == 0 {
-				return nil, nil
-			}
-			return []concern.Event{newsInfo}, nil
-
-		}
-		return nil, nil
-	}))
+	c.StateManager.UseFreshFunc(c.fresh())
 	c.StateManager.UseNotifyGeneratorFunc(c.notifyGenerator())
 	go func() {
 		for msg := range eventbus.BusObj.Subscribe("bot_online") {
@@ -125,6 +145,63 @@ func (c *Concern) Start() error {
 		}
 	}()
 	return c.StateManager.Start()
+}
+
+func (c *Concern) fresh() concern.FreshFunc {
+	return func(ctx context.Context, eventChan chan<- concern.Event) {
+		t := newFreshTimer(3 * time.Second)
+		defer t.Stop()
+		interval := cfg.GetWeiboInterval()
+		for {
+			select {
+			case <-t.Chan():
+			case <-ctx.Done():
+				return
+			}
+			start := time.Now()
+			err := func() error {
+				defer func() {
+					logger.WithField("cost", time.Since(start)).Tracef("watchCore news fresh done")
+				}()
+				_, ids, types, err := c.StateManager.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool {
+					return p.ContainAny(News)
+				})
+				if err != nil {
+					logger.Errorf("ListConcernState error %v", err)
+					return err
+				}
+				ids, types, err = c.GroupTypeById(ids, types)
+				if err != nil {
+					logger.Errorf("GroupTypeById error %v", err)
+					return err
+				}
+				if len(ids) == 0 {
+					logger.Trace("no concern, skip fresh")
+					return nil
+				}
+				for _, id := range ids {
+					uid := id.(int64)
+					newsInfo, err := c.freshNews(uid)
+					if err != nil {
+						return err
+					}
+					if len(newsInfo.Cards) == 0 {
+						return nil
+					}
+					eventChan <- newsInfo
+					return nil
+				}
+				return nil
+			}()
+
+			if err == nil {
+				logger.WithField("cost", time.Since(start)).Tracef("watchCore loop done")
+			} else {
+				logger.WithField("cost", time.Since(start)).Errorf("watchCore error %v", err)
+			}
+			t.Reset(interval)
+		}
+	}
 }
 
 func (c *Concern) Stop() {
