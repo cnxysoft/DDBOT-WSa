@@ -175,6 +175,27 @@ func GetAcfunOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("acfun.onlyOnlineNotify")
 }
 
+func GetWeiboMode() string {
+	mode := strings.TrimSpace(config.GlobalConfig.GetString("weibo.mode"))
+	if mode == "" {
+		mode = "guest"
+		return mode
+	}
+	if mode != "guest" && mode != "login" {
+		logger.Warnf("GetWeiboMode invalid mode %q, fallback to guest", mode)
+		mode = "guest"
+	}
+	return mode
+}
+
+func GetWeiboInterval() time.Duration {
+	interval := config.GlobalConfig.GetDuration("weibo.interval")
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	return interval
+}
+
 func GetExtDbEnable() bool {
 	return config.GlobalConfig.GetBool("extDb.enable")
 }
