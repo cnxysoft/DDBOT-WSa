@@ -235,7 +235,7 @@ func getPageInfoTypeString(pageInfo *Card_PageInfo) string {
 }
 
 func isTopicPageInfo(pageInfo *Card_PageInfo) bool {
-	return strings.EqualFold(getPageInfoTypeString(pageInfo), "topic")
+	return strings.HasSuffix(getPageInfoTypeString(pageInfo), "topic")
 }
 
 func (c *CacheCard) resolveUserID(card *Card) int64 {
