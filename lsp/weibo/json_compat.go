@@ -9,7 +9,24 @@ import (
 )
 
 func (c *Card) UnmarshalJSON(data []byte) error {
-	type cardAlias Card
+	type cardJSON struct {
+		Visible         *Card_Visible                                      `json:"visible,omitempty"`
+		CreatedAt       string                                             `json:"created_at,omitempty"`
+		Id              int64                                              `json:"id,omitempty"`
+		Mid             string                                             `json:"mid,omitempty"`
+		Text            string                                             `json:"text,omitempty"`
+		TextLength      int32                                              `json:"textLength,omitempty"`
+		PicIds          []string                                           `json:"pic_ids,omitempty"`
+		User            *ApiContainerGetIndexProfileResponse_Data_UserInfo `json:"user,omitempty"`
+		PicInfos        map[string]*Card_PicInfo                           `json:"pic_infos,omitempty"`
+		Title           *Card_TitleInfo                                    `json:"title,omitempty"`
+		RetweetedStatus *Card                                              `json:"retweeted_status,omitempty"`
+		RawText         string                                             `json:"raw_text,omitempty"`
+		Mblogtype       CardType                                           `json:"mblogtype,omitempty"`
+		Mblogid         string                                             `json:"mblogid,omitempty"`
+		PageInfo        *Card_PageInfo                                     `json:"page_info,omitempty"`
+		MixMediaInfo    *Card_MixMediaInfo                                 `json:"mix_media_info,omitempty"`
+	}
 
 	raw := map[string]stdjson.RawMessage{}
 	if err := stdjson.Unmarshal(data, &raw); err != nil {
@@ -25,17 +42,37 @@ func (c *Card) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	var alias cardAlias
-	if err := stdjson.Unmarshal(normalized, &alias); err != nil {
+	var decoded cardJSON
+	if err := stdjson.Unmarshal(normalized, &decoded); err != nil {
 		return err
 	}
 
-	*c = Card(alias)
+	c.Visible = decoded.Visible
+	c.CreatedAt = decoded.CreatedAt
+	c.Id = decoded.Id
+	c.Mid = decoded.Mid
+	c.Text = decoded.Text
+	c.TextLength = decoded.TextLength
+	c.PicIds = decoded.PicIds
+	c.User = decoded.User
+	c.PicInfos = decoded.PicInfos
+	c.Title = decoded.Title
+	c.RetweetedStatus = decoded.RetweetedStatus
+	c.RawText = decoded.RawText
+	c.Mblogtype = decoded.Mblogtype
+	c.Mblogid = decoded.Mblogid
+	c.PageInfo = decoded.PageInfo
+	c.MixMediaInfo = decoded.MixMediaInfo
 	return nil
 }
 
 func (u *ApiContainerGetIndexProfileResponse_Data_UserInfo) UnmarshalJSON(data []byte) error {
-	type userAlias ApiContainerGetIndexProfileResponse_Data_UserInfo
+	type userJSON struct {
+		Id              int64  `json:"id,omitempty"`
+		ScreenName      string `json:"screen_name,omitempty"`
+		ProfileImageUrl string `json:"profile_image_url,omitempty"`
+		ProfileUrl      string `json:"profile_url,omitempty"`
+	}
 
 	raw := map[string]stdjson.RawMessage{}
 	if err := stdjson.Unmarshal(data, &raw); err != nil {
@@ -49,12 +86,15 @@ func (u *ApiContainerGetIndexProfileResponse_Data_UserInfo) UnmarshalJSON(data [
 		return err
 	}
 
-	var alias userAlias
-	if err := stdjson.Unmarshal(normalized, &alias); err != nil {
+	var decoded userJSON
+	if err := stdjson.Unmarshal(normalized, &decoded); err != nil {
 		return err
 	}
 
-	*u = ApiContainerGetIndexProfileResponse_Data_UserInfo(alias)
+	u.Id = decoded.Id
+	u.ScreenName = decoded.ScreenName
+	u.ProfileImageUrl = decoded.ProfileImageUrl
+	u.ProfileUrl = decoded.ProfileUrl
 	return nil
 }
 
