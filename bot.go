@@ -183,6 +183,9 @@ douyin:
   acSignature: 
   acNonce: 
 
+weibo:
+  interval: 30s # 查询间隔时间，太低会被风控（弹人机验证）
+
 concern:
   emitInterval: 5s
 
