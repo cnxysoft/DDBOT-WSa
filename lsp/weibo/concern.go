@@ -1,7 +1,6 @@
 package weibo
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,32 +19,6 @@ import (
 
 var online bool
 var logger = utils.GetModuleLogger("weibo-concern")
-
-type freshTimer interface {
-	Chan() <-chan time.Time
-	Reset(d time.Duration) bool
-	Stop() bool
-}
-
-type defaultFreshTimer struct {
-	timer *time.Timer
-}
-
-func (t *defaultFreshTimer) Chan() <-chan time.Time {
-	return t.timer.C
-}
-
-func (t *defaultFreshTimer) Reset(d time.Duration) bool {
-	return t.timer.Reset(d)
-}
-
-func (t *defaultFreshTimer) Stop() bool {
-	return t.timer.Stop()
-}
-
-var newFreshTimer = func(d time.Duration) freshTimer {
-	return &defaultFreshTimer{timer: time.NewTimer(d)}
-}
 
 type Concern struct {
 	*StateManager
@@ -130,7 +103,22 @@ func (c *Concern) Start() error {
 			freshCookieOpt(sub)
 		}
 	}()
-	c.StateManager.UseFreshFunc(c.fresh())
+	// 使用 EmitQueue 进行轮询，间隔由 weibo.interval 配置控制
+	c.StateManager.UseEmitQueueWithSiteInterval("weibo")
+	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
+		uid := id.(int64)
+		if p.ContainAny(News) {
+			newsInfo, err := c.freshNews(uid)
+			if err != nil {
+				return nil, err
+			}
+			if len(newsInfo.Cards) == 0 {
+				return nil, nil
+			}
+			return []concern.Event{newsInfo}, nil
+		}
+		return nil, nil
+	}))
 	c.StateManager.UseNotifyGeneratorFunc(c.notifyGenerator())
 	go func() {
 		for msg := range eventbus.BusObj.Subscribe("bot_online") {
@@ -145,63 +133,6 @@ func (c *Concern) Start() error {
 		}
 	}()
 	return c.StateManager.Start()
-}
-
-func (c *Concern) fresh() concern.FreshFunc {
-	return func(ctx context.Context, eventChan chan<- concern.Event) {
-		t := newFreshTimer(3 * time.Second)
-		defer t.Stop()
-		interval := cfg.GetWeiboInterval()
-		for {
-			select {
-			case <-t.Chan():
-			case <-ctx.Done():
-				return
-			}
-			start := time.Now()
-			err := func() error {
-				defer func() {
-					logger.WithField("cost", time.Since(start)).Tracef("watchCore news fresh done")
-				}()
-				_, ids, types, err := c.StateManager.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool {
-					return p.ContainAny(News)
-				})
-				if err != nil {
-					logger.Errorf("ListConcernState error %v", err)
-					return err
-				}
-				ids, types, err = c.GroupTypeById(ids, types)
-				if err != nil {
-					logger.Errorf("GroupTypeById error %v", err)
-					return err
-				}
-				if len(ids) == 0 {
-					logger.Trace("no concern, skip fresh")
-					return nil
-				}
-				for _, id := range ids {
-					uid := id.(int64)
-					newsInfo, err := c.freshNews(uid)
-					if err != nil {
-						return err
-					}
-					if len(newsInfo.Cards) == 0 {
-						return nil
-					}
-					eventChan <- newsInfo
-					return nil
-				}
-				return nil
-			}()
-
-			if err == nil {
-				logger.WithField("cost", time.Since(start)).Tracef("watchCore loop done")
-			} else {
-				logger.WithField("cost", time.Since(start)).Errorf("watchCore error %v", err)
-			}
-			t.Reset(interval)
-		}
-	}
 }
 
 func (c *Concern) Stop() {
