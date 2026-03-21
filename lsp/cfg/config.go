@@ -85,6 +85,18 @@ func GetEmitInterval() time.Duration {
 	return config.GlobalConfig.GetDuration("concern.emitInterval")
 }
 
+// GetEmitIntervalForSite 获取站点级别的 emit interval
+// 优先级：site.interval > concern.emitInterval > 默认值 5s
+func GetEmitIntervalForSite(site string) time.Duration {
+	// 先尝试站点配置
+	interval := config.GlobalConfig.GetDuration(site + ".interval")
+	if interval > 0 {
+		return interval
+	}
+	// 返回全局配置
+	return GetEmitInterval()
+}
+
 func GetLargeNotifyLimit() int {
 	var limit = config.GlobalConfig.GetInt("dispatch.largeNotifyLimit")
 	if limit <= 0 {
