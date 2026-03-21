@@ -183,10 +183,6 @@ douyin:
   acSignature: 
   acNonce: 
 
-weibo:
-  enable: true #微博推送，true为开启，false为关闭
-  interval: 30s # 查询间隔时间，太低会被风控（弹人机验证）
-
 concern:
   emitInterval: 5s
 
