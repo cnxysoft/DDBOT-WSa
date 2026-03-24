@@ -146,7 +146,9 @@ func (c *CacheCard) prepare() {
 			m.ImageByUrl(pic.GetLarge().GetUrl(), "")
 		}
 		if c.Card.GetMblog().GetPageInfo() != nil {
-			m.ImageByUrl(c.Card.GetMblog().GetPageInfo().GetPagePic().GetUrl(), "")
+			if !strings.HasSuffix(c.Card.GetMblog().GetPageInfo().GetType(), "topic") {
+				m.ImageByUrl(c.Card.GetMblog().GetPageInfo().GetPagePic().GetUrl(), "")
+			}
 			switch c.Card.GetMblog().GetPageInfo().GetType() {
 			case "video":
 				m.Textf("%s - %s\n", c.Card.GetMblog().GetPageInfo().GetContent1(),
@@ -174,7 +176,9 @@ func (c *CacheCard) prepare() {
 				m.ImageByUrl(pic.GetLarge().GetUrl(), "")
 			}
 			if c.Card.GetMblog().GetRetweetedStatus().GetPageInfo() != nil {
-				m.ImageByUrl(c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetPagePic().GetUrl(), "")
+				if !strings.HasSuffix(c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetType(), "topic") {
+					m.ImageByUrl(c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetPagePic().GetUrl(), "")
+				}
 				switch c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetType() {
 				case "video":
 					m.Textf("%s - %s\n", c.Card.GetMblog().GetRetweetedStatus().GetPageInfo().GetContent1(),
