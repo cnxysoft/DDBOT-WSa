@@ -1,0 +1,12 @@
+{{ if .living -}}
+YTB-{{ .name }}正在直播：
+{{ .title }}
+{{ pic .cover "[封面]" }}
+{{- .url -}}
+{{- else -}}
+YTB-{{ .name }}发布了直播预约：
+{{ .title }}
+时间：{{ getTime .timestamp "" }}
+{{ pic .cover "[封面]" }}
+{{- .url -}}
+{{- end -}}

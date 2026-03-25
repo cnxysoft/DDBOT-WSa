@@ -1,13 +1,13 @@
 package youtube
 
 import (
+	"sync"
+
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
-	"sync"
 )
 
 type UserInfo struct {
@@ -36,6 +36,7 @@ type VideoInfo struct {
 	VideoType      VideoType   `json:"video_type"`
 	VideoStatus    VideoStatus `json:"video_status"`
 	VideoTimestamp int64       `json:"video_timestamp"`
+	GroupCode      int64       `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
@@ -113,20 +114,28 @@ func (v *VideoInfo) IsVideo() bool {
 
 func (v *VideoInfo) GetMSG() *mmsg.MSG {
 	v.once.Do(func() {
-		m := mmsg.NewMSG()
-		if v.IsLive() {
-			if v.IsLiving() {
-				m.Textf("YTB-%v正在直播：\n%v\n", v.ChannelName, v.VideoTitle)
-			} else {
-				m.Textf("YTB-%v发布了直播预约：\n%v\n时间：%v\n",
-					v.ChannelName, v.VideoTitle, localutils.TimestampFormat(v.VideoTimestamp))
-			}
-		} else if v.IsVideo() {
-			m.Textf("YTB-%s发布了新视频：\n%v\n", v.ChannelName, v.VideoTitle)
+		var tmplName string
+		var data = map[string]interface{}{
+			"uid":        v.ChannelId,
+			"name":       v.ChannelName,
+			"title":      v.VideoTitle,
+			"cover":      v.Cover,
+			"url":        VideoViewUrl(v.VideoId),
+			"timestamp":  v.VideoTimestamp,
+			"living":     v.IsLiving(),
+			"waiting":    v.IsWaiting(),
+			"group_code": v.GroupCode,
 		}
-		m.ImageByUrl(v.Cover, "[封面]", requests.ProxyOption(proxy_pool.PreferOversea))
-		m.Text(VideoViewUrl(v.VideoId) + "\n")
-		v.msgCache = m
+		if v.IsLive() {
+			tmplName = "notify.group.youtube.live.tmpl"
+		} else {
+			tmplName = "notify.group.youtube.news.tmpl"
+		}
+		var err error
+		v.msgCache, err = template.LoadAndExec(tmplName, data)
+		if err != nil {
+			logger.Errorf("youtube: VideoInfo LoadAndExec error %v", err)
+		}
 	})
 	return v.msgCache
 }
@@ -166,6 +175,7 @@ func (notify *ConcernNotify) GetGroupCode() int64 {
 }
 
 func (notify *ConcernNotify) ToMessage() (m *mmsg.MSG) {
+	notify.VideoInfo.GroupCode = notify.GroupCode
 	return notify.VideoInfo.GetMSG()
 }
 
