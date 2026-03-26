@@ -17,25 +17,23 @@ import (
 )
 
 const (
-	pathWeibo              = "https://weibo.com"
-	pathPassportGenvisitor = "https://passport.weibo.com/visitor/genvisitor2"
+	pathWeiboCN                = "https://weibo.cn/pub/"
+	pathWeiboMobile            = "https://m.weibo.cn/"
+	pathWeiboDesktop           = "https://weibo.com"
+	pathPassportGenvisitorTest = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
+	pathPassportGenvisitorProd = "https://passport.weibo.com/visitor/genvisitor2"
 )
 
 var (
 	genvisitorRegex = regexp.MustCompile(`\((.*)\)`)
 )
 
-func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
+func genvisitor(path string, params gout.H, externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	st := time.Now()
 	defer func() {
 		ed := time.Now()
 		logger.WithField("FuncName", utils.FuncName()).Tracef("cost %v", ed.Sub(st))
 	}()
-	params := gout.H{
-		"cb":   "visitor_gray_callback",
-		"tid":  "",
-		"from": `weibo`,
-	}
 	var opts = []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferNone),
 		requests.AddUAOption(),
@@ -43,7 +41,7 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	}
 	opts = append(opts, externalOpts...)
 	var result string
-	err := requests.Get(pathPassportGenvisitor, params, &result, opts...)
+	err := requests.Get(path, params, &result, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +59,24 @@ func genvisitor(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
 	return resp, err
 }
 
-func refreshXsrfToken(jar *cookiejar.Jar) error {
-	return requests.Get(pathWeibo, nil, nil,
+func genvisitorGuest(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
+	params := gout.H{
+		"cb": "gen_callback",
+	}
+	return genvisitor(pathPassportGenvisitorTest, params, externalOpts...)
+}
+
+func genvisitorLogin(externalOpts ...requests.Option) (*GenVisitorResponse, error) {
+	params := gout.H{
+		"cb":   "visitor_gray_callback",
+		"tid":  "",
+		"from": "weibo",
+	}
+	return genvisitor(pathPassportGenvisitorProd, params, externalOpts...)
+}
+
+func refreshGuestFrom(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeiboCN, nil, nil,
 		requests.WithCookieJar(jar),
 		requests.AddUAOption(),
 		requests.ProxyOption(proxy_pool.PreferNone),
@@ -70,9 +84,27 @@ func refreshXsrfToken(jar *cookiejar.Jar) error {
 	)
 }
 
-func FreshCookie() ([]*http.Cookie, error) {
+func refreshGuestMobile(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeiboMobile, nil, nil,
+		requests.WithCookieJar(jar),
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.TimeoutOption(time.Second*10),
+	)
+}
+
+func refreshLoginXsrfToken(jar *cookiejar.Jar) error {
+	return requests.Get(pathWeiboDesktop, nil, nil,
+		requests.WithCookieJar(jar),
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.TimeoutOption(time.Second*10),
+	)
+}
+
+func FreshCookieGuest() ([]*http.Cookie, error) {
 	jar, _ := cookiejar.New(nil)
-	genVisitorResp, err := genvisitor(requests.WithCookieJar(jar))
+	genVisitorResp, err := genvisitorGuest(requests.WithCookieJar(jar))
 	if err != nil {
 		logger.Errorf("genvisitor error %v", err)
 		return nil, err
@@ -86,19 +118,54 @@ func FreshCookie() ([]*http.Cookie, error) {
 			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
 	}
 
-	err = refreshXsrfToken(jar)
+	err = refreshGuestFrom(jar)
 	if err != nil {
-		logger.Errorf("refreshXsrfToken error %v", err)
+		logger.Errorf("refreshGuestFrom error %v", err)
 		return nil, err
 	}
 
-	baseUrl, err := url.Parse(pathWeibo)
+	err = refreshGuestMobile(jar)
 	if err != nil {
-		panic(fmt.Sprintf("path %v url parse error", pathWeibo))
+		logger.Errorf("refreshGuestMobile error %v", err)
+		return nil, err
 	}
-	cookieUrl, err := url.Parse(pathPassportGenvisitor)
+
+	cookieUrl, err := url.Parse(pathWeiboMobile)
 	if err != nil {
-		panic(fmt.Sprintf("path %v url parse error", pathPassportGenvisitor))
+		panic(fmt.Sprintf("path %v url parse error", pathWeiboMobile))
+	}
+	return jar.Cookies(cookieUrl), nil
+}
+
+func FreshCookieLogin() ([]*http.Cookie, error) {
+	jar, _ := cookiejar.New(nil)
+	genVisitorResp, err := genvisitorLogin(requests.WithCookieJar(jar))
+	if err != nil {
+		logger.Errorf("genvisitor error %v", err)
+		return nil, err
+	}
+	if genVisitorResp.GetRetcode() != 20000000 || !strings.Contains(genVisitorResp.GetMsg(), "succ") {
+		logger.WithFields(logrus.Fields{
+			"Msg":     genVisitorResp.GetMsg(),
+			"Retcode": genVisitorResp.GetRetcode(),
+		}).Errorf("incarnateResp error")
+		return nil, fmt.Errorf("genvisitor response error %v - %v",
+			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
+	}
+
+	err = refreshLoginXsrfToken(jar)
+	if err != nil {
+		logger.Errorf("refreshLoginXsrfToken error %v", err)
+		return nil, err
+	}
+
+	baseUrl, err := url.Parse(pathWeiboDesktop)
+	if err != nil {
+		panic(fmt.Sprintf("path %v url parse error", pathWeiboDesktop))
+	}
+	cookieUrl, err := url.Parse(pathPassportGenvisitorProd)
+	if err != nil {
+		panic(fmt.Sprintf("path %v url parse error", pathPassportGenvisitorProd))
 	}
 	cookies := jar.Cookies(cookieUrl)
 	for _, cookie := range jar.Cookies(baseUrl) {
@@ -107,4 +174,11 @@ func FreshCookie() ([]*http.Cookie, error) {
 		}
 	}
 	return cookies, nil
+}
+
+func FreshCookie() ([]*http.Cookie, error) {
+	if isGuestMode() {
+		return FreshCookieGuest()
+	}
+	return FreshCookieLogin()
 }

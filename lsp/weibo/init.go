@@ -18,7 +18,11 @@ func freshCookieOpt(sub string) {
 	var cookies []*http.Cookie
 	var err error
 	localutils.Retry(3, time.Second, func() bool {
-		cookies, err = FreshCookie()
+		if isGuestMode() {
+			cookies, err = FreshCookieGuest()
+		} else {
+			cookies, err = FreshCookieLogin()
+		}
 		return err == nil
 	})
 	if err != nil {
@@ -26,7 +30,7 @@ func freshCookieOpt(sub string) {
 	} else {
 		var opt []requests.Option
 		for _, cookie := range cookies {
-			if cookie.Name == "SUB" {
+			if cookie.Name == "SUB" && sub != "" {
 				cookie.Value = sub
 			}
 			opt = append(opt, requests.HttpCookieOption(cookie))

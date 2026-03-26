@@ -233,7 +233,10 @@ douyin:
 # weibo 推送暂时需要设置Cookie才会启动。
 weibo:
   onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+  mode: guest             # weibo运行模式，可选 guest / login
+  interval: 30s           # weibo访客模式下Cookie刷新间隔
   sub: # 登录weibo.com后取得对应名称的Cookie填入此处。
+  qrlogin: true           # 是否启用二维码登录（Cookies失效时重启后可再次登录）
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送

@@ -740,3 +740,15 @@ func NewStateManagerWithStringID(name string, notifyChan chan<- Notify) *StateMa
 func NewStateManagerWithInt64ID(name string, notifyChan chan<- Notify) *StateManager {
 	return NewStateManagerWithCustomKey(name, NewPrefixKeySetWithInt64ID(name), notifyChan)
 }
+
+// UseEmitQueueWithSiteInterval 启用 EmitQueue，使用站点级别的 interval 配置
+// 优先级：site.interval > concern.emitInterval > 默认值 5s
+func (c *StateManager) UseEmitQueueWithSiteInterval(site string) {
+	c.useEmit = true
+	interval := cfg.GetEmitIntervalForSite(site)
+	if interval == 0 {
+		interval = defaultInterval
+	}
+	c.emitChan = make(chan *localutils.EmitE)
+	c.emitQueue = localutils.NewEmitQueue(c.emitChan, interval)
+}

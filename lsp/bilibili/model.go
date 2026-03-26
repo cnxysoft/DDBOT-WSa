@@ -588,6 +588,29 @@ type DynamicDetail struct {
 		Uid  int64  `json:"uid"`
 		Name string `json:"name"`
 		Face string `json:"face"`
+		// 头像框（pendent）
+		Pendant struct {
+			Name         string `json:"name"`
+			Image        string `json:"image"`
+			ImageEnhance string `json:"image_enhance"`
+			Expire       int64  `json:"expire"`
+		} `json:"pendant,omitempty"`
+		// 装饰卡片（decoration_card）
+		DecorationCard struct {
+			Id         int64  `json:"id"`
+			Name       string `json:"name"`
+			CardUrl    string `json:"card_url"`
+			BigCardUrl string `json:"big_card_url"`
+			JumpUrl    string `json:"jump_url"`
+			CardType   int64  `json:"card_type"`
+			CardTypeNa string `json:"card_type_name"`
+			Fan        struct {
+				Color   string `json:"color"`
+				Name    string `json:"name"`
+				Number  int64  `json:"number"`
+				NumDesc string `json:"num_desc"`
+			} `json:"fan,omitempty"`
+		} `json:"decoration_card,omitempty"`
 	} `json:"author,omitempty"`
 	Reserve struct {
 		Title string `json:"title"`
@@ -633,6 +656,18 @@ type DynamicDetail struct {
 	Title     string `json:"title"`
 	TopicName string `json:"topic_name"`
 	Content   string `json:"content"`
+	// 表情包列表
+	Emojis []Emoji `json:"emojis,omitempty"`
+}
+
+// Emoji 表情包结构
+type Emoji struct {
+	Id        int64  `json:"id"`
+	IconUrl   string `json:"icon_url"`
+	Text      string `json:"text"`
+	JumpUrl   string `json:"jump_url"`
+	OrigText  string `json:"orig_text"`
+	PackageId int64  `json:"package_id"`
 }
 
 func (c *CacheCard) prepare() {
@@ -810,6 +845,17 @@ func (c *CacheCard) prepare() {
 			c.dynamic.Type = DynamicDescType_WithMiss
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
 			c.dynamic.Miss.Tips = cardOrigin.GetItem().GetTips()
+			// 检查原动态是否已删除，尝试从二次解析获取信息
+			if cardOrigin.GetOrigin() == "源动态不见了" {
+				if originDetail.Live.Title != "" {
+					c.dynamic.Type = DynamicDescType_WithLive
+					c.dynamic.Live.Title = originDetail.Live.Title
+					c.dynamic.Live.CoverUrl = originDetail.Live.Cover
+					c.dynamic.OriginUser.Name = originDetail.Author.Name
+					c.dynamic.OriginUser.Face = originDetail.Author.Face
+					c.dynamic.OriginUser.Uid = originDetail.Author.Uid
+				}
+			}
 		case DynamicDescType_WithOrigin:
 			c.dynamic.Type = DynamicDescType_WithOrigin
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
@@ -854,9 +900,19 @@ func (c *CacheCard) prepare() {
 					c.dynamic.OriginUser.Name = originDetail.Author.Name
 					c.dynamic.OriginUser.Face = originDetail.Author.Face
 					c.dynamic.OriginUser.Uid = originDetail.Author.Uid
+				} else if originDetail.Title != "" {
+					// 原动态已删除，但二次解析返回了标题，尝试显示为通用类型
+					c.dynamic.WithOrigin = true
+					c.dynamic.Type = DynamicDescType_DynamicDescTypeUnknown
+					c.dynamic.Default.TypeName = "原动态"
+					c.dynamic.Default.Title = originDetail.Title
+					c.dynamic.Default.CoverUrl = originDetail.PGC.CoverUrl
+					c.dynamic.OriginUser.Name = originDetail.Author.Name
+					c.dynamic.OriginUser.Face = originDetail.Author.Face
+					c.dynamic.OriginUser.Uid = originDetail.Author.Uid
 				} else {
-					c.dynamic.Default.TypeName = "不支持的"
-					c.dynamic.Default.Title = "未知动态"
+					c.dynamic.Default.TypeName = "原动态已删除"
+					c.dynamic.Default.Title = "原动态已删除"
 					c.dynamic.Default.Desc = "源动态不见了"
 				}
 			} else {
@@ -1165,6 +1221,59 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 		if face, ok := author["face"].(string); ok {
 			res.Author.Face = face
 		}
+		// 解析头像框
+		if pendant, ok := author["pendant"].(map[string]interface{}); ok {
+			if name, ok := pendant["name"].(string); ok {
+				res.Author.Pendant.Name = name
+			}
+			if image, ok := pendant["image"].(string); ok {
+				res.Author.Pendant.Image = image
+			}
+			if imageEnhance, ok := pendant["image_enhance"].(string); ok {
+				res.Author.Pendant.ImageEnhance = imageEnhance
+			}
+			if expire, ok := pendant["expire"].(float64); ok {
+				res.Author.Pendant.Expire = int64(expire)
+			}
+		}
+		// 解析装饰卡片
+		if decorationCard, ok := author["decoration_card"].(map[string]interface{}); ok {
+			if id, ok := decorationCard["id"].(float64); ok {
+				res.Author.DecorationCard.Id = int64(id)
+			}
+			if name, ok := decorationCard["name"].(string); ok {
+				res.Author.DecorationCard.Name = name
+			}
+			if cardUrl, ok := decorationCard["card_url"].(string); ok {
+				res.Author.DecorationCard.CardUrl = cardUrl
+			}
+			if bigCardUrl, ok := decorationCard["big_card_url"].(string); ok {
+				res.Author.DecorationCard.BigCardUrl = bigCardUrl
+			}
+			if jumpUrl, ok := decorationCard["jump_url"].(string); ok {
+				res.Author.DecorationCard.JumpUrl = jumpUrl
+			}
+			if cardType, ok := decorationCard["card_type"].(float64); ok {
+				res.Author.DecorationCard.CardType = int64(cardType)
+			}
+			if cardTypeName, ok := decorationCard["card_type_name"].(string); ok {
+				res.Author.DecorationCard.CardTypeNa = cardTypeName
+			}
+			if fan, ok := decorationCard["fan"].(map[string]interface{}); ok {
+				if color, ok := fan["color"].(string); ok {
+					res.Author.DecorationCard.Fan.Color = color
+				}
+				if name, ok := fan["name"].(string); ok {
+					res.Author.DecorationCard.Fan.Name = name
+				}
+				if number, ok := fan["number"].(float64); ok {
+					res.Author.DecorationCard.Fan.Number = int64(number)
+				}
+				if numDesc, ok := fan["num_desc"].(string); ok {
+					res.Author.DecorationCard.Fan.NumDesc = numDesc
+				}
+			}
+		}
 
 		dynamic, ok := modules["module_dynamic"].(map[string]interface{})
 		if !ok {
@@ -1191,6 +1300,37 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 				if summary, ok := opus["summary"].(map[string]interface{}); ok {
 					text := summary["text"].(string)
 					res.Content = text
+					// 解析表情包
+					if richTextNodes, ok := summary["rich_text_nodes"].([]interface{}); ok {
+						for _, node := range richTextNodes {
+							if nodeMap, ok := node.(map[string]interface{}); ok {
+								if nodeType, ok := nodeMap["type"].(string); ok && nodeType == "RICH_TEXT_NODE_TYPE_EMOJI" {
+									if emoji, ok := nodeMap["emoji"].(map[string]interface{}); ok {
+										emojiData := Emoji{}
+										if iconUrl, ok := emoji["icon_url"].(string); ok {
+											emojiData.IconUrl = iconUrl
+										}
+										if text, ok := emoji["text"].(string); ok {
+											emojiData.Text = text
+										}
+										if origText, ok := emoji["orig_text"].(string); ok {
+											emojiData.OrigText = origText
+										}
+										if jumpUrl, ok := emoji["jump_url"].(string); ok {
+											emojiData.JumpUrl = jumpUrl
+										}
+										if id, ok := emoji["id"].(float64); ok {
+											emojiData.Id = int64(id)
+										}
+										if packageId, ok := emoji["package_id"].(float64); ok {
+											emojiData.PackageId = int64(packageId)
+										}
+										res.Emojis = append(res.Emojis, emojiData)
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 

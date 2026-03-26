@@ -310,7 +310,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		})
 
 		// 解析图片
-		item.Find(".tweet-body > .attachments div[class='attachment image'] img").Each(func(i int, img *goquery.Selection) {
+		item.Find(".tweet-body > .attachments .attachment img").Each(func(i int, img *goquery.Selection) {
 			if src := img.AttrOr("src", ""); src != "" {
 				tweet.Media = append(tweet.Media, &Media{
 					Type: "image",
@@ -320,7 +320,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		})
 
 		// 解析GIF
-		item.Find(".tweet-body > .attachments .gallery-gif source").Each(func(i int, gif *goquery.Selection) {
+		item.Find(".tweet-body > .attachments .gif source").Each(func(i int, gif *goquery.Selection) {
 			if src := gif.AttrOr("src", ""); src != "" {
 				tweet.Media = append(tweet.Media, &Media{
 					Type: "gif",
@@ -408,7 +408,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			QuoteTweet.Content = strings.TrimSpace(s.Find(".quote-text").Text())
 
 			// 解析图片
-			s.Find("div[class='attachment image'] img").Each(func(i int, img *goquery.Selection) {
+			s.Find(".attachment img").Each(func(i int, img *goquery.Selection) {
 				if src := img.AttrOr("src", ""); src != "" {
 					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
 						Type: "image",
@@ -418,7 +418,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			})
 
 			// 解析GIF
-			s.Find(".gallery-gif source").Each(func(i int, gif *goquery.Selection) {
+			s.Find(".attachment .gif source").Each(func(i int, gif *goquery.Selection) {
 				if src := gif.AttrOr("src", ""); src != "" {
 					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
 						Type: "gif",

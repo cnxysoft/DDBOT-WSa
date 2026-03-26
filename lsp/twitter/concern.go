@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net/http/cookiejar"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -101,6 +100,12 @@ func (t *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message
 func (t *StateManager) SetGroupCompactMarkIfNotExist(groupCode int64, compactKey string) error {
 	return t.Set(t.CompactMarkKey(groupCode, compactKey), "",
 		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
+}
+
+func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
+	err = t.Set(t.MarkTweetIdKey(tweetId), "",
+		localdb.SetExpireOpt(time.Hour*120), localdb.SetGetIsOverwriteOpt(&replaced))
+	return
 }
 
 type twitterConcern struct {
@@ -209,22 +214,28 @@ func (t *twitterConcern) AddUserInfo(info *UserInfo) error {
 	return t.SetJson(t.UserInfoKey(info.Id), info)
 }
 
-func (t *twitterConcern) SetLatestTweetIds(userId string, tweetIds *LatestTweetIds) error {
-	if tweetIds == nil {
-		return errors.New("<nil LatestTweetIds>")
-	}
-	return t.RWCover(func() error {
-		return t.SetJson(t.LatestTweetIdsKey(userId), tweetIds)
-	})
-}
-
 func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
-	// 这里是添加订阅的函数
-	// 可以使 c.StateManager.AddGroupConcern(groupCode, id, ctype) 来添加这个订阅
-	// 通常在添加订阅前还需要通过id访问网站上的个人信息页面，来确定id是否存在，是否可以正常订阅
-	info, err := t.FindOrLoadUserInfo(id.(string))
+	userId := id.(string)
+	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
+	info, err := t.FindOrLoadUserInfo(userId)
 	if err != nil {
-		return nil, fmt.Errorf("查询用户信息失败 %v - %v", id, err)
+		log.Errorf("FindOrLoadUserInfo error %v", err)
+		return nil, fmt.Errorf("查询用户信息失败 %v - %v", userId, err)
+	}
+	if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
+		tweets, err := t.GetTweets(userId)
+		if err != nil {
+			log.Errorf("GetTweets error %v", err)
+			return nil, fmt.Errorf("添加订阅失败 - 刷新用户推文失败")
+		}
+		if len(tweets) < 1 {
+			log.Errorf("GetTweets not ok")
+			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户微博")
+		}
+		// 第一次就手动添加一下已有推文，以此来过滤旧的微博
+		for _, tweet := range tweets {
+			_ = t.filterTweet(tweet)
+		}
 	}
 	_, err = t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
 	if err != nil {
@@ -233,62 +244,21 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 	return info, nil
 }
 
-func (t *twitterConcern) removeLatestTweetIds(id string) error {
-	_, err := t.Delete(t.LatestTweetIdsKey(id), buntdb.IgnoreNotFoundOpt())
-	return err
-}
-
 func (t *twitterConcern) removeUserInfo(id string) error {
 	_, err := t.Delete(t.UserInfoKey(id), buntdb.IgnoreNotFoundOpt())
 	return err
 }
 
-func (t *twitterConcern) removeTweetList(id string) error {
-	_, err := t.Delete(t.TweetListKey(id), buntdb.IgnoreNotFoundOpt())
-	return err
-}
-
-func (t *twitterConcern) removeFreshTime(id string) error {
-	_, err := t.Delete(t.LastFreshKey(id), buntdb.IgnoreNotFoundOpt())
-	return err
-}
-
 func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
-	// 大部分时候简单的删除即可
-	// 如果还有更复杂的逻辑可以自由实现
 	identity, _ := t.Get(id)
 	_, err := t.GetStateManager().RemoveGroupConcern(groupCode, id.(string), ctype)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = t.removeLatestTweetIds(id.(string)); err != nil {
-		if err != errors.New("not found") {
-			logger.WithError(err).Errorf("remove LatestTweetIds error")
-		} else {
-			err = nil
-		}
-	}
-
 	if err = t.removeUserInfo(id.(string)); err != nil {
 		if err != errors.New("not found") {
 			logger.WithError(err).Errorf("remove UserInfo error")
-		} else {
-			err = nil
-		}
-	}
-
-	if err = t.removeFreshTime(id.(string)); err != nil {
-		if err != errors.New("not found") {
-			logger.WithError(err).Errorf("remove FreshTime error")
-		} else {
-			err = nil
-		}
-	}
-
-	if err = t.removeTweetList(id.(string)); err != nil {
-		if err != errors.New("not found") {
-			logger.WithError(err).Errorf("remove TweetList error")
 		} else {
 			err = nil
 		}
@@ -333,20 +303,6 @@ func getRefreshInterval() time.Duration {
 		}
 	}
 	return time.Second * 30
-}
-
-func (t *twitterConcern) processUser(ctx context.Context, eventChan chan<- concern.Event, userId interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	events, err := t.freshNewsInfo(Tweets, userId)
-	if err != nil {
-		//logger.WithError(err).WithField("userId", userId).Error("刷新用户推文失败")
-		return
-	}
-	for _, e := range events {
-		eventChan <- e
-	}
 }
 
 func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- concern.Event) {
@@ -400,120 +356,30 @@ func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) 
 		if err != nil {
 			return nil, err
 		}
-		oldTweetIds, err := t.GetLatestTweetIds(userId)
-		if err != nil && err.Error() != ErrNotFound {
-			logger.WithError(err).Errorf("内部错误 - 已推送推文列表获取失败：%v", err)
-			return nil, err
-		}
-		newLastTweetId := getNewLatestTweetId(oldTweetIds, newTweets)
-		if len(newTweets) > 0 && newLastTweetId != "" {
-			if oldTweetIds == nil || (newLastTweetId != oldTweetIds.GetLatestTweetId()) {
-				if oldTweetIds == nil {
-					oldTweetIds = new(LatestTweetIds)
-					tweets := slices.Clone(newTweets)
-					t.reverseTweets(tweets)
-					oldTweetIds.SetLatestTweetIds(GetIdList(tweets))
-					if newTweets[0].Pinned {
-						oldTweetIds.SetPinnedTweet(newTweets[0].ID)
-					}
-					err = t.SetLastFreshTime(userId, time.Now().UTC())
-					if err != nil {
-						logger.Errorf("内部错误 - 最后刷新时间更新失败：%v", err)
-						return nil, err
-					}
-					err = t.SetTweetIdList(userId, GetIdList(newTweets))
-					if err != nil {
-						logger.Errorf("内部错误 - 设置推文列表失败：%v", err)
-						return nil, err
-					}
+		for _, tweet := range newTweets {
+			if pass := t.filterTweet(tweet); pass {
+				res := &NewsInfo{
+					UserInfo: userInfo,
+					Tweet:    tweet,
 				}
-				// 获取超过最后推送时间的tweet
-				NewTweets := t.GetNewTweetsFromTweetId(oldTweetIds, newTweets)
-				if len(NewTweets) > 0 {
-					t.reverseTweets(NewTweets)
-					// 将新的tweet添加到result中
-					for _, tweet := range NewTweets {
-						res := &NewsInfo{
-							UserInfo: userInfo,
-							Tweet:    tweet,
-						}
-						result = append(result, res)
-						oldTweetIds.SetLatestTweetId(tweet.ID)
-						if tweet.Pinned {
-							oldTweetIds.SetPinnedTweet(tweet.ID)
-						}
-					}
-					err = t.SetTweetIdList(userId, GetIdList(newTweets))
-					if err != nil {
-						logger.Errorf("内部错误 - 推文列表更新失败：%v", err)
-					}
-				} else {
-					newLastTweetId = oldTweetIds.GetLatestTweetId()
-				}
-			}
-		} else {
-			if oldTweetIds != nil && oldTweetIds.GetLatestTweetId() != "" {
-				newLastTweetId = oldTweetIds.GetLatestTweetId()
-			}
-		}
-		if oldTweetIds != nil && newLastTweetId != "" {
-			err = t.SetLatestTweetIds(userId, oldTweetIds)
-			if err != nil {
-				logger.Errorf("内部错误 - 推送信息更新失败：%v", err)
-				return nil, err
+				result = append(result, res)
 			}
 		}
 	}
 	return result, nil
 }
 
-func getTargetTweet(tweets []*Tweet, targetId string) *Tweet {
-	for _, tweet := range tweets {
-		if tweet.ID == targetId {
-			return tweet
-		}
-	}
-	return nil
-}
-
-func getNewLatestTweetId(l *LatestTweetIds, tweets []*Tweet) string {
-	for i, tweet := range tweets {
-		if tweet.IsPinned() && len(tweets) > 1 {
-			if l.HasTweetId(tweet.ID) == -1 && tweet.ID != l.GetPinnedTweet() {
-				return tweet.ID
-			} else if tweet.IsPinned() && tweet.ID != l.GetPinnedTweet() {
-				l.SetPinnedTweet(tweet.ID)
-				return tweet.ID
-			} else {
-				return tweets[i+1].ID
-			}
-		} else {
-			return tweet.ID
-		}
-	}
-	return ""
-}
-
-func (t *twitterConcern) SetLastFreshTime(id string, ts time.Time) error {
-	return t.SetInt64(t.LastFreshKey(id), ts.Unix())
-}
-func (t *twitterConcern) GetLastFreshTime(id string) (int64, error) {
-	return t.GetInt64(t.LastFreshKey(id))
-}
-func (t *twitterConcern) SetTweetIdList(id string, j interface{}) error {
-	err := t.SetJson(t.TweetListKey(id), j)
+func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
+	replaced, err := t.MarkTweetId(tweet.ID)
 	if err != nil {
-		return err
+		logger.WithField("TweetId", tweet.ID).
+			Errorf("MarkTweetId error %v", err)
+		return false
 	}
-	return nil
-}
-func (t *twitterConcern) GetTweetIdList(id string) ([]string, error) {
-	var TweetList []string
-	err := t.GetJson(t.TweetListKey(id), &TweetList)
-	if err != nil {
-		return nil, err
+	if replaced {
+		return false
 	}
-	return TweetList, nil
+	return true
 }
 
 func SetRequestOptions() []requests.Option {
@@ -591,74 +457,6 @@ retry:
 		return nil, nil
 	}
 	return tweets, nil
-}
-
-func (t *twitterConcern) reverseTweets(s []*Tweet) {
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
-}
-
-func (t *twitterConcern) GetNewTweetsFromTweetId(
-	oldLatestTweetIds *LatestTweetIds, tweets []*Tweet) []*Tweet {
-	var startIdx int
-	if index := findTweetIndex(tweets, oldLatestTweetIds.GetLatestTweetId()); index >= 0 {
-		if index < 2 && tweets[0].Pinned {
-			return delRepeatedTweet(oldLatestTweetIds, tweets)
-		}
-		if tweets[0].Pinned && tweets[0].ID == oldLatestTweetIds.GetPinnedTweet() {
-			startIdx++
-		}
-		return tweets[startIdx:index]
-	}
-	return delRepeatedTweet(oldLatestTweetIds, tweets)
-}
-
-func delRepeatedTweet(tweetIds *LatestTweetIds, tweetsSlice []*Tweet) []*Tweet {
-	var retTweets []*Tweet
-	for i := 0; i < len(tweetsSlice); i++ {
-		po := tweetIds.HasTweetId(tweetsSlice[i].ID)
-		if tweetsSlice[i].ID == tweetIds.GetPinnedTweet() {
-			continue
-		}
-		if po != -1 {
-			break
-		}
-		retTweets = append(retTweets, tweetsSlice[i])
-	}
-	return retTweets
-}
-
-func findTweetIndex(tweets []*Tweet, targetID string) int {
-	for i, tweet := range tweets {
-		if tweet.ID == targetID {
-			return i
-		}
-	}
-	return -1
-}
-
-//func (t *twitterConcern) GetNewTweetsFromTime(oldTime time.Time, item []*TweetItem) []*TweetItem {
-//	var result []*TweetItem
-//	for _, tweet := range item {
-//		if tweet.Published.After(oldTime) {
-//			result = append(result, tweet)
-//		}
-//	}
-//	return result
-//}
-
-func (t *twitterConcern) GetLatestNewsTs(tweets []*TweetItem) time.Time {
-	return tweets[len(tweets)-1].Published
-}
-
-func (t *twitterConcern) GetLatestTweetIds(id string) (*LatestTweetIds, error) {
-	var Ids *LatestTweetIds
-	err := t.GetJson(t.LatestTweetIdsKey(id), &Ids)
-	if err != nil {
-		return nil, err
-	}
-	return Ids, nil
 }
 
 func (t *twitterConcern) Start() error {

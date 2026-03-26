@@ -943,17 +943,19 @@ func (c *QQClient) handleGroupCardNotice(wsmsg WebSocketMessage) (bool, error) {
 	needSync := false
 	var err error
 	member, err := c.GetGroupMemberInfo(wsmsg.GroupID.ToInt64(), wsmsg.UserID.ToInt64())
-	if err == nil && member.Group != nil {
+	if err == nil && member != nil && member.Group != nil {
 		m, err := c.FindMemberByUin(wsmsg.GroupID.ToInt64(), wsmsg.UserID.ToInt64())
 		if err != nil {
 			needSync = true
 		}
-		m.CardName = member.CardName
-		c.MemberCardUpdatedEvent.dispatch(c, &MemberCardUpdatedEvent{
-			Group:   member.Group,
-			OldCard: wsmsg.CardOld,
-			Member:  member,
-		})
+		if m != nil && m.Group != nil {
+			m.CardName = member.CardName
+			c.MemberCardUpdatedEvent.dispatch(c, &MemberCardUpdatedEvent{
+				Group:   m.Group,
+				OldCard: wsmsg.CardOld,
+				Member:  m,
+			})
+		}
 	} else {
 		needSync = true
 		err = fmt.Errorf("member not found: %v", wsmsg.UserID)
