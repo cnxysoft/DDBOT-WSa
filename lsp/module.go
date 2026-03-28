@@ -248,16 +248,25 @@ func (l *Lsp) DebugCheck(groupCode int64, uin int64, isGroupMessage bool) bool {
 }
 
 func (l *Lsp) Serve(bot *bot.Bot) {
+	logger.Debugf("Lsp.Serve called: bot=%p, GroupMessageEvent=%p", bot, bot.GroupMessageEvent)
 	bot.GroupMemberJoinEvent.Subscribe(func(qqClient *client.QQClient, event *client.MemberJoinGroupEvent) {
 		if err := localdb.Set(localdb.Key("OnGroupMemberJoined", event.Group.Code, event.Member.Uin, event.Member.JoinTime), "",
 			localdb.SetExpireOpt(time.Minute*2), localdb.SetNoOverWriteOpt()); err != nil {
 			return
 		}
+		groupName := event.Group.Name
+		memberName := event.Member.DisplayName()
+		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+			groupName = gi.Name
+			if fi := gi.FindMember(event.Member.Uin); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
 		m, _ := template.LoadAndExec("trigger.group.member_in.tmpl", map[string]interface{}{
 			"group_code":  event.Group.Code,
-			"group_name":  event.Group.Name,
+			"group_name":  groupName,
 			"member_code": event.Member.Uin,
-			"member_name": event.Member.DisplayName(),
+			"member_name": memberName,
 		})
 		if m != nil && l.DebugCheck(event.Group.Code, event.Member.Uin, true) {
 			l.SendMsg(m, mmsg.NewGroupTarget(event.Group.Code))
@@ -268,16 +277,46 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			localdb.SetExpireOpt(time.Minute*2), localdb.SetNoOverWriteOpt()); err != nil {
 			return
 		}
+		groupName := event.Group.Name
+		memberName := event.Member.DisplayName()
+		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+			groupName = gi.Name
+			if fi := gi.FindMember(event.Member.Uin); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
 		m, _ := template.LoadAndExec("trigger.group.member_out.tmpl", map[string]interface{}{
 			"group_code":  event.Group.Code,
-			"group_name":  event.Group.Name,
+			"group_name":  groupName,
 			"member_code": event.Member.Uin,
-			"member_name": event.Member.DisplayName(),
+			"member_name": memberName,
 		})
 		if m != nil && l.DebugCheck(event.Group.Code, event.Member.Uin, true) {
 			l.SendMsg(m, mmsg.NewGroupTarget(event.Group.Code))
 		}
 	})
+
+	bot.GroupMessageRecalledEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupMessageRecalledEvent) {
+		data := map[string]interface{}{
+			"group_code":   event.GroupCode,
+			"author_uin":   event.AuthorUin,
+			"operator_uin": event.OperatorUin,
+		}
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			data["group_name"] = gi.Name
+			if fi := gi.FindMember(event.AuthorUin); fi != nil {
+				data["author_name"] = fi.DisplayName()
+			}
+			if fi := gi.FindMember(event.OperatorUin); fi != nil {
+				data["operator_name"] = fi.DisplayName()
+			}
+		}
+		m, _ := template.LoadAndExec("trigger.group.recall.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, event.AuthorUin, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
+		}
+	})
+
 	bot.GroupInvitedEvent.Subscribe(func(qqClient *client.QQClient, request *client.GroupInvitedRequest) {
 		log := logger.WithFields(logrus.Fields{
 			"GroupCode":   request.GroupCode,
@@ -629,6 +668,20 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 		go cmd.Execute()
 	})
+	bot.FriendMessageRecalledEvent.Subscribe(func(qqClient *client.QQClient, event *client.FriendMessageRecalledEvent) {
+		friendName := "未知好友"
+		if fi := localutils.GetBot().FindFriend(event.FriendUin); fi != nil {
+			friendName = fi.Nickname
+		}
+		m, _ := template.LoadAndExec("trigger.private.friend_recall.tmpl", map[string]interface{}{
+			"friend_code": event.FriendUin,
+			"friend_name": friendName,
+			"message_id":  event.MessageId,
+		})
+		if m != nil {
+			l.SendMsg(m, mmsg.NewPrivateTarget(event.FriendUin))
+		}
+	})
 	bot.DisconnectedEvent.Subscribe(func(qqClient *client.QQClient, event *client.ClientDisconnectedEvent) {
 		logger.Errorf("收到OnDisconnected事件 %v", event.Message)
 		if config.GlobalConfig.GetString("bot.onDisconnected") == "exit" {
@@ -640,23 +693,24 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.MemberCardUpdatedEvent.Subscribe(func(qqClient *client.QQClient, event *client.MemberCardUpdatedEvent) {
-		// 群名片更新通知
+		groupName := event.Group.Name
+		memberName := event.Member.DisplayName()
+		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+			groupName = gi.Name
+			if fi := gi.FindMember(event.Member.Uin); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
 		data := map[string]interface{}{
 			"group_code":      event.Group.Code,
-			"group_name":      event.Group.Name,
+			"group_name":      groupName,
 			"member_code":     event.Member.Uin,
 			"old_member_name": event.OldCard,
-			"member_name":     event.Member.DisplayName(),
+			"member_name":     memberName,
 		}
 		if event.OldCard == "" {
 			data["old_member_name"] = event.Member.Nickname
 		}
-		// if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
-		// 	data["group_name"] = gi.Name
-		// 	if fi := gi.FindMember(event.Member.Uin); fi != nil {
-		// 		data["member_name"] = fi.DisplayName()
-		// 	}
-		// }
 		m, _ := template.LoadAndExec("trigger.group.card_updated.tmpl", data)
 		if m != nil && l.DebugCheck(event.Group.Code, event.Member.Uin, true) {
 			l.SendMsg(m, mmsg.NewGroupTarget(event.Group.Code))
@@ -686,12 +740,19 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMemberPermissionChangedEvent.Subscribe(func(qqClient *client.QQClient, event *client.MemberPermissionChangedEvent) {
-		// 群名片更新通知
+		groupName := event.Group.Name
+		memberName := event.Member.DisplayName()
+		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+			groupName = gi.Name
+			if fi := gi.FindMember(event.Member.Uin); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
 		data := map[string]interface{}{
 			"group_code":  event.Group.Code,
-			"group_name":  event.Group.Name,
+			"group_name":  groupName,
 			"member_code": event.Member.Uin,
-			"member_name": event.Member.DisplayName(),
+			"member_name": memberName,
 		}
 		permission := func(permission client.MemberPermission) string {
 			switch permission {
@@ -706,15 +767,120 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 		data["old_permission"] = permission(event.OldPermission)
 		data["permission"] = permission(event.NewPermission)
-		// if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
-		// 	data["group_name"] = gi.Name
-		// 	if fi := gi.FindMember(event.Member.Uin); fi != nil {
-		// 		data["member_name"] = fi.DisplayName()
-		// 	}
-		// }
 		m, _ := template.LoadAndExec("trigger.group.admin_changed.tmpl", data)
 		if m != nil && l.DebugCheck(event.Group.Code, event.Member.Uin, true) {
 			l.SendMsg(m, mmsg.NewGroupTarget(event.Group.Code))
+		}
+	})
+	bot.MemberSpecialTitleUpdatedEvent.Subscribe(func(qqClient *client.QQClient, event *client.MemberSpecialTitleUpdatedEvent) {
+		groupName := ""
+		memberName := ""
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			groupName = gi.Name
+			if fi := gi.FindMember(event.Uin); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
+		data := map[string]interface{}{
+			"group_code":  event.GroupCode,
+			"group_name":  groupName,
+			"member_code": event.Uin,
+			"member_name": memberName,
+			"new_title":   event.NewTitle,
+		}
+		m, _ := template.LoadAndExec("trigger.group.special_title_updated.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, event.Uin, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
+		}
+	})
+
+	bot.GroupEssenceChangedEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupDigestEvent) {
+		data := map[string]interface{}{
+			"group_code": event.GroupCode,
+		}
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			data["group_name"] = gi.Name
+		}
+		m, _ := template.LoadAndExec("trigger.group.essence_changed.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, 0, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
+		}
+	})
+
+	bot.GroupDisbandEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupDisbandEvent) {
+		data := map[string]interface{}{
+			"group_code": event.Group.Code,
+		}
+		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+			data["group_name"] = gi.Name
+		}
+		if event.Operator != nil {
+			data["operator_code"] = event.Operator.Uin
+			if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
+				if fi := gi.FindMember(event.Operator.Uin); fi != nil {
+					data["operator_name"] = fi.DisplayName()
+				}
+			}
+		}
+		m, _ := template.LoadAndExec("trigger.group.disband.tmpl", data)
+		if m != nil && event.Group != nil {
+			// 群解散事件发送到管理员
+			l.SendMsgToAdmin(m)
+		}
+	})
+
+	bot.GroupMsgEmojiLikeEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupMsgEmojiLikeEvent) {
+		memberName := ""
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			if fi := gi.FindMember(event.UserId); fi != nil {
+				memberName = fi.DisplayName()
+			}
+		}
+		data := map[string]interface{}{
+			"group_code":  event.GroupCode,
+			"member_code": event.UserId,
+			"member_name": memberName,
+			"message_id":  event.MessageId,
+			"emoji_id":    event.EmojiId,
+			"emoji_count": event.EmojiCount,
+			"is_add":      event.IsAdd,
+		}
+		m, _ := template.LoadAndExec("trigger.group.emoji_like.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, event.UserId, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
+		}
+	})
+
+	bot.ProfileLikeEvent.Subscribe(func(qqClient *client.QQClient, event *client.ProfileLikeEvent) {
+		data := map[string]interface{}{
+			"operator_id":   event.OperatorId,
+			"operator_nick": event.OperatorNick,
+			"times":         event.Times,
+		}
+		m, _ := template.LoadAndExec("trigger.private.profile_like.tmpl", data)
+		if m != nil {
+			l.SendMsgToAdmin(m)
+		}
+	})
+
+	bot.PokeRecallEvent.Subscribe(func(qqClient *client.QQClient, event *client.PokeRecallEvent) {
+		data := map[string]interface{}{
+			"member_code":   event.Sender,
+			"receiver_code": event.Receiver,
+			"group_code":    event.GroupCode,
+		}
+		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
+			data["group_name"] = gi.Name
+			if fi := gi.FindMember(event.Sender); fi != nil {
+				data["member_name"] = fi.DisplayName()
+			}
+			if fi := gi.FindMember(event.Receiver); fi != nil {
+				data["receiver_name"] = fi.DisplayName()
+			}
+		}
+		m, _ := template.LoadAndExec("trigger.group.poke_recall.tmpl", data)
+		if m != nil && l.DebugCheck(event.GroupCode, event.Sender, true) {
+			l.SendMsg(m, mmsg.NewGroupTarget(event.GroupCode))
 		}
 	})
 

@@ -1684,6 +1684,48 @@ ACFUN-{{ .name }}直播结束了
 
 </details>
 
+- 好友消息撤回事件
+
+模板名：`trigger.private.friend_recall.tmpl`
+
+| 模板变量        | 类型     | 含义           |
+|---------------|--------|--------------|
+| friend_code   | int64  | 撤回消息的好友QQ号 |
+| friend_name   | string | 撤回消息的好友昵称  |
+| message_id    | int32  | 被撤回的消息ID   |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群成员头衔变更事件
+
+模板名：`trigger.group.special_title_updated.tmpl`
+
+| 模板变量        | 类型     | 含义            |
+|---------------|--------|----------------|
+| group_code    | int64  | 发生事件的群号码  |
+| group_name    | string | 发生事件的群名称  |
+| member_code   | int64  | 头衔变更的用户QQ号 |
+| member_name   | string | 头衔变更的用户昵称  |
+| new_title     | string | 新的头衔        |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
 - 群名片变更事件
 
 模板名：`trigger.group.admin_changed.tmpl`
@@ -1696,6 +1738,73 @@ ACFUN-{{ .name }}直播结束了
 | member_name    | string | 被改权限的用户昵称 |
 | old_permission | string | 改之前的用户权限   |
 | permission     | string | 现在的用户权限    |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群消息表情回应事件
+
+模板名：`trigger.group.emoji_like.tmpl`
+
+| 模板变量        | 类型     | 含义           |
+|---------------|--------|--------------|
+| group_code    | int64  | 发生事件的群号码   |
+| member_code   | int64  | 表情回应的用户QQ号 |
+| member_name   | string | 表情回应的用户昵称 |
+| message_id    | int64  | 被表情回应的消息ID |
+| emoji_id      | string | 表情ID         |
+| emoji_count   | int    | 表情数量        |
+| is_add        | bool   | 是否是添加       |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群戳一戳撤回事件
+
+模板名：`trigger.group.poke_recall.tmpl`
+
+| 模板变量         | 类型     | 含义           |
+|---------------|--------|--------------|
+| group_code    | int64  | 发生事件的群号码   |
+| group_name    | string | 发生事件的群名称   |
+| member_code   | int64  | 发送戳一戳的用户QQ号 |
+| member_name   | string | 发送戳一戳的用户昵称 |
+| receiver_code | int64  | 被戳的用户QQ号    |
+| receiver_name | string | 被戳的用户昵称    |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 个人信息点赞事件
+
+模板名：`trigger.private.profile_like.tmpl`
+
+| 模板变量         | 类型     | 含义          |
+|---------------|--------|-------------|
+| operator_id   | int64  | 点赞的用户QQ号  |
+| operator_nick | string | 点赞用户的昵称  |
+| times         | int    | 点赞次数      |
 
 <details>
   <summary>默认模板</summary>
