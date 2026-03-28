@@ -11,6 +11,9 @@ DDBOT
 ddbot.exe
 /ffmpeg/ffmpeg-static/
 
+# Build output
+/DDBOT-cgo
+
 # Test binaries
 *.test
 *.test.exe
