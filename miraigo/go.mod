@@ -8,7 +8,6 @@ require (
 	github.com/RomiChan/protobuf v0.1.1-0.20230204044148-2ed269a2e54d
 	github.com/RomiChan/syncx v0.0.0-20240418144900-b7402ffdebc7
 	github.com/Sora233/MiraiGo-Template v0.0.0-20250614161613-2c6ee7380548
-	github.com/cnxysoft/DDBOT-WSa v0.0.0-20250620022611-51ba1e929e90
 	github.com/cnxysoft/DDBOT-WSa/lsp/eventbus v0.0.0-00010101000000-000000000000
 	github.com/fumiama/imgsz v0.0.4
 	github.com/gorilla/websocket v1.5.3
@@ -23,13 +22,9 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/gofrs/flock v0.8.1 // indirect
-	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/jonboulle/clockwork v0.4.0 // indirect
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible // indirect
 	github.com/lestrrat-go/strftime v1.1.1 // indirect
-	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
-	github.com/modern-go/gls v0.0.0-20220109145502-612d0167dce5 // indirect
-	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rifflock/lfshook v0.0.0-20180920164130-b9218ef580f5 // indirect
@@ -41,13 +36,8 @@ require (
 	github.com/spf13/pflag v1.0.7 // indirect
 	github.com/spf13/viper v1.20.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
-	github.com/tidwall/btree v1.6.0 // indirect
-	github.com/tidwall/buntdb v1.2.10 // indirect
-	github.com/tidwall/grect v0.1.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/rtred v0.1.2 // indirect
-	github.com/tidwall/tinyqueue v0.1.1 // indirect
 	golang.org/x/image v0.30.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
