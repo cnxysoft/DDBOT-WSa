@@ -58,6 +58,7 @@ type SatoriAdapter struct {
 	idMap                  map[int64]string
 	directChannelMap       map[int64]string
 	messageChannelMap      map[int32]string
+	msgIDMap               map[int32]string
 	groupChannelMap        map[int64]string
 	groupMessageHandlers   []func(*adapter.GroupMessageEvent)
 	privateMessageHandlers []func(*adapter.PrivateMessageEvent)
@@ -157,6 +158,7 @@ func NewSatoriAdapter(cfg *adapter.AdapterConfig) *SatoriAdapter {
 		idMap:             make(map[int64]string),
 		directChannelMap:  make(map[int64]string),
 		messageChannelMap: make(map[int32]string),
+		msgIDMap:          make(map[int32]string),
 		groupChannelMap:   make(map[int64]string),
 	}
 }
@@ -700,8 +702,10 @@ func (a *SatoriAdapter) dispatchMessage(event eventBody) {
 	}
 	channelID := pickChannelID(event)
 	messageID := a.rememberID(event.Message.ID)
+	internalMsgID := int32(messageID)
 	a.mu.Lock()
-	a.messageChannelMap[int32(messageID)] = channelID
+	a.messageChannelMap[internalMsgID] = channelID
+	a.msgIDMap[internalMsgID] = event.Message.ID
 	if event.Guild != nil {
 		guildID := a.rememberID(event.Guild.ID)
 		if channelID != "" {
@@ -709,7 +713,7 @@ func (a *SatoriAdapter) dispatchMessage(event eventBody) {
 		}
 	}
 	a.mu.Unlock()
-	segments := parseSatoriContent(event.Message.Content)
+	segments := parseSatoriContentWithMap(event.Message.Content, a.msgIDMap, internalMsgID)
 	if event.Guild != nil {
 		guildID := a.rememberID(event.Guild.ID)
 		userID := rememberEventUserID(a, event)
@@ -1045,6 +1049,99 @@ func parseSatoriContent(content string) []adapter.MessageSegment {
 	return segments
 }
 
+func parseSatoriContentWithMap(content string, msgIDMap map[int32]string, internalMsgID int32) []adapter.MessageSegment {
+	if content == "" {
+		return nil
+	}
+	segments := make([]adapter.MessageSegment, 0)
+	index := 0
+	matches := tagPattern.FindAllStringSubmatchIndex(content, -1)
+	var quoteEnd int = -1
+	for _, match := range matches {
+		start, end := match[0], match[1]
+		inQuote := quoteEnd >= 0 && start < quoteEnd
+		if start > index {
+			appendTextSegment(&segments, htmlUnescape(content[index:start]))
+		}
+		tagName := content[match[2]:match[3]]
+		attrs := parseAttrs(content[match[4]:match[5]])
+		switch tagName {
+		case "quote":
+			if id := attrs["id"]; id != "" {
+				if numId, err := strconv.ParseInt(id, 10, 64); err == nil {
+					localID := int32(numId)
+					msgIDMap[localID] = id
+					segments = append(segments, adapter.MessageSegment{Type: "reply", Data: map[string]interface{}{"id": float64(localID)}})
+				}
+			}
+			closeIdx := strings.Index(content[end:], "</quote>")
+			if closeIdx >= 0 {
+				quoteEnd = end + closeIdx + len("</quote>")
+				index = quoteEnd
+			} else {
+				index = end
+			}
+		case "at":
+			data := map[string]interface{}{}
+			if attrs["type"] == "all" {
+				data["qq"] = "all"
+			} else if attrs["id"] != "" {
+				data["qq"] = attrs["id"]
+			}
+			if len(data) > 0 {
+				segments = append(segments, adapter.MessageSegment{Type: "at", Data: data})
+			}
+			if !inQuote {
+				index = end
+			}
+		case "img", "image":
+			url := firstNonEmpty(attrs["src"], attrs["url"])
+			if url != "" {
+				segments = append(segments, adapter.MessageSegment{Type: "image", Data: map[string]interface{}{"url": url, "file": url}})
+			}
+			if !inQuote {
+				index = end
+			}
+		case "audio":
+			url := firstNonEmpty(attrs["src"], attrs["url"])
+			if url != "" {
+				segments = append(segments, adapter.MessageSegment{Type: "record", Data: map[string]interface{}{"url": url, "file": url}})
+			}
+			if !inQuote {
+				index = end
+			}
+		case "video":
+			url := firstNonEmpty(attrs["src"], attrs["url"])
+			if url != "" {
+				segments = append(segments, adapter.MessageSegment{Type: "video", Data: map[string]interface{}{"url": url, "file": url}})
+			}
+			if !inQuote {
+				index = end
+			}
+		case "file":
+			url := firstNonEmpty(attrs["src"], attrs["url"])
+			name := firstNonEmpty(attrs["title"], attrs["name"])
+			if url != "" || name != "" {
+				segments = append(segments, adapter.MessageSegment{Type: "file", Data: map[string]interface{}{"url": url, "name": name}})
+			}
+			if !inQuote {
+				index = end
+			}
+		default:
+			if !inQuote {
+				index = end
+			}
+		}
+	}
+	if index < len(content) {
+		appendTextSegment(&segments, htmlUnescape(content[index:]))
+	}
+	if len(segments) == 0 {
+		appendTextSegment(&segments, htmlUnescape(stripTags(content)))
+	}
+	return segments
+}
+
 func (a *SatoriAdapter) renderMessageContent(segments []adapter.MessageSegment) string {
 	if len(segments) == 0 {
 		return ""
@@ -1090,8 +1187,18 @@ func (a *SatoriAdapter) renderMessageContent(segments []adapter.MessageSegment) 
 				builder.WriteString(`/>`)
 			}
 		case "reply":
-			if id := extractString(segment.Data["id"]); id != "" {
-				builder.WriteString(`<quote id="` + htmlEscape(id) + `"/>`)
+			if idStr := extractString(segment.Data["id"]); idStr != "" {
+				if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+					a.mu.RLock()
+					if origID, ok := a.msgIDMap[int32(id)]; ok {
+						builder.WriteString(`<quote id="` + htmlEscape(origID) + `"/>`)
+					} else {
+						builder.WriteString(`<quote id="` + htmlEscape(idStr) + `"/>`)
+					}
+					a.mu.RUnlock()
+				} else {
+					builder.WriteString(`<quote id="` + htmlEscape(idStr) + `"/>`)
+				}
 			}
 		}
 	}
@@ -1107,7 +1214,7 @@ func parseAttrs(raw string) map[string]string {
 }
 
 func appendTextSegment(segments *[]adapter.MessageSegment, text string) {
-	if strings.TrimSpace(text) == "" && text == "" {
+	if strings.TrimSpace(text) == "" {
 		return
 	}
 	*segments = append(*segments, adapter.MessageSegment{Type: "text", Data: map[string]interface{}{"text": text}})
@@ -1213,11 +1320,15 @@ func extractInt64(value interface{}) int64 {
 }
 
 func extractStringField(data interface{}, field string) string {
-	m, ok := data.(map[string]interface{})
-	if !ok {
-		return ""
+	if m, ok := data.(map[string]interface{}); ok {
+		return extractString(m[field])
 	}
-	return extractString(m[field])
+	if arr, ok := data.([]interface{}); ok && len(arr) > 0 {
+		if m, ok := arr[0].(map[string]interface{}); ok {
+			return extractString(m[field])
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {
