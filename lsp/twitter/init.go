@@ -7,7 +7,11 @@ import (
 )
 
 var (
-	BaseURL   = []string{"https://lightbrd.com/", "https://nitter.net/"}
+	BaseURL = []string{
+		"https://nitter.tiekoetter.com/",
+		"https://nitter.catsarch.com/",
+		"https://lightbrd.com/",
+	}
 	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
 )
 
