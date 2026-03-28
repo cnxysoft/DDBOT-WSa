@@ -3,7 +3,6 @@ package utils
 import (
 	"errors"
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/samber/lo"
 )
 
@@ -31,11 +30,8 @@ func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourceGroup, PrimaryID: groupCode}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	// 适配器模式下暂时不支持图片上传
+	return nil, errors.New("upload not supported in adapter mode")
 }
 
 func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageElement, error) {
@@ -49,11 +45,8 @@ func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageEleme
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourcePrivate, PrimaryID: uin}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	// 适配器模式下暂时不支持图片上传
+	return nil, errors.New("upload not supported in adapter mode")
 }
 
 const (

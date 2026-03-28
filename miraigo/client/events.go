@@ -28,6 +28,10 @@ func (handle *EventHandle[T]) Subscribe(handler func(client *QQClient, event T))
 	handle.handlers = newHandlers
 }
 
+func (handle *EventHandle[T]) Dispatch(client *QQClient, event T) {
+	handle.dispatch(client, event)
+}
+
 func (handle *EventHandle[T]) dispatch(client *QQClient, event T) {
 	eventMu.RLock()
 	defer func() {
@@ -36,10 +40,11 @@ func (handle *EventHandle[T]) dispatch(client *QQClient, event T) {
 			fmt.Printf("event error: %v\n%s", pan, debug.Stack())
 		}
 	}()
+	fmt.Printf("dispatch: handlers count = %d\n", len(handle.handlers))
 	for _, handler := range handle.handlers {
 		handler(client, event)
 	}
-	if len(client.eventHandlers.subscribedEventHandlers) > 0 {
+	if client != nil && len(client.eventHandlers.subscribedEventHandlers) > 0 {
 		for _, h := range client.eventHandlers.subscribedEventHandlers {
 			ht := reflect.TypeOf(h)
 			for i := 0; i < ht.NumMethod(); i++ {

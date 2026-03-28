@@ -122,6 +122,9 @@ type QQClient struct {
 	BotOnlineEvent                    EventHandle[*BotOnlineEvent]
 	BotOfflineEvent                   EventHandle[*BotOfflineEvent]
 	BotSendFailedEvent                EventHandle[*BotSendFailedEvent]
+	GroupMsgEmojiLikeEvent            EventHandle[*GroupMsgEmojiLikeEvent]
+	ProfileLikeEvent                  EventHandle[*ProfileLikeEvent]
+	PokeRecallEvent                   EventHandle[*PokeRecallEvent]
 
 	// message state
 	msgSvcCache            *utils.Cache[unit]

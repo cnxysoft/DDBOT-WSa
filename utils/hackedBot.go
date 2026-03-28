@@ -1,34 +1,34 @@
 package utils
 
 import (
-	"github.com/Mrs4s/MiraiGo/client"
-	miraiBot "github.com/Sora233/MiraiGo-Template/bot"
+	"fmt"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 )
 
-// HackedBot 拦截一些方法方便测试
 type HackedBot struct {
-	Bot        **miraiBot.Bot
-	testGroups []*client.GroupInfo
+	Bot        adapter.BotCaller
+	testGroups []*adapter.GroupInfo
 	testUin    int64
 	testMode   bool
 }
 
 func (h *HackedBot) valid() bool {
-	result := true // 默认设置为 true
-	if h == nil || h.Bot == nil || *h.Bot == nil || h.testMode {
+	result := true
+	if h == nil || h.Bot == nil || h.testMode {
 		result = false
 	}
 	return result
 }
 
-func (h *HackedBot) FindFriend(uin int64) *client.FriendInfo {
+func (h *HackedBot) FindFriend(uin int64) *adapter.FriendInfo {
 	if !h.valid() {
 		return nil
 	}
-	return (*h.Bot).FindFriend(uin)
+	return h.Bot.FindFriend(uin)
 }
 
-func (h *HackedBot) FindGroup(code int64) *client.GroupInfo {
+func (h *HackedBot) FindGroup(code int64) *adapter.GroupInfo {
 	if !h.valid() {
 		for _, gi := range h.testGroups {
 			if gi.Code == code {
@@ -37,35 +37,33 @@ func (h *HackedBot) FindGroup(code int64) *client.GroupInfo {
 		}
 		return nil
 	}
-	return (*h.Bot).FindGroup(code)
+	return h.Bot.FindGroup(code)
 }
 
-func (h *HackedBot) SolveFriendRequest(req *client.NewFriendRequest, accept bool) {
+func (h *HackedBot) SolveFriendRequest(req interface{}, accept bool) {
 	if !h.valid() {
 		return
 	}
-	(*h.Bot).SolveFriendRequest(req, accept)
 }
 
-func (h *HackedBot) SolveGroupJoinRequest(i interface{}, accept, block bool, reason string) {
+func (h *HackedBot) SolveGroupJoinRequest(i interface{}, accept bool, block bool, reason string) {
 	if !h.valid() {
 		return
 	}
-	(*h.Bot).SolveGroupJoinRequest(i, accept, block, reason)
 }
 
-func (h *HackedBot) GetGroupList() []*client.GroupInfo {
+func (h *HackedBot) GetGroupList() []*adapter.GroupInfo {
 	if !h.valid() {
 		return h.testGroups
 	}
-	return (*h.Bot).GroupList
+	return h.Bot.GetGroupList()
 }
 
-func (h *HackedBot) GetFriendList() []*client.FriendInfo {
+func (h *HackedBot) GetFriendList() []*adapter.FriendInfo {
 	if !h.valid() {
 		return nil
 	}
-	return (*h.Bot).FriendList
+	return h.Bot.GetFriendList()
 }
 
 func (h *HackedBot) IsOnline() bool {
@@ -76,35 +74,74 @@ func (h *HackedBot) GetUin() int64 {
 	if !h.valid() {
 		return h.testUin
 	}
-	return (*h.Bot).Uin
+	return h.Bot.GetUin()
 }
 
-var hackedBot = &HackedBot{Bot: &miraiBot.Instance}
+var hackedBot = &HackedBot{Bot: nil}
 
 func GetBot() *HackedBot {
 	return hackedBot
 }
 
-// TESTSetUin 仅可用于测试
+func GetBotInstance() interface{} {
+	if hackedBot.Bot != nil {
+		return hackedBot.Bot
+	}
+	return nil
+}
+
+func (h *HackedBot) DownloadFile(url, base64, name string, headers []string) (string, error) {
+	if !h.valid() {
+		return "", fmt.Errorf("bot not valid")
+	}
+	return h.Bot.DownloadFile(url, base64, name, headers)
+}
+
+func (h *HackedBot) GetFileUrl(groupCode int64, fileId string) string {
+	if !h.valid() {
+		return ""
+	}
+	return h.Bot.GetFileUrl(groupCode, fileId)
+}
+
+func (h *HackedBot) GetMsg(msgId int32) (interface{}, error) {
+	if !h.valid() {
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.GetMsg(msgId)
+}
+
+func (h *HackedBot) RecallMsg(msgId int32) error {
+	if !h.valid() {
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.RecallMsg(msgId)
+}
+
+func (h *HackedBot) SendApi(api string, params map[string]interface{}) (interface{}, error) {
+	if !h.valid() {
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SendApi(api, params)
+}
+
 func (h *HackedBot) TESTSetUin(uin int64) {
 	h.testUin = uin
 }
 
-// TESTAddGroup 仅可用于测试
 func (h *HackedBot) TESTAddGroup(groupCode int64) {
 	for _, g := range h.testGroups {
 		if g.Code == groupCode {
 			return
 		}
 	}
-	h.testGroups = append(h.testGroups, &client.GroupInfo{
+	h.testGroups = append(h.testGroups, &adapter.GroupInfo{
 		Uin:  groupCode,
 		Code: groupCode,
 	})
 }
 
-// TESTAddMember 仅可用于测试
-func (h *HackedBot) TESTAddMember(groupCode int64, uin int64, permission client.MemberPermission) {
+func (h *HackedBot) TESTAddMember(groupCode int64, uin int64, permission interface{}) {
 	h.TESTAddGroup(groupCode)
 	for _, g := range h.testGroups {
 		if g.Code != groupCode {
@@ -115,15 +152,14 @@ func (h *HackedBot) TESTAddMember(groupCode int64, uin int64, permission client.
 				return
 			}
 		}
-		g.Members = append(g.Members, &client.GroupMemberInfo{
+		g.Members = append(g.Members, &adapter.GroupMemberInfo{
 			Group:      g,
 			Uin:        uin,
-			Permission: permission,
+			Permission: adapter.Member,
 		})
 	}
 }
 
-// TESTReset 仅可用于测试
 func (h *HackedBot) TESTReset() {
 	h.testGroups = nil
 	h.testUin = 0
