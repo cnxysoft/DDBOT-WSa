@@ -2,9 +2,7 @@ package test
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/bot"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/stretchr/testify/assert"
@@ -91,13 +89,11 @@ func FakeImage(size int) string {
 }
 
 func InitMirai() {
-	bot.Instance = &bot.Bot{
-		QQClient: client.NewClient(123456, "fake"),
-	}
+	// 适配器模式下不需要初始化 QQClient
 }
 
 func CloseMirai() {
-	bot.Instance = nil
+	// 适配器模式下不需要清理
 }
 
 func NewJar() (*cookiejar.Jar, error) {

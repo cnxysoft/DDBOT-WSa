@@ -1,8 +1,6 @@
 package msg_marker
 
 import (
-	"github.com/Mrs4s/MiraiGo/client"
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
@@ -40,17 +38,8 @@ func (m *marker) Serve(bot *bot.Bot) {
 		logger.Debug("自动已读被禁用")
 		return
 	}
-	logger.Debug("自动已读已开启")
-	bot.GroupMessageEvent.Subscribe(func(client *client.QQClient, message *message.GroupMessage) {
-		if message.Sender.Uin != client.Uin {
-			client.MarkGroupMessageReaded(message.GroupCode, int64(message.Id))
-		}
-	})
-	bot.PrivateMessageEvent.Subscribe(func(qqClient *client.QQClient, privateMessage *message.PrivateMessage) {
-		if privateMessage.Sender.Uin != qqClient.Uin {
-			qqClient.MarkPrivateMessageReaded(privateMessage.Sender.Uin, int64(privateMessage.Time))
-		}
-	})
+	logger.Debug("自动已读已开启 (适配器模式)")
+	// 适配器模式下暂时不支持自动已读功能
 }
 
 func (m *marker) Start(bot *bot.Bot) {
