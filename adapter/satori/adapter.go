@@ -1027,6 +1027,12 @@ func parseSatoriContent(content string) []adapter.MessageSegment {
 			if url != "" || name != "" {
 				segments = append(segments, adapter.MessageSegment{Type: "file", Data: map[string]interface{}{"url": url, "name": name}})
 			}
+		case "quote":
+			if id := attrs["id"]; id != "" {
+				if numId, err := strconv.ParseInt(id, 10, 64); err == nil {
+					segments = append(segments, adapter.MessageSegment{Type: "reply", Data: map[string]interface{}{"id": float64(numId)}})
+				}
+			}
 		}
 		index = end
 	}
@@ -1082,6 +1088,10 @@ func (a *SatoriAdapter) renderMessageContent(segments []adapter.MessageSegment) 
 					builder.WriteString(` title="` + htmlEscape(name) + `"`)
 				}
 				builder.WriteString(`/>`)
+			}
+		case "reply":
+			if id := extractString(segment.Data["id"]); id != "" {
+				builder.WriteString(`<quote id="` + htmlEscape(id) + `"/>`)
 			}
 		}
 	}
@@ -1170,6 +1180,8 @@ func extractString(value interface{}) string {
 		return strconv.FormatInt(int64(typed), 10)
 	case int64:
 		return strconv.FormatInt(typed, 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
 	case int:
 		return strconv.Itoa(typed)
 	default:
