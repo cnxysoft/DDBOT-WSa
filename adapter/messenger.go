@@ -202,9 +202,13 @@ func (m *Messenger) buildMessageSegments(msg *message.SendingMessage) []MessageS
 				Data: map[string]interface{}{"text": e.Content},
 			})
 		case *message.AtElement:
+			qq := "all"
+			if e.Target != 0 {
+				qq = fmt.Sprintf("%d", e.Target)
+			}
 			segments = append(segments, MessageSegment{
 				Type: "at",
-				Data: map[string]interface{}{"qq": e.Target},
+				Data: map[string]interface{}{"qq": qq},
 			})
 		case *message.FaceElement:
 			segments = append(segments, MessageSegment{
