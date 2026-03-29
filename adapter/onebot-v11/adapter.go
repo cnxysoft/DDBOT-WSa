@@ -223,6 +223,9 @@ func (a *OneBotAdapter) parseGroupMessageEvent(msg map[string]interface{}) *adap
 
 	if msg["message"] != nil {
 		event.Message = adapter.ParseMessageSegments(msg["message"])
+	} else if msg["raw_message"] != nil {
+		// 回退到 raw_message 解析
+		event.Message = adapter.ParseMessageSegments(getString(msg["raw_message"]))
 	}
 
 	return event
@@ -240,6 +243,9 @@ func (a *OneBotAdapter) parsePrivateMessageEvent(msg map[string]interface{}) *ad
 
 	if msg["message"] != nil {
 		event.Message = adapter.ParseMessageSegments(msg["message"])
+	} else if msg["raw_message"] != nil {
+		// 回退到 raw_message 解析
+		event.Message = adapter.ParseMessageSegments(getString(msg["raw_message"]))
 	}
 
 	return event
@@ -550,7 +556,7 @@ func (a *OneBotAdapter) GetFileUrl(groupCode int64, fileId string) string {
 	return ""
 }
 
-func (a *OneBotAdapter) GetMsg(msgId int32) (interface{}, error) {
+func (a *OneBotAdapter) GetMsgOrg(msgId int32) (interface{}, error) {
 	params := map[string]interface{}{
 		"message_id": msgId,
 	}
@@ -561,6 +567,49 @@ func (a *OneBotAdapter) GetMsg(msgId int32) (interface{}, error) {
 	}
 
 	return data, nil
+}
+
+func (a *OneBotAdapter) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
+	params := map[string]interface{}{
+		"message_id": msgId,
+	}
+
+	data, err := a.SendApi("get_msg", params)
+	if err != nil {
+		return nil, err
+	}
+
+	msgMap, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid message data format")
+	}
+
+	result := &adapter.GetMsgResult{
+		MessageID:  getInt64(msgMap["message_id"]),
+		GroupID:    getInt64(msgMap["group_id"]),
+		UserID:     getInt64(msgMap["user_id"]),
+		RawMessage: getString(msgMap["raw_message"]),
+		Time:       getInt64(msgMap["time"]),
+	}
+
+	if msgMap["message"] != nil {
+		segments := adapter.ParseMessageSegments(msgMap["message"])
+		result.Elements = adapter.ConvertToMessageElements(segments)
+	} else if msgMap["raw_message"] != nil {
+		segments := adapter.ParseMessageSegments(getString(msgMap["raw_message"]))
+		result.Elements = adapter.ConvertToMessageElements(segments)
+	}
+
+	if sender, ok := msgMap["sender"].(map[string]interface{}); ok {
+		result.Sender = &adapter.SenderInfo{
+			UserID:   getInt64(sender["user_id"]),
+			Nickname: getString(sender["nickname"]),
+			Card:     getString(sender["card"]),
+			Role:     getString(sender["role"]),
+		}
+	}
+
+	return result, nil
 }
 
 func (a *OneBotAdapter) RecallMsg(msgId int32) error {

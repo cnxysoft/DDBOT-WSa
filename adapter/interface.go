@@ -1,9 +1,11 @@
 package adapter
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/client"
+	"github.com/Mrs4s/MiraiGo/message"
 )
 
 type MessageType string
@@ -222,7 +224,8 @@ type Adapter interface {
 
 	DownloadFile(url, base64, name string, headers []string) (string, error)
 	GetFileUrl(groupCode int64, fileId string) string
-	GetMsg(msgId int32) (interface{}, error)
+	GetMsg(msgId int32) (*GetMsgResult, error)
+	GetMsgOrg(msgId int32) (interface{}, error)
 	RecallMsg(msgId int32) error
 
 	GroupPoke(groupCode, target int64) error
@@ -263,6 +266,97 @@ func (ed *EventDispatcher) Dispatch(eventType string, event interface{}) {
 type SendResponse struct {
 	MessageID int32
 	Error     error
+}
+
+type GetMsgResult struct {
+	MessageID  int64
+	GroupID    int64
+	UserID     int64
+	RawMessage string
+	Elements   []message.IMessageElement
+	Time       int64
+	Sender     *SenderInfo
+}
+
+type SenderInfo struct {
+	UserID   int64
+	Nickname string
+	Card     string
+	Role     string
+}
+
+// ConvertToMessageElements converts []MessageSegment to []message.IMessageElement
+func ConvertToMessageElements(segments []MessageSegment) []message.IMessageElement {
+	var elements []message.IMessageElement
+
+	for _, seg := range segments {
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				elements = append(elements, &message.TextElement{Content: text})
+			}
+		case "at":
+			var target int64
+			if qq, ok := seg.Data["qq"].(float64); ok {
+				target = int64(qq)
+			} else if qq, ok := seg.Data["qq"].(string); ok {
+				if qq == "all" {
+					target = 0
+				} else if n, err := strconv.ParseInt(qq, 10, 64); err == nil {
+					target = n
+				}
+			}
+			if target != 0 || seg.Data["qq"] == "all" {
+				elements = append(elements, &message.AtElement{Target: target})
+			}
+		case "face":
+			var faceId int64
+			if id, ok := seg.Data["id"].(float64); ok {
+				faceId = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				faceId, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if faceId != 0 {
+				elements = append(elements, &message.FaceElement{Index: int32(faceId)})
+			}
+		case "image":
+			elements = append(elements, &message.GroupImageElement{
+				Url:  getString(seg.Data["url"]),
+				Name: getString(seg.Data["file"]),
+			})
+		case "record":
+			elements = append(elements, &message.VoiceElement{
+				Url:  getString(seg.Data["url"]),
+				Name: getString(seg.Data["file"]),
+			})
+		case "reply":
+			var replySeq int64
+			if id, ok := seg.Data["id"].(float64); ok {
+				replySeq = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				replySeq, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if replySeq != 0 {
+				elements = append(elements, &message.ReplyElement{ReplySeq: int32(replySeq)})
+			}
+		case "json":
+			if data, ok := seg.Data["data"].(string); ok {
+				elements = append(elements, &message.LightAppElement{Content: data})
+			}
+		case "forward":
+			if id, ok := seg.Data["id"].(string); ok {
+				elements = append(elements, &message.ForwardElement{ResId: id})
+			}
+		case "file":
+			elements = append(elements, &message.GroupFileElement{
+				Name: getString(seg.Data["name"]),
+				Id:   getString(seg.Data["id"]),
+				Url:  getString(seg.Data["url"]),
+			})
+		}
+	}
+
+	return elements
 }
 
 func ParseMessageSegments(msg interface{}) []MessageSegment {
@@ -319,7 +413,8 @@ type BotCaller interface {
 	GetUin() int64
 	DownloadFile(url, base64, name string, headers []string) (string, error)
 	GetFileUrl(groupCode int64, fileId string) string
-	GetMsg(msgId int32) (interface{}, error)
+	GetMsg(msgId int32) (*GetMsgResult, error)
+	GetMsgOrg(msgId int32) (interface{}, error)
 	RecallMsg(msgId int32) error
 	SendApi(api string, params map[string]interface{}) (interface{}, error)
 	GroupPoke(groupCode, target int64) error

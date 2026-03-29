@@ -906,13 +906,28 @@ func (m *Messenger) parseMessageSegments(segments []MessageSegment) []message.IM
 				elements = append(elements, &message.TextElement{Content: text})
 			}
 		case "at":
+			var target int64
 			if qq, ok := seg.Data["qq"].(float64); ok {
-				target := int64(qq)
+				target = int64(qq)
+			} else if qq, ok := seg.Data["qq"].(string); ok {
+				if qq == "all" {
+					target = 0
+				} else if n, err := strconv.ParseInt(qq, 10, 64); err == nil {
+					target = n
+				}
+			}
+			if target != 0 || seg.Data["qq"] == "all" {
 				elements = append(elements, &message.AtElement{Target: target})
 			}
 		case "face":
+			var faceId int64
 			if id, ok := seg.Data["id"].(float64); ok {
-				elements = append(elements, &message.FaceElement{Index: int32(id)})
+				faceId = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				faceId, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if faceId != 0 {
+				elements = append(elements, &message.FaceElement{Index: int32(faceId)})
 			}
 		case "image":
 			elements = append(elements, &message.GroupImageElement{
@@ -925,8 +940,14 @@ func (m *Messenger) parseMessageSegments(segments []MessageSegment) []message.IM
 				Name: getString(seg.Data["file"]),
 			})
 		case "reply":
+			var replySeq int64
 			if id, ok := seg.Data["id"].(float64); ok {
-				elements = append(elements, &message.ReplyElement{ReplySeq: int32(id)})
+				replySeq = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				replySeq, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if replySeq != 0 {
+				elements = append(elements, &message.ReplyElement{ReplySeq: int32(replySeq)})
 			}
 		case "json":
 			if data, ok := seg.Data["data"].(string); ok {
@@ -1056,11 +1077,18 @@ func (m *Messenger) KickGroupMember(groupCode int64, memberUin int64, rejectAddR
 	return m.Adapter.KickGroupMember(groupCode, memberUin, rejectAddRequest)
 }
 
-func (m *Messenger) GetMsg(messageID int32) (interface{}, error) {
+func (m *Messenger) GetMsg(messageID int32) (*GetMsgResult, error) {
 	if m.Adapter == nil {
 		return nil, fmt.Errorf("adapter not initialized")
 	}
 	return m.Adapter.GetMsg(messageID)
+}
+
+func (m *Messenger) GetMsgOrg(messageID int32) (interface{}, error) {
+	if m.Adapter == nil {
+		return nil, fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.GetMsgOrg(messageID)
 }
 
 func (m *Messenger) RecallMsg(messageID int32) error {

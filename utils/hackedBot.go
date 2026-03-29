@@ -104,11 +104,18 @@ func (h *HackedBot) GetFileUrl(groupCode int64, fileId string) string {
 	return h.Bot.GetFileUrl(groupCode, fileId)
 }
 
-func (h *HackedBot) GetMsg(msgId int32) (interface{}, error) {
+func (h *HackedBot) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
 	if !h.valid() {
 		return nil, fmt.Errorf("bot not valid")
 	}
 	return h.Bot.GetMsg(msgId)
+}
+
+func (h *HackedBot) GetMsgOrg(msgId int32) (interface{}, error) {
+	if !h.valid() {
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.GetMsgOrg(msgId)
 }
 
 func (h *HackedBot) RecallMsg(msgId int32) error {

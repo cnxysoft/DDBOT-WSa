@@ -197,9 +197,16 @@ func (bot *Bot) GetFileUrl(groupCode int64, fileId string) string {
 	return ""
 }
 
-func (bot *Bot) GetMsg(msgId int32) (interface{}, error) {
+func (bot *Bot) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
 	if bot.Messenger != nil {
 		return bot.Messenger.GetMsg(msgId)
+	}
+	return nil, fmt.Errorf("messenger not initialized")
+}
+
+func (bot *Bot) GetMsgOrg(msgId int32) (interface{}, error) {
+	if bot.Messenger != nil {
+		return bot.Messenger.GetMsgOrg(msgId)
 	}
 	return nil, fmt.Errorf("messenger not initialized")
 }

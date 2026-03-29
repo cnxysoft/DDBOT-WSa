@@ -534,7 +534,7 @@ func (a *SatoriAdapter) GetFileUrl(groupCode int64, fileId string) string {
 	return ""
 }
 
-func (a *SatoriAdapter) GetMsg(msgId int32) (interface{}, error) {
+func (a *SatoriAdapter) GetMsgOrg(msgId int32) (interface{}, error) {
 	a.mu.RLock()
 	channelID := a.messageChannelMap[msgId]
 	originalMsgID := a.msgIDMap[msgId]
@@ -549,6 +549,115 @@ func (a *SatoriAdapter) GetMsg(msgId int32) (interface{}, error) {
 		"channel_id": channelID,
 		"message_id": originalMsgID,
 	})
+}
+
+func (a *SatoriAdapter) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
+	a.mu.RLock()
+	channelID := a.messageChannelMap[msgId]
+	originalMsgID := a.msgIDMap[msgId]
+	a.mu.RUnlock()
+	if channelID == "" {
+		return nil, fmt.Errorf("channel id not found for message %d", msgId)
+	}
+	if originalMsgID == "" {
+		return nil, fmt.Errorf("original message id not found for message %d", msgId)
+	}
+	data, err := a.SendApi("message.get", map[string]interface{}{
+		"channel_id": channelID,
+		"message_id": originalMsgID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	msgMap, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid message data format")
+	}
+
+	result := &adapter.GetMsgResult{}
+
+	// 解析 message ID
+	if id, ok := msgMap["id"].(float64); ok {
+		result.MessageID = int64(id)
+	} else if idStr, ok := msgMap["id"].(string); ok {
+		if parsed, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+			result.MessageID = parsed
+		}
+	}
+
+	// 解析 content 作为 raw_message 和消息元素
+	if content, ok := msgMap["content"].(string); ok {
+		result.RawMessage = content
+		segments := parseSatoriContentWithMap(content, a.msgIDMap, nil, "")
+		result.Elements = adapter.ConvertToMessageElements(segments)
+	}
+
+	// 解析 created_at 作为时间戳
+	if ts, ok := msgMap["created_at"].(float64); ok {
+		result.Time = int64(ts) / 1000 // Satori返回的是毫秒
+	}
+
+	// 解析 channel 信息
+	if channel, ok := msgMap["channel"].(map[string]interface{}); ok {
+		// channel.id 就是 channelID，可以用作 group_id
+		if chID, ok := channel["id"].(string); ok {
+			if parsed, err := strconv.ParseInt(chID, 10, 64); err == nil {
+				result.GroupID = parsed
+			}
+		}
+	}
+
+	// 解析 guild 信息作为 group_id
+	if guild, ok := msgMap["guild"].(map[string]interface{}); ok {
+		if guildID, ok := guild["id"].(string); ok {
+			if parsed, err := strconv.ParseInt(guildID, 10, 64); err == nil {
+				result.GroupID = parsed
+			}
+		}
+	}
+
+	// 解析 user 信息作为 sender
+	if user, ok := msgMap["user"].(map[string]interface{}); ok {
+		sender := &adapter.SenderInfo{}
+		if userID, ok := user["id"].(string); ok {
+			if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
+				sender.UserID = parsed
+			}
+		}
+		if nickname, ok := user["name"].(string); ok {
+			sender.Nickname = nickname
+		}
+		result.Sender = sender
+	}
+
+	// 解析 member.nick 作为群成员昵称（会覆盖上面的 nickname）
+	if member, ok := msgMap["member"].(map[string]interface{}); ok {
+		if result.Sender == nil {
+			result.Sender = &adapter.SenderInfo{}
+		}
+		if nick, ok := member["nick"].(string); ok {
+			result.Sender.Nickname = nick
+		}
+		// member 也可能包含 user 信息
+		if memberUser, ok := member["user"].(map[string]interface{}); ok {
+			if result.Sender.UserID == 0 {
+				if userID, ok := memberUser["id"].(string); ok {
+					if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
+						result.Sender.UserID = parsed
+						result.UserID = parsed
+					}
+				}
+			}
+			if result.Sender.Nickname == "" {
+				if nickname, ok := memberUser["name"].(string); ok {
+					result.Sender.Nickname = nickname
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (a *SatoriAdapter) RecallMsg(msgId int32) error {
@@ -794,7 +903,7 @@ func (a *SatoriAdapter) dispatchMessage(event eventBody) {
 		}
 	}
 	a.mu.Unlock()
-	segments := parseSatoriContentWithMap(event.Message.Content, a.msgIDMap, internalMsgID)
+	segments := parseSatoriContentWithMap(event.Message.Content, a.msgIDMap, a.messageChannelMap, channelID)
 	if event.Guild != nil {
 		guildID := a.rememberID(event.Guild.ID)
 		userID := rememberEventUserID(a, event)
@@ -1130,7 +1239,7 @@ func parseSatoriContent(content string) []adapter.MessageSegment {
 	return segments
 }
 
-func parseSatoriContentWithMap(content string, msgIDMap map[int32]string, internalMsgID int32) []adapter.MessageSegment {
+func parseSatoriContentWithMap(content string, msgIDMap map[int32]string, messageChannelMap map[int32]string, channelID string) []adapter.MessageSegment {
 	if content == "" {
 		return nil
 	}
@@ -1152,6 +1261,10 @@ func parseSatoriContentWithMap(content string, msgIDMap map[int32]string, intern
 				if numId, err := strconv.ParseInt(id, 10, 64); err == nil {
 					localID := int32(numId)
 					msgIDMap[localID] = id
+					// 同时注册 channelID，这样 GetMsg 时能通过 quote ID 找到 channel
+					if messageChannelMap != nil && channelID != "" {
+						messageChannelMap[localID] = channelID
+					}
 					segments = append(segments, adapter.MessageSegment{Type: "reply", Data: map[string]interface{}{"id": float64(localID)}})
 				}
 			}
