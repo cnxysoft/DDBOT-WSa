@@ -537,28 +537,109 @@ func (a *SatoriAdapter) GetFileUrl(groupCode int64, fileId string) string {
 func (a *SatoriAdapter) GetMsg(msgId int32) (interface{}, error) {
 	a.mu.RLock()
 	channelID := a.messageChannelMap[msgId]
+	originalMsgID := a.msgIDMap[msgId]
 	a.mu.RUnlock()
 	if channelID == "" {
 		return nil, fmt.Errorf("channel id not found for message %d", msgId)
 	}
+	if originalMsgID == "" {
+		return nil, fmt.Errorf("original message id not found for message %d", msgId)
+	}
 	return a.SendApi("message.get", map[string]interface{}{
 		"channel_id": channelID,
-		"message_id": a.rawID(int64(msgId)),
+		"message_id": originalMsgID,
 	})
 }
 
 func (a *SatoriAdapter) RecallMsg(msgId int32) error {
 	a.mu.RLock()
 	channelID := a.messageChannelMap[msgId]
+	originalMsgID := a.msgIDMap[msgId]
 	a.mu.RUnlock()
 	if channelID == "" {
 		return fmt.Errorf("channel id not found for message %d", msgId)
 	}
+	if originalMsgID == "" {
+		return fmt.Errorf("original message id not found for message %d", msgId)
+	}
 	_, err := a.SendApi("message.delete", map[string]interface{}{
 		"channel_id": channelID,
-		"message_id": a.rawID(int64(msgId)),
+		"message_id": originalMsgID,
 	})
 	return err
+}
+
+func (a *SatoriAdapter) GroupPoke(groupCode, target int64) error {
+	return fmt.Errorf("satori adapter: GroupPoke not implemented")
+}
+
+func (a *SatoriAdapter) FriendPoke(target int64) error {
+	return fmt.Errorf("satori adapter: FriendPoke not implemented")
+}
+
+func (a *SatoriAdapter) SetGroupBan(groupCode, memberUin int64, duration int64) error {
+	guildID := a.rawID(groupCode)
+	userID := a.rawID(memberUin)
+	_, err := a.SendApi("guild.member.mute", map[string]interface{}{
+		"guild_id": guildID,
+		"user_id":  userID,
+		"duration": duration * 1000,
+	})
+	return err
+}
+
+func (a *SatoriAdapter) SetGroupWholeBan(groupCode int64, enable bool) error {
+	channelID := a.groupChannelMap[groupCode]
+	if channelID == "" {
+		return fmt.Errorf("channel id not found for group %d", groupCode)
+	}
+	duration := int64(0)
+	if enable {
+		duration = -1
+	}
+	_, err := a.SendApi("channel.mute", map[string]interface{}{
+		"channel_id": channelID,
+		"duration":   duration,
+	})
+	return err
+}
+
+func (a *SatoriAdapter) KickGroupMember(groupCode int64, memberUin int64, rejectAddRequest bool) error {
+	guildID := a.rawID(groupCode)
+	userID := a.rawID(memberUin)
+	_, err := a.SendApi("guild.member.kick", map[string]interface{}{
+		"guild_id":  guildID,
+		"user_id":   userID,
+		"permanent": rejectAddRequest,
+	})
+	return err
+}
+
+func (a *SatoriAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error {
+	return fmt.Errorf("satori adapter: SetGroupLeave not implemented")
+}
+
+func (a *SatoriAdapter) SetGroupAdmin(groupCode, memberUin int64, enable bool) error {
+	guildID := a.rawID(groupCode)
+	userID := a.rawID(memberUin)
+	roleID := "3"
+	if enable {
+		roleID = "2"
+	}
+	_, err := a.SendApi("guild.member.role.set", map[string]interface{}{
+		"guild_id": guildID,
+		"user_id":  userID,
+		"role_id":  roleID,
+	})
+	return err
+}
+
+func (a *SatoriAdapter) EditGroupCard(groupCode, memberUin int64, card string) error {
+	return fmt.Errorf("satori adapter: EditGroupCard not implemented")
+}
+
+func (a *SatoriAdapter) EditGroupTitle(groupCode, memberUin int64, title string) error {
+	return fmt.Errorf("satori adapter: EditGroupTitle not implemented")
 }
 
 func (a *SatoriAdapter) identify() error {

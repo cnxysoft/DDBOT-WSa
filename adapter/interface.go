@@ -224,6 +224,16 @@ type Adapter interface {
 	GetFileUrl(groupCode int64, fileId string) string
 	GetMsg(msgId int32) (interface{}, error)
 	RecallMsg(msgId int32) error
+
+	GroupPoke(groupCode, target int64) error
+	FriendPoke(target int64) error
+	SetGroupBan(groupCode, memberUin int64, duration int64) error
+	SetGroupWholeBan(groupCode int64, enable bool) error
+	KickGroupMember(groupCode int64, memberUin int64, rejectAddRequest bool) error
+	SetGroupLeave(groupCode int64, isDismiss bool) error
+	SetGroupAdmin(groupCode, memberUin int64, enable bool) error
+	EditGroupCard(groupCode, memberUin int64, card string) error
+	EditGroupTitle(groupCode, memberUin int64, title string) error
 }
 
 type EventCallback func(interface{})
@@ -312,4 +322,6 @@ type BotCaller interface {
 	GetMsg(msgId int32) (interface{}, error)
 	RecallMsg(msgId int32) error
 	SendApi(api string, params map[string]interface{}) (interface{}, error)
+	GroupPoke(groupCode, target int64) error
+	FriendPoke(target int64) error
 }

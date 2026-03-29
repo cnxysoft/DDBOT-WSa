@@ -972,18 +972,17 @@ func parseTextElement(contentMap map[string]interface{}) string {
 }
 
 func (m *Messenger) GroupPoke(groupCode, target int64) error {
-	_, err := m.SendApi("group_poke", map[string]interface{}{
-		"group_id": groupCode,
-		"user_id":  target,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.GroupPoke(groupCode, target)
 }
 
 func (m *Messenger) FriendPoke(target int64) error {
-	_, err := m.SendApi("friend_poke", map[string]interface{}{
-		"user_id": target,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.FriendPoke(target)
 }
 
 func (m *Messenger) SetGroupAddRequest(flag string, subType string, approve bool, reason string) error {
@@ -1004,78 +1003,67 @@ func (m *Messenger) SetFriendAddRequest(flag string, approve bool) error {
 	return err
 }
 
+func (m *Messenger) SetGroupAdmin(groupCode, memberUin int64, enable bool) error {
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SetGroupAdmin(groupCode, memberUin, enable)
+}
+
 func (m *Messenger) EditGroupCard(groupCode, memberUin int64, card string) error {
-	_, err := m.SendApi("set_group_card", map[string]interface{}{
-		"group_id": groupCode,
-		"user_id":  memberUin,
-		"card":     card,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.EditGroupCard(groupCode, memberUin, card)
 }
 
 func (m *Messenger) EditGroupTitle(groupCode, memberUin int64, title string) error {
-	_, err := m.SendApi("set_group_special_title", map[string]interface{}{
-		"group_id":      groupCode,
-		"user_id":       memberUin,
-		"special_title": title,
-	})
-	return err
-}
-
-func (m *Messenger) SetGroupAdmin(groupCode, memberUin int64, enable bool) error {
-	_, err := m.SendApi("set_group_admin", map[string]interface{}{
-		"group_id": groupCode,
-		"user_id":  memberUin,
-		"enable":   enable,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.EditGroupTitle(groupCode, memberUin, title)
 }
 
 func (m *Messenger) SetGroupWholeBan(groupCode int64, enable bool) error {
-	_, err := m.SendApi("set_group_whole_ban", map[string]interface{}{
-		"group_id": groupCode,
-		"enable":   enable,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SetGroupWholeBan(groupCode, enable)
 }
 
 func (m *Messenger) SetGroupBan(groupCode, memberUin int64, duration int64) error {
-	_, err := m.SendApi("set_group_ban", map[string]interface{}{
-		"group_id": groupCode,
-		"user_id":  memberUin,
-		"duration": duration,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SetGroupBan(groupCode, memberUin, duration)
 }
 
 func (m *Messenger) SetGroupLeave(groupCode int64, isDismiss bool) error {
-	_, err := m.SendApi("set_group_leave", map[string]interface{}{
-		"group_id":   groupCode,
-		"is_dismiss": isDismiss,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SetGroupLeave(groupCode, isDismiss)
 }
 
 func (m *Messenger) KickGroupMember(groupCode int64, memberUin int64, rejectAddRequest bool) error {
-	_, err := m.SendApi("set_group_kick", map[string]interface{}{
-		"group_id":           groupCode,
-		"user_id":            memberUin,
-		"reject_add_request": rejectAddRequest,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.KickGroupMember(groupCode, memberUin, rejectAddRequest)
 }
 
 func (m *Messenger) GetMsg(messageID int32) (interface{}, error) {
-	return m.SendApi("get_msg", map[string]interface{}{
-		"message_id": messageID,
-	})
+	if m.Adapter == nil {
+		return nil, fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.GetMsg(messageID)
 }
 
 func (m *Messenger) RecallMsg(messageID int32) error {
-	_, err := m.SendApi("delete_msg", map[string]interface{}{
-		"message_id": messageID,
-	})
-	return err
+	if m.Adapter == nil {
+		return fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.RecallMsg(messageID)
 }
 
 func (m *Messenger) DownloadFile(url, base64, name string, headers []string) (string, error) {

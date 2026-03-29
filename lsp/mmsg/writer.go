@@ -210,6 +210,7 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 	var result []*message.SendingMessage
 	m.Cut()
 	var sending = message.NewSendingMessage()
+	var hadCustomElement bool
 	for _, e := range m.elements {
 		if custom, ok := e.(CustomElement); ok {
 			if e.Type() == Cut {
@@ -218,6 +219,7 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 					sending = message.NewSendingMessage()
 				}
 			} else {
+				hadCustomElement = true
 				packed := custom.PackToElement(target)
 				if packed != nil {
 					sending.Append(packed)
@@ -227,7 +229,7 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 		}
 		sending.Append(e)
 	}
-	if len(sending.Elements) > 0 {
+	if len(sending.Elements) > 0 || hadCustomElement {
 		result = append(result, sending)
 	}
 	cleanText := func(m *message.SendingMessage) {

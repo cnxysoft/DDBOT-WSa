@@ -2,10 +2,10 @@ package mmsg
 
 import (
 	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
-// PokeElement 戳一戳
 type PokeElement struct {
 	Uin int64
 }
@@ -19,23 +19,33 @@ func (p *PokeElement) Type() message.ElementType {
 }
 
 func (p *PokeElement) PackToElement(target Target) message.IMessageElement {
+	botInstance := localutils.GetBotInstance()
+	if botInstance == nil {
+		return nil
+	}
+
+	bot, ok := botInstance.(adapter.BotCaller)
+	if !ok {
+		return nil
+	}
+
 	switch target.TargetType() {
 	case TargetGroup:
-		gi := localutils.GetBot().FindGroup(target.TargetCode())
-		if gi == nil {
+		groupCode := target.TargetCode()
+		if groupCode == 0 {
 			return nil
 		}
-		fi := gi.FindMember(p.Uin)
-		if fi == nil {
+		if err := bot.GroupPoke(groupCode, p.Uin); err != nil {
 			return nil
 		}
-		fi.Poke()
 	case TargetPrivate:
-		fi := localutils.GetBot().FindFriend(target.TargetCode())
-		if fi == nil {
+		userId := target.TargetCode()
+		if userId == 0 {
 			return nil
 		}
-		fi.Poke()
+		if err := bot.FriendPoke(userId); err != nil {
+			return nil
+		}
 	}
 	return nil
 }

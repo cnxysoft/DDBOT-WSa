@@ -572,6 +572,82 @@ func (a *OneBotAdapter) RecallMsg(msgId int32) error {
 	return err
 }
 
+func (a *OneBotAdapter) GroupPoke(groupCode, target int64) error {
+	_, err := a.SendApi("group_poke", map[string]interface{}{
+		"group_id": groupCode,
+		"user_id":  target,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) FriendPoke(target int64) error {
+	_, err := a.SendApi("friend_poke", map[string]interface{}{
+		"user_id": target,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetGroupBan(groupCode, memberUin int64, duration int64) error {
+	_, err := a.SendApi("set_group_ban", map[string]interface{}{
+		"group_id": groupCode,
+		"user_id":  memberUin,
+		"duration": duration,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetGroupWholeBan(groupCode int64, enable bool) error {
+	_, err := a.SendApi("set_group_whole_ban", map[string]interface{}{
+		"group_id": groupCode,
+		"enable":   enable,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) KickGroupMember(groupCode int64, memberUin int64, rejectAddRequest bool) error {
+	_, err := a.SendApi("set_group_kick", map[string]interface{}{
+		"group_id":           groupCode,
+		"user_id":            memberUin,
+		"reject_add_request": rejectAddRequest,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error {
+	_, err := a.SendApi("set_group_leave", map[string]interface{}{
+		"group_id":   groupCode,
+		"is_dismiss": isDismiss,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetGroupAdmin(groupCode, memberUin int64, enable bool) error {
+	_, err := a.SendApi("set_group_admin", map[string]interface{}{
+		"group_id": groupCode,
+		"user_id":  memberUin,
+		"enable":   enable,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) EditGroupCard(groupCode, memberUin int64, card string) error {
+	_, err := a.SendApi("set_group_card", map[string]interface{}{
+		"group_id": groupCode,
+		"user_id":  memberUin,
+		"card":     card,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) EditGroupTitle(groupCode, memberUin int64, title string) error {
+	_, err := a.SendApi("set_group_special_title", map[string]interface{}{
+		"group_id":      groupCode,
+		"user_id":       memberUin,
+		"special_title": title,
+	})
+	return err
+}
+
 func getString(v interface{}) string {
 	if v == nil {
 		return ""
