@@ -328,6 +328,14 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 	}
 
 	// 处理消息
+	// 使用心跳间隔作为超时，防止 readErrChan 永远收不到消息时死锁
+	heartbeatTimeout := c.heartbeatInterval
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = 30 * time.Second
+	}
+	checkTimer := time.NewTicker(heartbeatTimeout)
+	defer checkTimer.Stop()
+
 	for {
 		select {
 		case <-c.stopChan:
@@ -339,14 +347,39 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 				wsLogger.Errorf("Read error: %v", err)
 			}
 			return
+		case <-checkTimer.C:
+			// 定期检查连接是否已被新的连接替换，如果是则退出防止死锁
+			c.mu.RLock()
+			isCurrentConnection := c.conn == conn
+			c.mu.RUnlock()
+			if !isCurrentConnection {
+				wsLogger.Debugf("Connection replaced, handler exiting")
+				return
+			}
 		}
 	}
 }
 
 func (c *WSClient) readLoop(conn *websocket.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			wsLogger.Errorf("Read loop panic: %v", r)
+			// 使用 non-blocking send，避免死锁
+			select {
+			case c.readErrChan <- fmt.Errorf("read loop panic: %v", r):
+			default:
+			}
+		}
+	}()
+
 	conn.SetReadLimit(MaxMessageSize)
 	conn.SetReadDeadline(time.Now().Add(PongWait))
 	conn.SetPongHandler(func(string) error {
+		defer func() {
+			if r := recover(); r != nil {
+				wsLogger.Errorf("Pong handler panic: %v", r)
+			}
+		}()
 		conn.SetReadDeadline(time.Now().Add(PongWait))
 		return nil
 	})
@@ -354,9 +387,11 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			// 使用 non-blocking send，如果失败说明 handleConnection 可能已经退出
 			select {
 			case c.readErrChan <- err:
 			default:
+				wsLogger.Warnf("Read error (channel full): %v", err)
 			}
 			return
 		}
