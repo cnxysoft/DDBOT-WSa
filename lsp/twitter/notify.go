@@ -97,10 +97,14 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 
 	// 时间处理
 	var createdAt time.Time
-	if n.Tweet.RtType() == RETWEET {
-		createdAt = time.Now().UTC()
-	} else {
+	if TwitterMode == ModeAPI {
 		createdAt = n.Tweet.CreatedAt
+	} else {
+		if n.Tweet.IsRetweet {
+			createdAt = time.Now().UTC()
+		} else {
+			createdAt = n.Tweet.CreatedAt
+		}
 	}
 	dynamic.Date = CSTTime(createdAt).Format(time.DateTime)
 
@@ -251,10 +255,10 @@ func (n *ConcernNewsNotify) processMediaFile(media *Media) (string, error) {
 
 	// 根据媒体类型选择不同的处理方式
 	switch media.Type {
-	case "image":
+	case "image", "photo":
 		// 处理图片文件
 		localPath, err = n.processImageFile(mediaUrl)
-	case "gif":
+	case "gif", "animated_gif":
 		// 处理GIF文件
 		localPath, err = n.processGifFile(mediaUrl)
 	case "video", "video(m3u8)":
@@ -360,7 +364,11 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		}
 		var CreatedAt time.Time
 		if n.Tweet.RtType() == RETWEET {
-			CreatedAt = time.Now().UTC()
+			if TwitterMode == ModeAPI {
+				CreatedAt = n.Tweet.CreatedAt
+			} else {
+				CreatedAt = time.Now().UTC()
+			}
 			OrgUserName := "Unknown User"
 			if n.Tweet.OrgUser != nil {
 				OrgUserName = n.Tweet.OrgUser.Name
