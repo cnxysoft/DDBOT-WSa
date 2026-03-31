@@ -274,11 +274,6 @@ websocket:
   ws-server: 0.0.0.0:15630
   ws-reverse: ws://localhost:3001
 
-# 延迟加载好友、群组、群员信息
-reloadDelay:
-  enable: true # 是否启用数据延迟加载
-  time: 3s # 延迟时间，默认为 3 秒
-
 # 自定义数据库设置
 # 启用后才会生成自定义数据库文件，并持久化保存
 # 不启用时如果使用了相关函数，则会写入.lsp.db（慎重！）

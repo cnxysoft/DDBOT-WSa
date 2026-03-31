@@ -356,12 +356,6 @@ func Init() {
 		}
 	}()
 
-	// 刷新群和好友列表
-	go func() {
-		time.Sleep(time.Second * 5)
-		refreshList()
-	}()
-
 	logger.Infof("%s adapter initialized", adapterType)
 }
 

@@ -106,6 +106,12 @@ func (m *Messenger) registerEventHandlers() {
 			m.Uin = event.SelfID
 			m.Online.Store(true)
 			messengerLogger.Infof("Bot online: %d", m.Uin)
+			// Lifecycle事件触发时立即刷新好友、群组、群员信息
+			go func() {
+				if err := m.RefreshList(); err != nil {
+					messengerLogger.WithError(err).Error("refresh list failed")
+				}
+			}()
 		} else if event.MetaEventType == "heartbeat" {
 			if status, ok := event.Status["online"].(bool); ok {
 				wasOnline := m.Online.Load()
