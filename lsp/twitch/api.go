@@ -178,14 +178,27 @@ func apiOptions(token string) []requests.Option {
 	}
 }
 
-// buildLoginQuery 构建 user_login 查询参数
-func buildLoginQuery(logins []string) string {
+// buildUserLoginQuery 构建 user_login 查询参数（用于 streams API）
+func buildUserLoginQuery(logins []string) string {
 	var sb strings.Builder
 	for i, login := range logins {
 		if i > 0 {
 			sb.WriteByte('&')
 		}
 		sb.WriteString("user_login=")
+		sb.WriteString(url.QueryEscape(login))
+	}
+	return sb.String()
+}
+
+// buildLoginQuery 构建 login 查询参数（用于 users API）
+func buildLoginQuery(logins []string) string {
+	var sb strings.Builder
+	for i, login := range logins {
+		if i > 0 {
+			sb.WriteByte('&')
+		}
+		sb.WriteString("login=")
 		sb.WriteString(url.QueryEscape(login))
 	}
 	return sb.String()
@@ -229,7 +242,7 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 
 // getStreamsBatch 批量查询一批用户的直播状态
 func getStreamsBatch(token string, logins []string) ([]StreamData, error) {
-	query := buildLoginQuery(logins)
+	query := buildUserLoginQuery(logins)
 	urlStr := fmt.Sprintf("%s/streams?%s", apiBase, query)
 
 	var resp StreamsResponse
@@ -256,7 +269,7 @@ func GetStreamByLogin(login string) (*StreamData, error) {
 		return nil, err
 	}
 
-	query := buildLoginQuery([]string{login})
+	query := buildUserLoginQuery([]string{login})
 	urlStr := fmt.Sprintf("%s/streams?%s", apiBase, query)
 
 	var resp StreamsResponse

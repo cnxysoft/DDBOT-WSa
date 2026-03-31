@@ -37,12 +37,20 @@ func TestValidLoginRegex(t *testing.T) {
 	}
 }
 
-func TestBuildLoginQuery(t *testing.T) {
+func TestBuildUserLoginQuery(t *testing.T) {
 	logins := []string{"user1", "user2", "user3"}
-	query := buildLoginQuery(logins)
+	query := buildUserLoginQuery(logins)
 	assert.Contains(t, query, "user_login=user1")
 	assert.Contains(t, query, "user_login=user2")
 	assert.Contains(t, query, "user_login=user3")
+}
+
+func TestBuildLoginQuery(t *testing.T) {
+	logins := []string{"user1", "user2", "user3"}
+	query := buildLoginQuery(logins)
+	assert.Contains(t, query, "login=user1")
+	assert.Contains(t, query, "login=user2")
+	assert.Contains(t, query, "login=user3")
 }
 
 func TestBuildLoginQueryEmpty(t *testing.T) {
