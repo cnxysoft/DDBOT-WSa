@@ -1,12 +1,9 @@
 package twitch
 
 import (
-	"fmt"
-
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -68,6 +65,28 @@ func (e *LiveEvent) Logger() *logrus.Entry {
 	})
 }
 
+// GetMSG 生成 Twitch 通知消息
+func (e *LiveEvent) GetMSG() *mmsg.MSG {
+	var data = map[string]interface{}{
+		"login":            e.Login,
+		"name":             e.Name,
+		"living":           e.Living(),
+		"title":            e.Title,
+		"game_name":        e.GameName,
+		"viewer_count":     e.ViewerCount,
+		"thumbnail":        e.ThumbnailURL,
+		"profile_image":    e.ProfileImageURL,
+		"offline_image":    e.OfflineImageURL,
+		"title_changed":    e.titleChanged,
+		"live_changed":     e.liveStatusChanged,
+	}
+	msg, err := template.LoadAndExec("notify.group.twitch.live.tmpl", data)
+	if err != nil {
+		logger.Errorf("twitch: LiveEvent LoadAndExec error %v", err)
+	}
+	return msg
+}
+
 // LiveNotify 表示需要推送到群的直播通知
 type LiveNotify struct {
 	groupCode int64
@@ -80,34 +99,7 @@ func (n *LiveNotify) GetGroupCode() int64 {
 
 func (n *LiveNotify) ToMessage() *mmsg.MSG {
 	n.Logger().Trace("正在构建 Twitch 推送消息")
-
-	if !n.Live {
-		n.Logger().Trace("构建下播通知消息")
-		return mmsg.NewTextf("%v 的 Twitch 直播已结束。", n.Name)
-	}
-
-	msg := mmsg.NewTextf("%v 正在 Twitch 直播", n.Name)
-
-	if n.Title != "" {
-		msg.Textf("\n标题: %v", n.Title)
-	}
-
-	if n.GameName != "" {
-		msg.Textf("\n游戏: %v", n.GameName)
-	}
-
-	if n.ViewerCount > 0 {
-		msg.Textf("\n观看人数: %v", n.ViewerCount)
-	}
-
-	msg.Textf("\n直播间: %v", fmt.Sprintf("https://www.twitch.tv/%v", n.Login))
-
-	if n.ThumbnailURL != "" {
-		thumbURL := FormatThumbnailURL(n.ThumbnailURL, 1280, 720)
-		msg.ImageByUrl(thumbURL, "\n[直播封面获取失败]", requests.ProxyOption(proxy_pool.PreferOversea))
-	}
-
-	return msg
+	return n.LiveEvent.GetMSG()
 }
 
 func (n *LiveNotify) Logger() *logrus.Entry {
