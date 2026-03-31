@@ -617,8 +617,6 @@ func (m *Messenger) RefreshList() error {
 			continue
 		}
 		messengerLogger.Debugf("群[%d]加载成员[%d]个", group.Code, len(members))
-		// 避免触发LLOneBot/NapCat的API限速
-		time.Sleep(time.Millisecond * 300)
 	}
 
 	messengerLogger.Infof("已加载 %d 个群成员", len(m.GroupList))
