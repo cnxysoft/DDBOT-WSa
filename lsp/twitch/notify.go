@@ -1,7 +1,6 @@
 package twitch
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -10,10 +9,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
-)
-
-var (
-	ErrUserNotFound = errors.New("twitch 用户不存在")
 )
 
 // LiveEvent 表示一次直播状态变更事件
@@ -27,6 +22,10 @@ type LiveEvent struct {
 	ViewerCount     int
 	ThumbnailURL    string
 	ProfileImageURL string
+
+	// 内部状态
+	titleChanged      bool
+	liveStatusChanged bool
 }
 
 func (e *LiveEvent) Site() string {
@@ -39,6 +38,24 @@ func (e *LiveEvent) Type() concern_type.Type {
 
 func (e *LiveEvent) GetUid() interface{} {
 	return e.Id
+}
+
+// NotifyLiveExt 接口实现
+
+func (e *LiveEvent) IsLive() bool {
+	return true
+}
+
+func (e *LiveEvent) Living() bool {
+	return e.Live
+}
+
+func (e *LiveEvent) TitleChanged() bool {
+	return e.titleChanged
+}
+
+func (e *LiveEvent) LiveStatusChanged() bool {
+	return e.liveStatusChanged
 }
 
 func (e *LiveEvent) Logger() *logrus.Entry {

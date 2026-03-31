@@ -1,0 +1,10 @@
+{{ if .living -}}
+{{ .name }} 正在 Twitch 直播：
+标题: {{ .title }}
+游戏: {{ .game_name }}
+观看人数: {{ .viewer_count }}
+直播间: https://www.twitch.tv/{{ .login }}
+{{ pic .thumbnail "[封面获取失败]" }}
+{{- else -}}
+{{ .name }} 的 Twitch 直播已结束。
+{{- end -}}

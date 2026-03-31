@@ -9,7 +9,8 @@ type GroupConcernConfig struct {
 }
 
 func (g *GroupConcernConfig) ShouldSendHook(notify concern.Notify) *concern.HookResult {
-	return concern.HookResultPass
+	// 委托给基类处理 OfflineNotify 和 TitleChangeNotify 配置检查
+	return g.IConfig.ShouldSendHook(notify)
 }
 
 func NewGroupConcernConfig(g concern.IConfig) *GroupConcernConfig {
