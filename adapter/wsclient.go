@@ -21,7 +21,7 @@ const (
 	WriteWait      = 10 * time.Second
 	PongWait       = 60 * time.Second
 	PingPeriod     = 50 * time.Second
-	MaxMessageSize = 512 * 1024
+	MaxMessageSize = 150 * 1024 * 1024 // 150MB, 支持~109MB原始文件的base64编码
 )
 
 type WSResponse struct {
