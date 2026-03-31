@@ -1,6 +1,7 @@
 package twitch
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -22,7 +23,7 @@ const (
 	Live concern_type.Type = "live"
 
 	// freshCount阈值：开播通知在count<1时发送，下播通知在count<3时发送
-	freshCountLiveThreshold   = int32(1)
+	freshCountLiveThreshold    = int32(1)
 	freshCountOfflineThreshold = int32(3)
 )
 
@@ -43,8 +44,6 @@ func (sm *twitchStateManager) GetGroupConcernConfig(groupCode int64, id interfac
 // TwitchConcern 是 Twitch 直播监控的 Concern 实现
 type TwitchConcern struct {
 	*twitchStateManager
-	freshCount    atomic.Int32
-	freshStopChan chan struct{}
 }
 
 func (c *TwitchConcern) Site() string {
@@ -68,17 +67,6 @@ func (c *TwitchConcern) GetStateManager() concern.IStateManager {
 
 // Start 初始化 Twitch API 凭据并启动轮询
 func (c *TwitchConcern) Start() error {
-	c.freshStopChan = make(chan struct{})
-
-	var tickerStarted bool
-	defer func() {
-		if !tickerStarted {
-			close(c.freshStopChan)
-		}
-	}()
-
-	c.UseEmitQueue()
-
 	if config.GlobalConfig.Get("twitch") == nil {
 		logger.Errorf("找不到 Twitch 配置，Twitch 订阅将不会启动")
 		return fmt.Errorf("找不到 Twitch 配置，Twitch 订阅将不会启动。")
@@ -102,50 +90,160 @@ func (c *TwitchConcern) Start() error {
 		return fmt.Errorf("Twitch API 认证失败: %w", err)
 	}
 
-	// 初始化 freshCount
-	if !cfg.GetTwitchOnlyOnlineNotify() {
-		c.freshCount.Store(1000) // 非 onlyOnlineNotify 模式，设置极大值
-	}
-
-	// 启动 freshCount 递增 goroutine
-	go c.freshCountTicker()
-	tickerStarted = true
-
-	c.UseFreshFunc(c.twitchFresh())
+	c.UseFreshFunc(c.fresh())
 	c.UseNotifyGeneratorFunc(c.twitchNotifyGenerator())
 
 	logger.Info("Twitch 订阅模块启动成功")
 	return c.StateManager.Start()
 }
 
-// freshCountTicker 每隔 concern.emitInterval 递增 freshCount
-func (c *TwitchConcern) freshCountTicker() {
-	interval := cfg.GetEmitInterval()
-	if interval <= 0 {
-		interval = time.Second * 5
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+func (c *TwitchConcern) Stop() {
+	logger.Trace("正在停止 twitch concern")
+	c.StateManager.Stop()
+	logger.Trace("twitch concern 已停止")
+}
 
-	for {
-		select {
-		case <-ticker.C:
-			// 每隔一个 emitInterval 递增 freshCount
-			c.freshCount.Add(1)
-			logger.Tracef("freshCount incremented to %d", c.freshCount.Load())
-		case <-c.freshStopChan:
-			return
+// fresh 是自定义刷新函数，实现 Bilibili 风格的过滤机制
+func (c *TwitchConcern) fresh() concern.FreshFunc {
+	return func(ctx context.Context, eventChan chan<- concern.Event) {
+		t := time.NewTimer(time.Second * 3)
+		interval := cfg.GetEmitIntervalForSite(Site)
+		if interval == 0 {
+			interval = time.Second * 30
+		}
+		var freshCount atomic.Int32
+		if !cfg.GetTwitchOnlyOnlineNotify() {
+			freshCount.Store(1000)
+		}
+		for {
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				return
+			}
+			start := time.Now()
+
+			// 获取所有 Twitch 订阅
+			_, ids, types, err := c.StateManager.ListConcernState(
+				func(groupCode int64, id interface{}, p concern_type.Type) bool {
+					return p.ContainAny(Live)
+				})
+			if err != nil {
+				logger.Errorf("ListConcernState error %v", err)
+			}
+
+			// 提取所有 login
+			var logins []string
+			for _, id := range ids {
+				if login, ok := id.(string); ok {
+					logins = append(logins, login)
+				}
+			}
+
+			// 批量查询所有用户的直播状态
+			liveMap := make(map[string]*StreamData)
+			if len(logins) > 0 {
+				streams, err := GetStreamsByLogins(logins)
+				if err != nil {
+					logger.Errorf("GetStreamsByLogins error %v", err)
+				} else {
+					for i := range streams {
+						liveMap[streams[i].UserLogin] = streams[i]
+					}
+				}
+			}
+
+			// 过滤出有效的订阅类型
+			ids, _, err = c.GroupTypeById(ids, types)
+			if err != nil {
+				logger.Errorf("GroupTypeById error %v", err)
+			}
+
+			// 逐个检查状态变化
+			for _, id := range ids {
+				login := id.(string)
+				stream, isLive := liveMap[login]
+				last, hasLast := c.getLastStatus(login)
+
+				if !hasLast {
+					// 首次状态
+					title := ""
+					if isLive {
+						event := c.buildLiveEvent(login, stream, isLive, false, nil)
+						title = event.Title
+						if freshCount.Load() < freshCountLiveThreshold {
+							event.liveStatusChanged = true
+							eventChan <- event
+						}
+					}
+					c.updateLastStatus(login, &LastStatus{Live: isLive, Title: title})
+					continue
+				}
+
+				if last.Live == isLive {
+					// 状态无变化
+					if isLive && stream != nil {
+						// 检查标题变化
+						if last.Title != "" && last.Title != stream.Title {
+							event := c.buildLiveEvent(login, stream, isLive, hasLast, last)
+							event.titleChanged = true
+							event.liveStatusChanged = false
+							if freshCount.Load() < freshCountLiveThreshold {
+								eventChan <- event
+							}
+							c.updateLastStatus(login, &LastStatus{Live: isLive, Title: stream.Title})
+						}
+					}
+					continue
+				}
+
+				// 状态变化
+				event := c.buildLiveEvent(login, stream, isLive, hasLast, last)
+
+				if isLive {
+					// 开播
+					if freshCount.Load() < freshCountLiveThreshold {
+						event.liveStatusChanged = true
+						eventChan <- event
+					}
+				} else {
+					// 下播
+					if freshCount.Load() < freshCountOfflineThreshold {
+						event.liveStatusChanged = true
+						eventChan <- event
+					}
+				}
+				c.updateLastStatus(login, &LastStatus{Live: isLive, Title: event.Title})
+			}
+
+			freshCount.Add(1)
+			end := time.Now()
+			logger.WithField("cost", end.Sub(start)).Tracef("twitch fresh loop done")
+			t.Reset(interval)
 		}
 	}
 }
 
-func (c *TwitchConcern) Stop() {
-	logger.Trace("正在停止 twitch concern")
-	if c.freshStopChan != nil {
-		close(c.freshStopChan)
+// buildLiveEvent 构建直播事件
+func (c *TwitchConcern) buildLiveEvent(login string, stream *StreamData, isLive, hasLast bool, last *LastStatus) *LiveEvent {
+	event := &LiveEvent{
+		Id:    login,
+		Login: login,
+		Name:  c.getDisplayName(login),
+		Live:  isLive,
 	}
-	c.StateManager.Stop()
-	logger.Trace("twitch concern 已停止")
+
+	if isLive && stream != nil {
+		event.Title = stream.Title
+		event.GameName = stream.GameName
+		event.ViewerCount = stream.ViewerCount
+		event.ThumbnailURL = stream.ThumbnailURL
+		event.Name = stream.UserName
+		// 更新缓存
+		userCache.Store(login, stream.UserName)
+	}
+
+	return event
 }
 
 // Add 添加一个 Twitch 订阅
@@ -219,108 +317,6 @@ func (c *TwitchConcern) getDisplayName(login string) string {
 	logger.WithField("login", login).WithField("displayName", user.DisplayName).Trace("displayName 已从 API 获取并缓存")
 	userCache.Store(login, user.DisplayName)
 	return user.DisplayName
-}
-
-// twitchFresh 创建轮询刷新函数
-func (c *TwitchConcern) twitchFresh() concern.FreshFunc {
-	return c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
-		login := id.(string)
-
-		logger.Tracef("正在检测 Twitch 用户 (%v) 的直播状态..", login)
-
-		stream, err := GetStreamByLogin(login)
-		if err != nil {
-			logger.WithField("login", login).Errorf("GetStreamByLogin error %v", err)
-			return nil, err
-		}
-
-		isLive := stream != nil
-
-		// 获取上次状态
-		last, hasLast := c.getLastStatus(login)
-
-		// 构造事件
-		event := c.buildLiveEvent(login, stream, isLive, hasLast, last)
-
-		// 判断状态变化
-		if hasLast && last.Live == isLive {
-			// 状态无变化，不推送
-			logger.Tracef("%v 的直播状态与上次相同，已略过", login)
-			return nil, nil
-		}
-
-		if !hasLast && !isLive {
-			// 初始状态为离线，不推送
-			logger.Tracef("%v 的初始状态为下播，已略过。", login)
-			// 保存状态
-			c.updateLastStatus(login, &LastStatus{Live: false, Title: ""})
-			return nil, nil
-		}
-
-		// 更新状态
-		c.updateLastStatus(login, &LastStatus{Live: isLive, Title: event.Title})
-
-		currentCount := c.freshCount.Load()
-
-		// 根据 freshCount 决定是否发送
-		if !c.shouldNotify(event, currentCount) {
-			logger.Tracef("%v 的通知因 freshCount(%d) 被过滤", login, currentCount)
-			return nil, nil
-		}
-
-		if isLive {
-			logger.WithField("login", login).WithField("title", event.Title).Debug("检测到 Twitch 开播")
-		} else {
-			logger.WithField("login", login).Debug("检测到 Twitch 下播")
-		}
-
-		return []concern.Event{event}, nil
-	})
-}
-
-// shouldNotify 根据 freshCount 决定是否发送通知
-// 开播通知在 count < 1 时发送，下播通知在 count < 3 时发送
-func (c *TwitchConcern) shouldNotify(event *LiveEvent, count int32) bool {
-	if event.Live {
-		// 开播通知
-		return count < freshCountLiveThreshold
-	}
-	// 下播通知
-	return count < freshCountOfflineThreshold
-}
-
-// buildLiveEvent 构建直播事件
-func (c *TwitchConcern) buildLiveEvent(login string, stream *StreamData, isLive, hasLast bool, last *LastStatus) *LiveEvent {
-	event := &LiveEvent{
-		Id:    login,
-		Login: login,
-		Name:  c.getDisplayName(login),
-		Live:  isLive,
-	}
-
-	if isLive {
-		event.Title = stream.Title
-		event.GameName = stream.GameName
-		event.ViewerCount = stream.ViewerCount
-		event.ThumbnailURL = stream.ThumbnailURL
-		event.Name = stream.UserName
-		// 更新缓存
-		userCache.Store(login, stream.UserName)
-
-		// 检测标题变化
-		if hasLast && last.Title != "" && last.Title != event.Title {
-			event.titleChanged = true
-		}
-	}
-
-	// 判断状态变化
-	if !hasLast {
-		event.liveStatusChanged = true // 首次发现
-	} else if last.Live != isLive {
-		event.liveStatusChanged = true // 状态变化
-	}
-
-	return event
 }
 
 // twitchNotifyGenerator 创建通知生成函数
