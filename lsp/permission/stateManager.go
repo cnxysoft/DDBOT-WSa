@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
@@ -215,7 +214,7 @@ func (c *StateManager) CheckGroupAdministrator(groupCode int64, caller int64) bo
 		log.Errorf("nil member info")
 		return false
 	}
-	return groupMemberInfo.Permission == client.Administrator || groupMemberInfo.Permission == client.Owner
+	return groupMemberInfo.IsAdminOrOwner()
 	//return true
 }
 
@@ -396,29 +395,29 @@ func (c *StateManager) RemoveAllByGroupCode(groupCode int64) ([]string, error) {
 }
 
 func (c *StateManager) FreshIndex() {
-    // Build indices for the namespace this StateManager is configured with
-    for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
-        c.CreatePatternIndex(pattern, nil)
-    }
-    for _, group := range localutils.GetBot().GetGroupList() {
-        c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
-        c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
-    }
+	// Build indices for the namespace this StateManager is configured with
+	for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
+		c.CreatePatternIndex(pattern, nil)
+	}
+	for _, group := range localutils.GetBot().GetGroupList() {
+		c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
+		c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
+	}
 }
 
 func NewStateManager() *StateManager {
-    sm := &StateManager{
-        KeySet: NewKeySet(),
-    }
-    sm.FreshIndex()
-    return sm
+	sm := &StateManager{
+		KeySet: NewKeySet(),
+	}
+	sm.FreshIndex()
+	return sm
 }
 
 // NewTgStateManager returns a StateManager whose keys are in the TG namespace
 func NewTgStateManager() *StateManager {
-    sm := &StateManager{
-        KeySet: NewKeySet().WithNamespace("tg"),
-    }
-    sm.FreshIndex()
-    return sm
+	sm := &StateManager{
+		KeySet: NewKeySet().WithNamespace("tg"),
+	}
+	sm.FreshIndex()
+	return sm
 }

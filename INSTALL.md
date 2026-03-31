@@ -291,11 +291,6 @@ websocket:
   ws-server: 0.0.0.0:15630
   ws-reverse: ws://localhost:3001
 
-# 延迟加载好友、群组、群员信息
-reloadDelay:
-  enable: true # 是否启用数据延迟加载
-  time: 3s # 延迟时间，默认为3秒
-
 ```
 
 </details>

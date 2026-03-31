@@ -14,6 +14,7 @@ import (
 
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 
@@ -110,6 +111,7 @@ func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
 
 type twitterConcern struct {
 	*StateManager
+	homeTimelineCursor string // 保存 HomeTimeline 翻页 cursor
 }
 
 func (t *twitterConcern) Site() string {
@@ -217,6 +219,63 @@ func (t *twitterConcern) AddUserInfo(info *UserInfo) error {
 func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
 	userId := id.(string)
 	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
+
+	if IsTwitterEnabled() {
+		info := &UserInfo{
+			Id:   userId,
+			Name: userId,
+		}
+
+		// 如果是订阅自己（Cookie账号），跳过关注检查，直接订阅
+		if twitterAPI != nil && twitterAPI.GetScreenName() == userId {
+			log.Infof("Subscribing to self, skip follow check")
+			_ = t.AddUserInfo(info)
+			_, err := t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
+			if err != nil {
+				return nil, err
+			}
+			return info, nil
+		}
+
+		// 获取用户信息（包含是否已关注）
+		var userProfile *UserProfileInfo
+		var err error
+		if twitterAPI != nil {
+			userProfile, err = twitterAPI.GetUserByScreenName(context.Background(), userId)
+			if err != nil {
+				log.Errorf("GetUserByScreenName %s failed: %v", userId, err)
+				return nil, fmt.Errorf("获取用户信息失败: %v", err)
+			}
+		}
+		// 如果获取到用户信息，使用真实昵称
+		if userProfile != nil && userProfile.Name != "" {
+			info.Name = userProfile.Name
+		}
+		_ = t.AddUserInfo(info)
+
+		// 检查是否已经关注过（首次订阅需要关注）
+		if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
+			// 首次订阅，自动关注
+			if twitterAPI != nil {
+				// 如果已经关注，则跳过
+				if userProfile != nil && userProfile.IsFollowing {
+					log.Infof("User %s already following, skip", userId)
+				} else {
+					if err := twitterAPI.Follow(context.Background(), userId); err != nil {
+						log.Errorf("Follow user %s failed: %v", userId, err)
+						return nil, fmt.Errorf("关注用户 %s 失败: %v", userId, err)
+					}
+					log.Infof("Follow user %s success", userId)
+				}
+			}
+		}
+		_, err = t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
+		if err != nil {
+			return nil, err
+		}
+		return info, nil
+	}
+
 	info, err := t.FindOrLoadUserInfo(userId)
 	if err != nil {
 		log.Errorf("FindOrLoadUserInfo error %v", err)
@@ -232,7 +291,6 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 			log.Errorf("GetTweets not ok")
 			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户微博")
 		}
-		// 第一次就手动添加一下已有推文，以此来过滤旧的微博
 		for _, tweet := range tweets {
 			_ = t.filterTweet(tweet)
 		}
@@ -250,13 +308,18 @@ func (t *twitterConcern) removeUserInfo(id string) error {
 }
 
 func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
+	userId := id.(string)
 	identity, _ := t.Get(id)
-	_, err := t.GetStateManager().RemoveGroupConcern(groupCode, id.(string), ctype)
+
+	var allCtype concern_type.Type
+	_, err := t.GetStateManager().RemoveGroupConcern(groupCode, userId, ctype)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = t.removeUserInfo(id.(string)); err != nil {
+	allCtype, _ = t.GetStateManager().GetConcern(userId)
+
+	if err = t.removeUserInfo(userId); err != nil {
 		if err != errors.New("not found") {
 			logger.WithError(err).Errorf("remove UserInfo error")
 		} else {
@@ -264,10 +327,26 @@ func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{
 		}
 	}
 
+	// 如果开启unsub且该用户已无任何订阅，则取消关注
+	if cfg.GetTwitterUnsub() && allCtype.Empty() {
+		go t.unsubUser(userId)
+	}
+
 	if identity == nil {
 		identity = concern.NewIdentity(id, "unknown")
 	}
 	return identity, err
+}
+
+func (t *twitterConcern) unsubUser(userId string) {
+	if twitterAPI == nil {
+		return
+	}
+	if err := twitterAPI.Unfollow(context.Background(), userId); err != nil {
+		logger.Errorf("取消关注失败 - %v", err)
+	} else {
+		logger.WithField("userId", userId).Info("取消关注成功")
+	}
 }
 
 func (t *twitterConcern) Get(id interface{}) (concern.IdentityInfo, error) {
@@ -306,24 +385,92 @@ func getRefreshInterval() time.Duration {
 }
 
 func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- concern.Event) {
-	// 获取最新用户列表
+	if IsTwitterEnabled() {
+		t.processHomeTimeline(ctx, eventChan)
+		return
+	}
+
 	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
 	for _, userId := range ids {
 		if ctx.Err() != nil {
 			return
 		}
-		// 执行处理逻辑（与之前相同）
 		events, err := t.freshNewsInfo(Tweets, userId)
 		if err != nil {
-			//logger.WithError(err).WithField("userId", userId).Error("刷新用户推文失败")
 			continue
 		}
 		for _, e := range events {
 			eventChan <- e
 		}
-		// 添加随机间隔（避免请求对齐）
 		time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
 	}
+}
+
+func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
+
+	subscribedUsers := make(map[string]bool)
+	for _, userId := range ids {
+		subscribedUsers[userId.(string)] = true
+	}
+
+	if len(subscribedUsers) == 0 {
+		return
+	}
+
+	// 获取Cookie账号的screenName
+	cookieScreenName := twitterAPI.GetScreenName()
+
+	result, err := twitterAPI.HomeTimeline(ctx, t.homeTimelineCursor)
+	if err != nil {
+		logger.Errorf("HomeTimeline fetch error: %v", err)
+		t.homeTimelineCursor = "" // 清除无效 cursor
+		return
+	}
+
+	for _, tweet := range result.Tweets {
+		var screenName string
+		var orgUser *UserProfile
+
+		if tweet.IsRetweet && tweet.RetweetUser != nil && tweet.RetweetUser.ScreenName == cookieScreenName {
+			// 转发：如果是Cookie账号发的，转发者就是screenName
+			screenName = cookieScreenName
+			orgUser = tweet.RetweetUser
+		} else if tweet.QuoteTweet != nil && tweet.OrgUser != nil {
+			// 引用推文：用 QuoteTweet 的 OrgUser
+			screenName = tweet.OrgUser.ScreenName
+			orgUser = tweet.OrgUser
+		} else if tweet.OrgUser != nil {
+			// 普通推文
+			screenName = tweet.OrgUser.ScreenName
+			orgUser = tweet.OrgUser
+		}
+
+		if orgUser == nil {
+			continue
+		}
+
+		if !subscribedUsers[screenName] {
+			continue
+		}
+
+		userInfo, err := t.FindOrLoadUserInfo(screenName)
+		if err != nil {
+			logger.WithField("screenName", screenName).Errorf("FindOrLoadUserInfo error: %v", err)
+			continue
+		}
+
+		if pass := t.filterTweet(tweet); pass {
+			event := &NewsInfo{
+				UserInfo: userInfo,
+				Tweet:    tweet,
+			}
+			eventChan <- event
+		}
+	}
+
+	// 保存 cursor，下次 fresh 继续翻页
+	t.homeTimelineCursor = result.Cursor
 }
 
 func (t *twitterConcern) fresh() concern.FreshFunc {

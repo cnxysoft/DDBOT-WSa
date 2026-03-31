@@ -159,6 +159,10 @@ func GetBilibiliUnsub() bool {
 	return config.GlobalConfig.GetBool("bilibili.unsub")
 }
 
+func GetTwitterUnsub() bool {
+	return config.GlobalConfig.GetBool("twitter.unsub")
+}
+
 func GetNotifyParallel() int {
 	var parallel = config.GlobalConfig.GetInt("notify.parallel")
 	if parallel <= 0 {

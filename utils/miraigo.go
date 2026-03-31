@@ -1,9 +1,9 @@
 package utils
 
 import (
+	"encoding/base64"
 	"errors"
 	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/samber/lo"
 )
 
@@ -31,11 +31,11 @@ func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourceGroup, PrimaryID: groupCode}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	// 适配器模式：使用 base64 编码发送图片
+	base64Data := base64.StdEncoding.EncodeToString(img)
+	return &message.ImageElement{
+		File: "base64://" + base64Data,
+	}, nil
 }
 
 func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageElement, error) {
@@ -49,11 +49,10 @@ func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageEleme
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourcePrivate, PrimaryID: uin}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	base64Data := base64.StdEncoding.EncodeToString(img)
+	return &message.ImageElement{
+		File: "base64://" + base64Data,
+	}, nil
 }
 
 const (

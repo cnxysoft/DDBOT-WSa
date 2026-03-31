@@ -65,6 +65,27 @@ type (
 		TargetType int
 		Times      int
 	}
+
+	GroupMsgEmojiLikeEvent struct {
+		GroupCode  int64
+		UserId     int64
+		MessageId  int64
+		EmojiId    string
+		EmojiCount int
+		IsAdd      bool
+	}
+
+	ProfileLikeEvent struct {
+		OperatorId   int64
+		OperatorNick string
+		Times        int
+	}
+
+	PokeRecallEvent struct {
+		GroupCode int64
+		Sender    int64
+		Receiver  int64
+	}
 )
 
 // grayTipProcessor 提取出来专门用于处理群内 notify tips

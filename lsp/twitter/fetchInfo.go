@@ -39,19 +39,20 @@ type UserProfile struct {
 }
 
 type Tweet struct {
-	ID         string       `json:"id"`
-	Content    string       `json:"content"`
-	CreatedAt  time.Time    `json:"created_at"`
-	Likes      int64        `json:"likes"`
-	Retweets   int64        `json:"retweets"`
-	Pinned     bool         `json:"pinned"`
-	Replies    int64        `json:"replies"`
-	Media      []*Media     `json:"media"`
-	IsRetweet  bool         `json:"is_retweet"`
-	OrgUser    *UserProfile `json:"org_user"`
-	Url        string       `json:"url"`
-	MirrorHost string       `json:"mirror_url"`
-	QuoteTweet *Tweet       `json:"quote_tweet"`
+	ID          string       `json:"id"`
+	Content     string       `json:"content"`
+	CreatedAt   time.Time    `json:"created_at"`
+	Likes       int64        `json:"likes"`
+	Retweets    int64        `json:"retweets"`
+	Pinned      bool         `json:"pinned"`
+	Replies     int64        `json:"replies"`
+	Media       []*Media     `json:"media"`
+	IsRetweet   bool         `json:"is_retweet"`
+	OrgUser     *UserProfile `json:"org_user"`     // 原作者（转发时）或本人（原创时）
+	RetweetUser *UserProfile `json:"retweet_user"` // 转发者（仅转发时有值）
+	Url         string       `json:"url"`
+	MirrorHost  string       `json:"mirror_url"`
+	QuoteTweet  *Tweet       `json:"quote_tweet"`
 }
 
 type Media struct {

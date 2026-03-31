@@ -4,6 +4,7 @@ import (
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
@@ -148,7 +149,7 @@ func logGroupMuteEvent(event *client.GroupMuteEvent) {
 		}
 	} else {
 		gi := bot.Instance.FindGroup(event.GroupCode)
-		var mi *client.GroupMemberInfo
+		var mi *adapter.GroupMemberInfo
 		if gi != nil {
 			mi = gi.FindMember(event.TargetUin)
 			if mi != nil {

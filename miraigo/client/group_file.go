@@ -26,22 +26,22 @@ type (
 	}
 
 	GroupFile struct {
-		GroupCode     int64  `json:"group_id"`
-		FileId        string `json:"file_id"`
-		FileName      string `json:"file_name"`
-		BusId         int32  `json:"busid"`
-		FileSize      int64  `json:"file_size"`
-		UploadTime    int64  `json:"upload_time"`
-		DeadTime      int64  `json:"dead_time"`
-		ModifyTime    int64  `json:"modify_time"`
-		DownloadTimes int64  `json:"download_times"`
-		Uploader      int64  `json:"uploader"`
-		UploaderName  string `json:"uploader_name"`
-		AltFildId     string `json:"id"`
-		AltFileSize   int64  `json:"size"`
-		AltFileName   string `json:"name"`
-		FileUrl       string `json:"file_url"`
-		AltFileUrl    string `json:"url"`
+		GroupCode     int64  `json:"group_id,omitempty"`
+		FileId        string `json:"file_id,omitempty"`
+		FileName      string `json:"file_name,omitempty"`
+		BusId         int32  `json:"busid,omitempty"`
+		FileSize      int64  `json:"file_size,omitempty"`
+		UploadTime    int64  `json:"upload_time,omitempty"`
+		DeadTime      int64  `json:"dead_time,omitempty"`
+		ModifyTime    int64  `json:"modify_time,omitempty"`
+		DownloadTimes int64  `json:"download_times,omitempty"`
+		Uploader      int64  `json:"uploader,omitempty"`
+		UploaderName  string `json:"uploader_name,omitempty"`
+		AltFildId     string `json:"id,omitempty"`
+		AltFileSize   int64  `json:"size,omitempty"`
+		AltFileName   string `json:"name,omitempty"`
+		FileUrl       string `json:"file_url,omitempty"`
+		AltFileUrl    string `json:"url,omitempty"`
 	}
 
 	GroupFolder struct {

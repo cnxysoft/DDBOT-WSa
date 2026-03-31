@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/interfaces"
@@ -58,10 +58,10 @@ func memberInfo(groupCode int64, uin int64) map[string]interface{} {
 	result["uin"] = uin
 	result["name"] = fi.DisplayName()
 	switch fi.Permission {
-	case client.Owner:
+	case adapter.Owner:
 		// 群主
 		result["permission"] = 10
-	case client.Administrator:
+	case adapter.Administrator:
 		// 管理员
 		result["permission"] = 5
 	default:
@@ -963,13 +963,13 @@ func remoteDownloadFile(urlOrBase64 string, opts ...interface{}) string {
 		Base64 = urlOrBase64
 	}
 
-	bot := localutils.GetBot()
-	if bot == nil {
+	botInstance := localutils.GetBot()
+	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return ""
 	}
 
-	ret, err := (*bot.Bot).QQClient.DownloadFile(Url, Base64, name, headers)
+	ret, err := botInstance.DownloadFile(Url, Base64, name, headers)
 	if err != nil {
 		logger.Errorf("文件下载失败: %v", err)
 	}
@@ -977,21 +977,21 @@ func remoteDownloadFile(urlOrBase64 string, opts ...interface{}) string {
 }
 
 func getFileUrl(groupCode int64, fileId string) string {
-	bot := localutils.GetBot()
-	if bot == nil {
+	botInstance := localutils.GetBot()
+	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return ""
 	}
-	return (*bot.Bot).QQClient.GetFileUrl(groupCode, fileId)
+	return botInstance.GetFileUrl(groupCode, fileId)
 }
 
 func getMsg(msgId int32) interface{} {
-	bot := localutils.GetBot()
-	if bot == nil {
+	botInstance := localutils.GetBot()
+	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return nil
 	}
-	ret, err := (*bot.Bot).QQClient.GetMsg(msgId)
+	ret, err := botInstance.GetMsg(msgId)
 	if err != nil {
 		logger.Errorf("获取消息失败: %v", err)
 		return nil
@@ -1000,12 +1000,12 @@ func getMsg(msgId int32) interface{} {
 }
 
 func sendApi(api string, params map[string]interface{}, expTime ...float64) interface{} {
-	bot := localutils.GetBot()
-	if bot == nil {
+	botInstance := localutils.GetBot()
+	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return nil
 	}
-	ret, err := (*bot.Bot).QQClient.SendApi(api, params, expTime...)
+	ret, err := botInstance.SendApi(api, params)
 	if err != nil {
 		logger.Errorf("調用API失败: %v", err)
 		return nil
@@ -1040,8 +1040,8 @@ func reCall(msg interface{}) bool {
 		logger.Warn("未提供需要撤回的消息")
 		return false
 	}
-	bot := localutils.GetBot()
-	if bot == nil {
+	botInstance := localutils.GetBot()
+	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return false
 	}
@@ -1056,7 +1056,7 @@ func reCall(msg interface{}) bool {
 	default:
 		panic(fmt.Sprintf("需要撤回的消息类型无法解析: %v", msg))
 	}
-	err := (*bot.Bot).QQClient.RecallMsg(msgId)
+	err := botInstance.RecallMsg(msgId)
 	if err != nil {
 		logger.Errorf("撤回消息失败: %v", err)
 		return false

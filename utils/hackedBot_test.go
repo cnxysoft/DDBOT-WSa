@@ -1,10 +1,11 @@
 package utils
 
 import (
-	"github.com/Mrs4s/MiraiGo/client"
+	"testing"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestGetBot(t *testing.T) {
@@ -24,18 +25,14 @@ func TestGetBot(t *testing.T) {
 	bot.TESTAddGroup(123)
 	bot.TESTAddGroup(test.G2)
 	bot.TESTAddGroup(test.G1)
-	bot.TESTAddMember(test.G1, test.UID1, client.Administrator)
-	bot.TESTAddMember(test.G1, test.UID2, client.Administrator)
-	bot.TESTAddMember(test.G1, test.UID1, client.Administrator)
-	bot.TESTAddMember(test.G2, test.UID2, client.Administrator)
+	bot.TESTAddMember(test.G1, test.UID1, adapter.Member)
+	bot.TESTAddMember(test.G1, test.UID2, adapter.Member)
+	bot.TESTAddMember(test.G1, test.UID1, adapter.Member)
+	bot.TESTAddMember(test.G2, test.UID2, adapter.Member)
 	assert.Len(t, bot.GetGroupList(), 3)
 	bot.TESTReset()
 	assert.Empty(t, bot.GetGroupList())
 
 	test.InitMirai()
 	defer test.CloseMirai()
-
-	assert.NotNil(t, hackedBot.Bot)
-	(*hackedBot.Bot).Online.Store(true)
-	assert.True(t, hackedBot.IsOnline())
 }

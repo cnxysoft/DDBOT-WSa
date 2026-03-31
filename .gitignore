@@ -10,3 +10,21 @@ DDBOT
 /debug
 ddbot.exe
 /ffmpeg/ffmpeg-static/
+
+# Build output
+/DDBOT-cgo
+
+# Test binaries
+*.test
+*.test.exe
+
+# Node packages
+node_modules/
+package*.json
+
+# Agent framework
+.sisyphus/
+
+# AI Agent documentation (local)
+/AGENTS.md
+/CLAUDE.md
