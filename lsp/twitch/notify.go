@@ -22,6 +22,7 @@ type LiveEvent struct {
 	ViewerCount     int
 	ThumbnailURL    string
 	ProfileImageURL string
+	OfflineImageURL string
 
 	// 内部状态
 	titleChanged      bool

@@ -32,6 +32,11 @@ var online bool
 // userCache 缓存用户名映射 login -> displayName
 var userCache = sync.Map{}
 
+// UserInfoKey 返回用户信息的存储 key
+func UserInfoKey(login string) string {
+	return fmt.Sprintf("twitch:userinfo:%s", login)
+}
+
 // twitchStateManager 包装 concern.StateManager，覆盖 GetGroupConcernConfig
 type twitchStateManager struct {
 	*concern.StateManager
@@ -39,6 +44,24 @@ type twitchStateManager struct {
 
 func (sm *twitchStateManager) GetGroupConcernConfig(groupCode int64, id interface{}) concern.IConfig {
 	return NewGroupConcernConfig(sm.StateManager.GetGroupConcernConfig(groupCode, id))
+}
+
+// AddUserInfo 存储用户信息到 buntdb
+func (sm *twitchStateManager) AddUserInfo(user *UserData) error {
+	if user == nil {
+		return fmt.Errorf("nil UserInfo")
+	}
+	return sm.SetJson(UserInfoKey(user.Login), user)
+}
+
+// GetUserInfo 从 buntdb 获取用户信息
+func (sm *twitchStateManager) GetUserInfo(login string) (*UserData, error) {
+	var user UserData
+	err := sm.GetJson(UserInfoKey(login), &user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
 // TwitchConcern 是 Twitch 直播监控的 Concern 实现
@@ -233,6 +256,12 @@ func (c *TwitchConcern) buildLiveEvent(login string, stream *StreamData, isLive,
 		Live:  isLive,
 	}
 
+	// 获取用户信息（包含头像）
+	if user, err := c.GetUserInfo(login); err == nil {
+		event.ProfileImageURL = user.ProfileImageURL
+		event.OfflineImageURL = user.OfflineImageURL
+	}
+
 	if isLive && stream != nil {
 		event.Title = stream.Title
 		event.GameName = stream.GameName
@@ -263,14 +292,53 @@ func (c *TwitchConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, c
 	// 缓存用户名
 	userCache.Store(login, user.DisplayName)
 
+	// 存储用户信息到 buntdb
+	if err := c.AddUserInfo(user); err != nil {
+		log.Warnf("存储用户信息失败: %v", err)
+	}
+
 	_, err = c.GetStateManager().AddGroupConcern(groupCode, login, ctype)
 	if err != nil {
 		log.Errorf("AddGroupConcern error %v", err)
 		return nil, err
 	}
 
+	// 如果用户正在直播，发送通知
+	if ctype.ContainAny(Live) {
+		stream, err := GetStreamByLogin(login)
+		if err == nil && stream != nil {
+			event := c.buildLiveEvent(login, stream, true, false, nil)
+			event.liveStatusChanged = true
+			if ctx.GetTarget().TargetType().IsGroup() {
+				defer c.GroupWatchNotify(groupCode, login)
+			}
+			if ctx.GetTarget().TargetType().IsPrivate() {
+				defer func() {
+					ctx.Send(mmsg.NewText("检测到该用户正在直播，但由于您目前处于私聊模式，" +
+						"因此不会在群内推送本次直播，将在该用户下次直播时推送"))
+				}()
+			}
+			_ = event // event 会在 GroupWatchNotify 中使用
+		}
+	}
+
 	log.WithField("displayName", user.DisplayName).Info("Twitch 订阅添加成功")
 	return c.Get(id)
+}
+
+// GroupWatchNotify 向指定群发送直播通知
+func (c *TwitchConcern) GroupWatchNotify(groupCode int64, login string) {
+	stream, err := GetStreamByLogin(login)
+	if err != nil || stream == nil {
+		return
+	}
+	event := c.buildLiveEvent(login, stream, true, false, nil)
+	event.liveStatusChanged = true
+	notify := &LiveNotify{
+		groupCode: groupCode,
+		LiveEvent: *event,
+	}
+	concern.GetNotifyChan() <- notify
 }
 
 // Remove 删除一个 Twitch 订阅
@@ -299,7 +367,7 @@ func (c *TwitchConcern) Get(id interface{}) (concern.IdentityInfo, error) {
 	return concern.NewIdentity(id, name), nil
 }
 
-// getDisplayName 从缓存或 API 获取用户显示名
+// getDisplayName 从缓存或 API 获取用户显示名，同时刷新用户信息
 func (c *TwitchConcern) getDisplayName(login string) string {
 	if data, ok := userCache.Load(login); ok {
 		if name, ok := data.(string); ok {
@@ -316,6 +384,12 @@ func (c *TwitchConcern) getDisplayName(login string) string {
 
 	logger.WithField("login", login).WithField("displayName", user.DisplayName).Trace("displayName 已从 API 获取并缓存")
 	userCache.Store(login, user.DisplayName)
+
+	// 刷新 buntdb 中的用户信息
+	if err := c.AddUserInfo(user); err != nil {
+		logger.WithField("login", login).Warnf("刷新用户信息失败: %v", err)
+	}
+
 	return user.DisplayName
 }
 
