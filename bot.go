@@ -244,6 +244,7 @@ youtube:
 twitch:
   clientId:               # Twitch 应用的 Client ID
   clientSecret:           # Twitch 应用的 Client Secret
+  interval: 30s          # 轮询间隔，建议不要太短避免风控
   onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
 
 concern:
