@@ -74,7 +74,7 @@ func (e *LiveEvent) GetMSG() *mmsg.MSG {
 		"title":            e.Title,
 		"game_name":        e.GameName,
 		"viewer_count":     e.ViewerCount,
-		"thumbnail":        e.ThumbnailURL,
+		"thumbnail":        FormatThumbnailURL(e.ThumbnailURL, 1280, 720),
 		"profile_image":    e.ProfileImageURL,
 		"offline_image":    e.OfflineImageURL,
 		"title_changed":    e.titleChanged,

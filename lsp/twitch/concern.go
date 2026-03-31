@@ -130,8 +130,9 @@ func (c *TwitchConcern) Stop() {
 func (c *TwitchConcern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		interval := cfg.GetEmitIntervalForSite(Site)
-		if interval == 0 {
+		// 直接读取 twitch.interval，不使用 GetEmitIntervalForSite（它会 fallback 到 concern.emitInterval）
+		interval := config.GlobalConfig.GetDuration("twitch.interval")
+		if interval <= 0 {
 			interval = time.Second * 30
 		}
 		var freshCount atomic.Int32
