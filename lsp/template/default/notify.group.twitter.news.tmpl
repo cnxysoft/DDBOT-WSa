@@ -9,8 +9,7 @@
     {{ $orgUserName := "Unknown User" -}}
     {{ if $dynamic.Retweet.User.Name -}}
         {{ $orgUserName = $dynamic.Retweet.User.Name -}}
-    {{ end -}}
-    {{ if $dynamic.WithQuote -}}
+    {{ else if $dynamic.WithQuote -}}
         {{ if $dynamic.Quote.User.Name -}}
             {{ $orgUserName = $dynamic.Quote.User.Name -}}
             {{ $tips = "引用" -}}
@@ -40,13 +39,13 @@
     {{ end -}}
 
     {{ range $media := $dynamic.Media -}}
-        {{ if eq $media.Type "image" -}}
+        {{ if or (eq $media.Type "image") (eq $media.Type "photo") -}}
             {{ if ne $media.Base64 "" -}}
                 {{ pic $media.Base64 -}}
             {{ else -}}
                 {{ pic $media.Url -}}
             {{ end -}}
-        {{ else if eq $media.Type "gif" -}}
+        {{ else if or (eq $media.Type "gif") (eq $media.Type "animated_gif") -}}
             {{ if ne $media.Base64 "" -}}
                 {{ pic $media.Base64 -}}
             {{ else -}}
@@ -65,28 +64,24 @@
     {{ end -}}
 
     {{ if $dynamic.WithQuote -}}
-        {{ $mainUser := "Unknown User" -}}
-        {{ if $dynamic.User.Name -}}
-            {{ $mainUser = $dynamic.User.Name -}}
-        {{ end -}}
         {{ $quoteUser := "Unknown User" -}}
         {{ if $dynamic.Quote.User.Name -}}
             {{ $quoteUser = $dynamic.Quote.User.Name -}}
         {{ end -}}
-        {{ printf "\n%s引用了%s的推文：\n" $mainUser $quoteUser -}}
+        {{ printf "\n引用了%s的推文：\n" $quoteUser -}}
         {{ printf "%s\n" $dynamic.Quote.Date -}}
         {{ if ne $dynamic.Quote.Content "" -}}
             {{ printf "%s\n" $dynamic.Quote.Content -}}
         {{ end -}}
 
         {{ range $media := $dynamic.Quote.Media -}}
-            {{ if eq $media.Type "image" -}}
+            {{ if or (eq $media.Type "image") (eq $media.Type "photo") -}}
                 {{ if ne $media.Base64 "" -}}
                     {{ pic $media.Base64 -}}
                 {{ else -}}
                     {{ pic $media.Url -}}
                 {{ end -}}
-            {{ else if eq $media.Type "gif" -}}
+            {{ else if or (eq $media.Type "gif") (eq $media.Type "animated_gif") -}}
                 {{ if ne $media.Base64 "" -}}
                     {{ pic $media.Base64 -}}
                 {{ else -}}
