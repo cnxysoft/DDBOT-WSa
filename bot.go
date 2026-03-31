@@ -29,6 +29,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
@@ -238,6 +239,14 @@ weibo:
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+
+# Twitch 直播推送
+# 需要在 https://dev.twitch.tv/console/apps 注册应用获取 clientId 和 clientSecret
+twitch:
+  clientId:               # Twitch 应用的 Client ID
+  clientSecret:           # Twitch 应用的 Client Secret
+  interval: 30s          # 轮询间隔，建议不要太短避免风控
+  onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
 
 concern:
   emitInterval: 5s

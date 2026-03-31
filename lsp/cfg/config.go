@@ -191,6 +191,10 @@ func GetAcfunOnlyOnlineNotify() bool {
 	return config.GlobalConfig.GetBool("acfun.onlyOnlineNotify")
 }
 
+func GetTwitchOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("twitch.onlyOnlineNotify")
+}
+
 func GetWeiboMode() string {
 	mode := strings.TrimSpace(config.GlobalConfig.GetString("weibo.mode"))
 	if mode == "" {
