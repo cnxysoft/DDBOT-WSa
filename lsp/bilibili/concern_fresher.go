@@ -408,12 +408,32 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 				0,
 			)
 			ParentArea := c.AreaData.GetSubArea(l.GetParentAreaId())
-			Aria := ParentArea.GetSubCategory(l.GetAreaId())
+			var Aria *Item
+			if ParentArea != nil {
+				Aria = ParentArea.GetSubCategory(l.GetAreaId())
+			}
+			// 如果找不到分区，强制重新拉取分区数据（不清缓存）
+			if c.AreaData == nil || ParentArea == nil || Aria == nil {
+				c.AreaData = RefreshAreaListAndSave()
+				if c.AreaData != nil {
+					ParentArea = c.AreaData.GetSubArea(l.GetParentAreaId())
+					if ParentArea != nil {
+						Aria = ParentArea.GetSubCategory(l.GetAreaId())
+					}
+				}
+			}
+			var areaName, parentAreaName string
+			if Aria != nil {
+				areaName = Aria.GetName()
+			}
+			if ParentArea != nil {
+				parentAreaName = ParentArea.GetName()
+			}
 			info.SetAreaData(
 				l.GetAreaId(),
-				Aria.GetName(),
+				areaName,
 				l.GetParentAreaId(),
-				ParentArea.GetName())
+				parentAreaName)
 			if info.Cover == "" {
 				info.Cover = l.GetCover()
 			}

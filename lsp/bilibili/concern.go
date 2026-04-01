@@ -79,7 +79,7 @@ func NewConcern(notify chan<- concern.Notify) *Concern {
 			return m
 		}),
 	}
-	c.AreaData = RefreshAreaList()
+	c.AreaData = LoadOrRefreshAreaList()
 	c.StateManager = NewStateManager(c)
 	return c
 }
