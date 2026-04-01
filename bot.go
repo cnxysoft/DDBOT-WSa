@@ -198,9 +198,13 @@ bilibili:
 # bot 将使用您 A 站帐号的以下功能（订阅动态时）：
 # 关注用户 / 取消关注用户 / 查看关注列表
 # 请注意，订阅一个账号后，此处使用的 A 站账号将自动关注该账号
+# authKey 和 acPassToken 用于 ACFUN API 认证，与 account/password 不同
+# 通常只需要 account + password 即可，authKey/acPassToken 为可选的高级配置
 acfun:
-  account: 
-  password: 
+  account:
+  password:
+  authKey:          # ACFUN authKey（可选）
+  acPassToken:      # ACFUN acPassToken（可选）
   unsub: false
   interval: 25s
   onlyOnlineNotify: false
@@ -268,6 +272,17 @@ twitch:
   clientSecret:           # Twitch 应用的 Client Secret
   interval: 30s          # 轮询间隔，建议不要太短避免风控
   onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
+
+# TwitCasting 直播推送
+# 需要在 TwitCasting 开发者后台注册应用获取 clientId 和 clientSecret
+twitcasting:
+  clientId:               # TwitCasting 应用的 Client ID
+  clientSecret:           # TwitCasting 应用的 Client Secret
+  nameStrategy: name      # 发送消息时显示的名称策略：name（默认）/ userid / both
+  broadcaster:            # 直播通知中是否显示主播信息
+    title: false          # 是否显示直播间标题
+    created: false       # 是否显示开播时间
+    image: false         # 是否显示直播封面
 
 concern:
   emitInterval: 5s
