@@ -208,18 +208,40 @@ acfun:
   interval: 25s
   onlyOnlineNotify: false
 
-# 支持使用多个nitter镜像，默认使用官方镜像（第三方镜像可能有额外校验）
-# 使用lightbrd镜像请自行先访问https://lightbrd.com/进行cookies的获取
-# 填入你访问网站时提交的user_agent，可在浏览器中查看
-# 填入你访问网站后得到的cf_clearance，可在浏览器中查看
+# Twitter 推送支持两种模式：
+# 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
+# 2. api 模式：使用 Twitter API，需要配置 cookie 和 Bearer Token
+# 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
+
+# mirror 模式配置
+# 支持使用多个 nitter 镜像，默认使用官方镜像（第三方镜像可能有额外校验）
+# 使用 lightbrd 镜像请自行先访问 https://lightbrd.com/进行 cookies 的获取
+# 填入你访问网站时提交的 user_agent，可在浏览器中查看
+# 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
 twitter:
-  baseUrl:
+  mode: mirror  # 模式选择：mirror（默认）或 api
+  baseUrl:     # mirror 模式下的 nitter 镜像列表
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
     - "https://nitter.poast.org/"
-  interval: 30s # 查询间隔，过快可能导致ip被暂时封禁
-  userAgent: 
+    - "https://nitter.catsarch.com/"
+  interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
+  userAgent:      # 浏览器 User-Agent
+  unsub: false    # 是否自动取消关注（当取消订阅时）
+
+  # api 模式配置（mode: api 时生效）
+  # 以下字段用于 Twitter API 认证，需要真实账号的 cookies
+  # auth_token 和 ct0：登录 Twitter 后在 cookie 中获取
+  # bearerToken：Twitter API Bearer Token（可从 dev.twitter.com 获取或通过 main.js 自动获取）
+  # queryId：搜索 API 的 queryId（可通过 main.js 自动获取或使用默认配置）
+  # screenName：Twitter 账号的用户名（可选，自动获取时会填充）
+  # 注意：api 模式需要高信誉账号，否则可能被风控
+  auth_token:   # Twitter auth_token cookie
+  ct0:          # Twitter ct0 cookie
+  bearerToken:  # Twitter Bearer Token
+  queryId:      # Twitter 搜索 API queryId
+  screenName:   # Twitter 账号 screen_name（可选）
 
 # 抖音直播推送（测试）
 # 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce、sessionId共三个cookies和你的浏览器UA
