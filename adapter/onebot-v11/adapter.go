@@ -50,8 +50,6 @@ func (a *OneBotAdapter) Start() error {
 		adapter.WithWSMessageHandler(a.handleMessage),
 	)
 
-	wsClient.SetMessageHandler(a.handleMessage)
-
 	if err := wsClient.Start(); err != nil {
 		return fmt.Errorf("failed to start ws client: %v", err)
 	}

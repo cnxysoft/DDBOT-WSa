@@ -20,8 +20,7 @@ const (
 	WSModeReverse  = "ws-reverse"
 	WriteWait      = 10 * time.Second
 	PongWait       = 60 * time.Second
-	PingPeriod     = 50 * time.Second
-	MaxMessageSize = 150 * 1024 * 1024 // 150MB, 支持~109MB原始文件的base64编码
+	MaxMessageSize = 150 * 1024 * 1024 // 150MB
 )
 
 type WSResponse struct {
@@ -35,28 +34,20 @@ type WSResponse struct {
 }
 
 type WSClient struct {
-	mu           sync.RWMutex
-	mode         string
-	wsMode       string
-	url          string
-	token        string
-	conn         *websocket.Conn
-	stopChan     chan struct{}
-	responseCh   map[string]chan *WSResponse
-	messageChan  chan []byte
-	readErrChan  chan error
-	isConnected  bool
-	reconnectCnt int
-	maxReconnect int
-
-	// ws-server 模式
-	httpServer *http.Server
-	handler    http.HandlerFunc
-
-	// 回调
-	messageHandler func([]byte)
-
-	// 配置
+	mu                sync.RWMutex
+	writeMu           sync.Mutex // 保护 websocket 写入操作
+	mode              string
+	wsMode            string
+	url               string
+	token             string
+	conn              *websocket.Conn
+	stopChan          chan struct{}
+	responseCh        map[string]chan *WSResponse
+	isConnected       bool
+	reconnectCnt      int
+	maxReconnect      int
+	httpServer        *http.Server
+	messageHandler    func([]byte)
 	heartbeatInterval time.Duration
 	connectTimeout    time.Duration
 }
@@ -64,33 +55,23 @@ type WSClient struct {
 type WSClientOption func(*WSClient)
 
 func WithWSToken(token string) WSClientOption {
-	return func(c *WSClient) {
-		c.token = token
-	}
+	return func(c *WSClient) { c.token = token }
 }
 
 func WithWSHeartbeat(interval time.Duration) WSClientOption {
-	return func(c *WSClient) {
-		c.heartbeatInterval = interval
-	}
+	return func(c *WSClient) { c.heartbeatInterval = interval }
 }
 
 func WithWSConnectTimeout(timeout time.Duration) WSClientOption {
-	return func(c *WSClient) {
-		c.connectTimeout = timeout
-	}
+	return func(c *WSClient) { c.connectTimeout = timeout }
 }
 
 func WithWSMaxReconnect(max int) WSClientOption {
-	return func(c *WSClient) {
-		c.maxReconnect = max
-	}
+	return func(c *WSClient) { c.maxReconnect = max }
 }
 
 func WithWSMessageHandler(handler func([]byte)) WSClientOption {
-	return func(c *WSClient) {
-		c.messageHandler = handler
-	}
+	return func(c *WSClient) { c.messageHandler = handler }
 }
 
 func NewWSClient(mode, wsMode, url string, opts ...WSClientOption) *WSClient {
@@ -100,25 +81,15 @@ func NewWSClient(mode, wsMode, url string, opts ...WSClientOption) *WSClient {
 		wsMode:            wsMode,
 		stopChan:          make(chan struct{}),
 		responseCh:        make(map[string]chan *WSResponse),
-		messageChan:       make(chan []byte, 100),
-		readErrChan:       make(chan error, 1),
 		heartbeatInterval: 30 * time.Second,
 		connectTimeout:    10 * time.Second,
-		maxReconnect:      0, // 0 表示无限重连
+		maxReconnect:      0,
 		reconnectCnt:      0,
 	}
-
 	for _, opt := range opts {
 		opt(c)
 	}
-
 	return c
-}
-
-func (c *WSClient) SetMessageHandler(handler func([]byte)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.messageHandler = handler
 }
 
 func (c *WSClient) Start() error {
@@ -126,29 +97,25 @@ func (c *WSClient) Start() error {
 	case WSModeServer:
 		return c.startServer()
 	case WSModeReverse:
-		return c.startReverse()
+		go c.connectLoop()
+		return nil
 	default:
-		return fmt.Errorf("unknown ws mode: %s", c.mode)
+		return fmt.Errorf("unknown ws mode: %s", c.wsMode)
 	}
 }
 
 func (c *WSClient) Stop() error {
 	close(c.stopChan)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
-
 	if c.httpServer != nil {
 		c.httpServer.Shutdown(context.Background())
 		c.httpServer = nil
 	}
-
-	wsLogger.Info("WebSocket client stopped")
 	return nil
 }
 
@@ -158,113 +125,66 @@ func (c *WSClient) IsConnected() bool {
 	return c.isConnected
 }
 
-func (c *WSClient) GetSelfID() int64 {
-	return 0
-}
-
 func (c *WSClient) startServer() error {
 	addr := c.url
 	if addr == "" {
 		addr = "0.0.0.0:15630"
 	}
-
-	c.handler = func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		if c.token != "" {
 			auth := r.Header.Get("Authorization")
-			if auth == "" {
+			if auth == "" || strings.TrimPrefix(auth, "Bearer ") != c.token {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
-			auth = strings.TrimPrefix(auth, "Bearer ")
-			if auth != c.token {
-				http.Error(w, "Invalid token", http.StatusUnauthorized)
-				return
-			}
 		}
-
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true
-			},
-		}
-
+		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			wsLogger.Errorf("WebSocket upgrade error: %v", err)
 			return
 		}
-
 		c.mu.Lock()
+		if c.conn != nil {
+			c.conn.Close()
+		}
 		c.conn = conn
 		c.isConnected = true
 		c.reconnectCnt = 0
 		c.mu.Unlock()
-
 		wsLogger.Info("WebSocket client connected (ws-server mode)")
 		c.handleConnection(conn)
 	}
-
-	c.httpServer = &http.Server{
-		Addr:    addr,
-		Handler: c.handler,
-	}
-
+	c.httpServer = &http.Server{Addr: addr, Handler: http.HandlerFunc(handler)}
 	go func() {
-		wsLogger.Infof("WebSocket server starting on ws://%s/ws", addr)
+		wsLogger.Infof("WebSocket server starting on ws://%s/", addr)
 		if err := c.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			wsLogger.Errorf("WebSocket server error: %v", err)
 		}
 	}()
-
-	return nil
-}
-
-func (c *WSClient) startReverse() error {
-	go c.connectLoop()
 	return nil
 }
 
 func (c *WSClient) connectLoop() {
-	wsLogger.Debugf("connectLoop started, mode=%s", c.mode)
 	for {
 		select {
 		case <-c.stopChan:
-			wsLogger.Debugf("connectLoop stopped by stopChan")
 			return
 		default:
 		}
-
-		err := c.connect()
-		if err == nil {
-			// 连接成功，但可能后会断开
-			wsLogger.Debugf("connectLoop: connect returned nil, connection may have been lost, continuing...")
-			// 不要返回，继续尝试重连，但添加短暂延迟防止紧密循环
-			select {
-			case <-c.stopChan:
-				wsLogger.Debugf("connectLoop stopped by stopChan")
-				return
-			case <-time.After(2 * time.Second):
-			}
-			continue
-		} else {
+		if err := c.connect(); err != nil {
 			wsLogger.Errorf("WebSocket connection failed: %v", err)
 		}
-
 		if c.maxReconnect > 0 && c.reconnectCnt >= c.maxReconnect {
-			wsLogger.Errorf("Max reconnect attempts reached")
 			return
 		}
-
 		c.reconnectCnt++
-		waitTime := time.Duration(c.reconnectCnt) * 5 * time.Second
-		if waitTime > 60*time.Second {
-			waitTime = 60 * time.Second
+		waitTime := time.Duration(c.reconnectCnt) * 2 * time.Second
+		if waitTime > 30*time.Second {
+			waitTime = 30 * time.Second
 		}
-
-		wsLogger.Infof("Reconnecting in %v (attempt %d)", waitTime, c.reconnectCnt)
 		select {
 		case <-c.stopChan:
-			wsLogger.Debugf("connectLoop stopped by stopChan during wait")
 			return
 		case <-time.After(waitTime):
 		}
@@ -276,59 +196,45 @@ func (c *WSClient) connect() error {
 	if c.token != "" {
 		header.Set("Authorization", "Bearer "+c.token)
 	}
-
-	wsLogger.Infof("Connecting to WebSocket: %s", c.url)
-
-	dialer := websocket.Dialer{
-		HandshakeTimeout: c.connectTimeout,
-	}
-
+	dialer := websocket.Dialer{HandshakeTimeout: c.connectTimeout}
 	conn, _, err := dialer.Dial(c.url, header)
 	if err != nil {
 		return err
 	}
-
 	c.mu.Lock()
 	c.conn = conn
 	c.isConnected = true
 	c.reconnectCnt = 0
 	c.mu.Unlock()
-
-	wsLogger.Info("WebSocket connected (ws-reverse mode)")
 	c.handleConnection(conn)
-
 	return nil
 }
 
 func (c *WSClient) handleConnection(conn *websocket.Conn) {
+	readErrChan := make(chan error, 1)
 	defer func() {
+		if r := recover(); r != nil {
+			wsLogger.Errorf("handleConnection panic: %v", r)
+		}
+		conn.Close()
 		c.mu.Lock()
-		c.isConnected = false
 		if c.conn == conn {
 			c.conn = nil
+			c.isConnected = false
+			for echo, ch := range c.responseCh {
+				close(ch)
+				delete(c.responseCh, echo)
+			}
 		}
 		c.mu.Unlock()
-
-		conn.Close()
-		wsLogger.Info("WebSocket connection closed")
-
-		// ws-reverse 模式断线重连
-		if c.mode == WSModeReverse {
-			wsLogger.Debugf("Connection closed, starting reconnect loop")
-			go c.connectLoop()
-		}
 	}()
 
-	// 启动读消息协程
-	go c.readLoop(conn)
-
-	// 心跳
+	go c.readLoop(conn, readErrChan)
 	if c.heartbeatInterval > 0 {
 		go c.heartbeatLoop(conn)
 	}
 
-	// 处理消息
-	// 使用心跳间隔作为超时，防止 readErrChan 永远收不到消息时死锁
+	// 定期检查连接状态，防止死锁
 	heartbeatTimeout := c.heartbeatInterval
 	if heartbeatTimeout <= 0 {
 		heartbeatTimeout = 30 * time.Second
@@ -340,15 +246,13 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 		select {
 		case <-c.stopChan:
 			return
-		case msg := <-c.messageChan:
-			c.writeMessage(conn, msg)
-		case err := <-c.readErrChan:
+		case err := <-readErrChan:
 			if err != nil {
 				wsLogger.Errorf("Read error: %v", err)
 			}
 			return
 		case <-checkTimer.C:
-			// 定期检查连接是否已被新的连接替换，如果是则退出防止死锁
+			// 定期检查连接是否已被新的连接替换，防止死锁
 			c.mu.RLock()
 			isCurrentConnection := c.conn == conn
 			c.mu.RUnlock()
@@ -360,14 +264,13 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 	}
 }
 
-func (c *WSClient) readLoop(conn *websocket.Conn) {
+func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 	defer func() {
 		if r := recover(); r != nil {
 			wsLogger.Errorf("Read loop panic: %v", r)
-			// 使用 non-blocking send，避免死锁
 			select {
-			case c.readErrChan <- fmt.Errorf("read loop panic: %v", r):
-			default:
+			case errChan <- fmt.Errorf("panic: %v", r):
+			case <-c.stopChan:
 			}
 		}
 	}()
@@ -387,47 +290,37 @@ func (c *WSClient) readLoop(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			// 使用 non-blocking send，如果失败说明 handleConnection 可能已经退出
 			select {
-			case c.readErrChan <- err:
+			case errChan <- err:
+			case <-c.stopChan:
+				return
 			default:
 				wsLogger.Warnf("Read error (channel full): %v", err)
 			}
 			return
 		}
-
 		c.handleMessage(message)
 	}
 }
 
 func (c *WSClient) handleMessage(message []byte) {
-	// 尝试解析响应
 	var resp WSResponse
-	if err := json.Unmarshal(message, &resp); err == nil {
-		// 如果有 echo，说明是 API 响应
-		if resp.Echo != "" {
-			c.mu.RLock()
-			ch, exists := c.responseCh[resp.Echo]
-			c.mu.RUnlock()
-
-			if exists {
-				select {
-				case ch <- &resp:
-				default:
-					wsLogger.Warnf("Response channel full for echo: %s", resp.Echo)
-				}
-			} else {
-				wsLogger.Tracef("Received response without handler: %s", resp.Echo)
+	if err := json.Unmarshal(message, &resp); err == nil && resp.Echo != "" {
+		c.mu.Lock()
+		if ch, exists := c.responseCh[resp.Echo]; exists {
+			delete(c.responseCh, resp.Echo)
+			select {
+			case ch <- &resp:
+			default:
 			}
+			c.mu.Unlock()
 			return
 		}
+		c.mu.Unlock()
 	}
-
-	// 传递给消息处理器
 	c.mu.RLock()
 	handler := c.messageHandler
 	c.mu.RUnlock()
-
 	if handler != nil {
 		handler(message)
 	}
@@ -436,107 +329,73 @@ func (c *WSClient) handleMessage(message []byte) {
 func (c *WSClient) heartbeatLoop(conn *websocket.Conn) {
 	ticker := time.NewTicker(c.heartbeatInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-c.stopChan:
 			return
 		case <-ticker.C:
-			c.mu.RLock()
-			isConn := c.conn == conn
-			c.mu.RUnlock()
-
-			if isConn {
-				err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(WriteWait))
-				if err != nil {
-					wsLogger.Warnf("Heartbeat error: %v", err)
-				}
+			if err := c.writeRaw(conn, websocket.PingMessage, []byte{}); err != nil {
+				return
 			}
 		}
 	}
 }
 
-func (c *WSClient) writeMessage(conn *websocket.Conn, message []byte) {
-	err := conn.WriteMessage(websocket.TextMessage, message)
-	if err != nil {
-		wsLogger.Errorf("Write message error: %v", err)
+func (c *WSClient) writeRaw(conn *websocket.Conn, messageType int, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("nil connection")
 	}
-}
-
-func (c *WSClient) Send(action string, params map[string]any) error {
-	req := map[string]any{
-		"action": action,
-		"params": params,
+	conn.SetWriteDeadline(time.Now().Add(WriteWait))
+	if messageType == websocket.PingMessage {
+		return conn.WriteControl(websocket.PingMessage, data, time.Now().Add(WriteWait))
 	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %v", err)
-	}
-
-	c.mu.RLock()
-	conn := c.conn
-	isConn := c.isConnected
-	c.mu.RUnlock()
-
-	if !isConn || conn == nil {
-		return fmt.Errorf("not connected")
-	}
-
-	c.writeMessage(conn, data)
-	return nil
+	return conn.WriteMessage(messageType, data)
 }
 
 func (c *WSClient) SendAndWait(action string, params map[string]any, timeout time.Duration) (*WSResponse, error) {
 	echo := fmt.Sprintf("%s:%d", action, time.Now().UnixNano())
-
-	req := map[string]any{
-		"action": action,
-		"params": params,
-		"echo":   echo,
-	}
-
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %v", err)
-	}
-
 	ch := make(chan *WSResponse, 1)
-
 	c.mu.Lock()
 	c.responseCh[echo] = ch
 	c.mu.Unlock()
-
 	defer func() {
 		c.mu.Lock()
-		delete(c.responseCh, echo)
+		if _, ok := c.responseCh[echo]; ok {
+			close(ch)
+			delete(c.responseCh, echo)
+		}
 		c.mu.Unlock()
 	}()
-
-	c.mu.RLock()
-	conn := c.conn
-	isConn := c.isConnected
-	c.mu.RUnlock()
-
-	if !isConn || conn == nil {
-		return nil, fmt.Errorf("not connected")
+	req := map[string]any{"action": action, "params": params, "echo": echo}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
 	}
-
-	c.writeMessage(conn, data)
-
+	if err := c.SendRawData(data); err != nil {
+		return nil, err
+	}
 	select {
-	case resp := <-ch:
+	case resp, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("connection closed")
+		}
 		if resp.Status == "ok" || resp.Retcode == 0 {
 			return resp, nil
 		}
-		errMsg := resp.Wording
-		if resp.Message != "" {
-			errMsg = resp.Message
-		} else if resp.Msg != "" {
-			errMsg = resp.Msg
-		}
-		return resp, fmt.Errorf("%s", errMsg)
+		return resp, fmt.Errorf("api error: %s", resp.Message)
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("%s timeout", action)
+		return nil, fmt.Errorf("timeout")
 	}
+}
+
+func (c *WSClient) SendRawData(data []byte) error {
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
+	return c.writeRaw(conn, websocket.TextMessage, data)
 }

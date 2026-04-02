@@ -30,6 +30,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
@@ -200,26 +201,51 @@ bilibili:
 # bot 将使用您 A 站帐号的以下功能（订阅动态时）：
 # 关注用户 / 取消关注用户 / 查看关注列表
 # 请注意，订阅一个账号后，此处使用的 A 站账号将自动关注该账号
+# authKey 和 acPassToken 用于 ACFUN API 认证，与 account/password 不同
+# 通常只需要 account + password 即可，authKey/acPassToken 为可选的高级配置
 acfun:
-  account: 
-  password: 
+  account:
+  password:
+  authKey:          # ACFUN authKey（可选）
+  acPassToken:      # ACFUN acPassToken（可选）
   unsub: false
   interval: 25s
   onlyOnlineNotify: false
 
+# Twitter 推送支持两种模式：
+# 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
+# 2. api 模式：使用 Twitter API，需要配置 cookie 和 Bearer Token
+# 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
+
+# mirror 模式配置
 # 支持使用多个 nitter 镜像，默认使用官方镜像（第三方镜像可能有额外校验）
 # 使用 lightbrd 镜像请自行先访问 https://lightbrd.com/进行 cookies 的获取
 # 填入你访问网站时提交的 user_agent，可在浏览器中查看
 # 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
 twitter:
-  baseUrl:
+  mode: mirror  # 模式选择：mirror（默认）或 api
+  baseUrl:     # mirror 模式下的 nitter 镜像列表
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
     - "https://nitter.poast.org/"
     - "https://nitter.catsarch.com/"
-  interval: 30s # 查询间隔，过快可能导致 ip 被暂时封禁
-  userAgent: 
+  interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
+  userAgent:      # 浏览器 User-Agent
+  unsub: false    # 是否自动取消关注（当取消订阅时）
+
+  # api 模式配置（mode: api 时生效）
+  # 以下字段用于 Twitter API 认证，需要真实账号的 cookies
+  # auth_token 和 ct0：登录 Twitter 后在 cookie 中获取
+  # bearerToken：Twitter API Bearer Token（可从 dev.twitter.com 获取或通过 main.js 自动获取）
+  # queryId：搜索 API 的 queryId（可通过 main.js 自动获取或使用默认配置）
+  # screenName：Twitter 账号的用户名（可选，自动获取时会填充）
+  # 注意：api 模式需要高信誉账号，否则可能被风控
+  auth_token:   # Twitter auth_token cookie
+  ct0:          # Twitter ct0 cookie
+  bearerToken:  # Twitter Bearer Token
+  queryId:      # Twitter 搜索 API queryId
+  screenName:   # Twitter 账号 screen_name（可选） 
 
 # 抖音直播推送（测试）
 # 需要手动访问 www.douyin.com 并填入__ac_signature 和__ac_nonce、sessionId 共三个 cookies 和你的浏览器 UA
@@ -241,6 +267,25 @@ weibo:
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+
+# Twitch 直播推送
+# 需要在 https://dev.twitch.tv/console/apps 注册应用获取 clientId 和 clientSecret
+twitch:
+  clientId:               # Twitch 应用的 Client ID
+  clientSecret:           # Twitch 应用的 Client Secret
+  interval: 30s          # 轮询间隔，建议不要太短避免风控
+  onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
+
+# TwitCasting 直播推送
+# 需要在 TwitCasting 开发者后台注册应用获取 clientId 和 clientSecret
+twitcasting:
+  clientId:               # TwitCasting 应用的 Client ID
+  clientSecret:           # TwitCasting 应用的 Client Secret
+  nameStrategy: name      # 发送消息时显示的名称策略：name（默认）/ userid / both
+  broadcaster:            # 直播通知中是否显示主播信息
+    title: false          # 是否显示直播间标题
+    created: false       # 是否显示开播时间
+    image: false         # 是否显示直播封面
 
 concern:
   emitInterval: 5s
