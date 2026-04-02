@@ -233,7 +233,7 @@ func (t *TwitterAPI) FetchQueryIdAndBearerFromMainJs(mainJsUrl string) (queryId,
 
 	jsContent := string(decompressed)
 
-	queryIdPattern := `queryId:"([a-zA-Z0-9_]{20,})",operationName:"HomeLatestTimeline"`
+	queryIdPattern := `queryId:"([a-zA-Z0-9_-]{20,})",operationName:"HomeLatestTimeline"`
 	queryIdRe := regexp.MustCompile(queryIdPattern)
 	queryIdMatches := queryIdRe.FindStringSubmatch(jsContent)
 	if len(queryIdMatches) < 2 {
