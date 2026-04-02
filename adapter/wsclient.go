@@ -42,6 +42,7 @@ type WSClient struct {
 	token             string
 	conn              *websocket.Conn
 	stopChan          chan struct{}
+	stopOnce          sync.Once // 确保 stopChan 只被关闭一次
 	responseCh        map[string]chan *WSResponse
 	isConnected       bool
 	reconnectCnt      int
@@ -105,9 +106,17 @@ func (c *WSClient) Start() error {
 }
 
 func (c *WSClient) Stop() error {
-	close(c.stopChan)
+	c.stopOnce.Do(func() {
+		close(c.stopChan)
+	})
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.isConnected = false
+	// Clean up response channels
+	for echo, ch := range c.responseCh {
+		close(ch)
+		delete(c.responseCh, echo)
+	}
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
