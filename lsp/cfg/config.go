@@ -216,6 +216,14 @@ func GetWeiboInterval() time.Duration {
 	return interval
 }
 
+func GetWeiboCookieRefreshAPI() string {
+	return strings.TrimSpace(config.GlobalConfig.GetString("weibo.cookieRefreshAPI"))
+}
+
+func GetWeiboCookieRefreshEnable() bool {
+	return config.GlobalConfig.GetBool("weibo.cookieRefreshEnable")
+}
+
 func GetExtDbEnable() bool {
 	return config.GlobalConfig.GetBool("extDb.enable")
 }

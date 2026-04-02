@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/message"
@@ -17,6 +16,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/ghodss/yaml"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/atomic"
 )
 
 // 请求和响应结构体

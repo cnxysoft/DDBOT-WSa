@@ -66,6 +66,11 @@ func (c *Concern) Start() error {
 	}
 	freshCookieOpt(sub)
 
+	// 如果启用了 Cookie 刷新 API，启动自动监控
+	if cfg.GetWeiboCookieRefreshEnable() {
+		StartCookieRefreshMonitor(sub)
+	}
+
 	if !isGuest {
 		// 测试微博cookie是否有效，并显示登录信息
 		go func() {
@@ -138,9 +143,13 @@ func (c *Concern) Start() error {
 func (c *Concern) Stop() {
 	logger.Tracef("正在停止%v concern", Site)
 	logger.Tracef("正在停止%v StateManager", Site)
+
+	// 停止 Cookie 监控
+	StopCookieRefreshMonitor()
+
 	c.StateManager.Stop()
-	logger.Tracef("%v StateManager已停止", Site)
-	logger.Tracef("%v concern已停止", Site)
+	logger.Tracef("%v StateManager 已停止", Site)
+	logger.Tracef("%v concern 已停止", Site)
 }
 
 func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
