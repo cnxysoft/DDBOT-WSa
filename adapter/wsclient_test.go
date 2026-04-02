@@ -2,8 +2,10 @@ package adapter
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1233,4 +1235,707 @@ func TestWSClient_HandleMessage_VariousJSON(t *testing.T) {
 			assert.Equal(t, tc.json, string(lastMessage))
 		})
 	}
+}
+
+// TestHighFrequencyMessages 测试高频消息场景
+func TestHighFrequencyMessages(t *testing.T) {
+	var msgCount int32
+
+	// 创建 wsclient，监听固定端口
+	c := NewWSClient("onebot-v11", WSModeServer, "127.0.0.1:18999",
+		WithWSMessageHandler(func(b []byte) {
+			atomic.AddInt32(&msgCount, 1)
+		}))
+
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// 等待服务器启动
+	time.Sleep(100 * time.Millisecond)
+
+	// 连接到这个服务器
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18999", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// 服务器准备好接收消息后再发送
+	time.Sleep(100 * time.Millisecond)
+
+	// 快速发送消息（单 goroutine 避免并发写入冲突）
+	for i := 0; i < 100; i++ {
+		msg := map[string]interface{}{
+			"post_type":    "message",
+			"message_type": "group",
+			"group_id":     123456,
+			"user_id":      789012,
+			"message":      "test message",
+			"self_id":      114514,
+		}
+		data, _ := json.Marshal(msg)
+		err := conn.WriteMessage(websocket.TextMessage, data)
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond) // 模拟消息间隔
+	}
+
+	// 等待消息处理
+	time.Sleep(200 * time.Millisecond)
+
+	// 验证消息数量
+	t.Logf("Processed %d messages", atomic.LoadInt32(&msgCount))
+	assert.Greater(t, atomic.LoadInt32(&msgCount), int32(50), "should have processed most messages")
+}
+
+// TestSendAndWaitHighConcurrency 测试高并发 SendAndWait
+func TestSendAndWaitHighConcurrency(t *testing.T) {
+	// 创建 WebSocket 服务器
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// 模拟处理消息并返回响应
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			var req map[string]interface{}
+			json.Unmarshal(data, &req)
+
+			// 模拟延迟响应
+			time.Sleep(50 * time.Millisecond)
+
+			// 发送响应
+			resp := map[string]interface{}{
+				"status":  "ok",
+				"retcode": 0,
+				"data":    map[string]interface{}{},
+				"echo":    req["echo"],
+			}
+			respData, _ := json.Marshal(resp)
+			conn.WriteMessage(websocket.TextMessage, respData)
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// 创建 wsclient
+	c := NewWSClient("onebot-v11", WSModeReverse, wsURL)
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// 等待连接建立
+	time.Sleep(500 * time.Millisecond)
+
+	// 记录初始 goroutine 数
+	initialGoroutines := runtime.NumGoroutine()
+
+	// 并发发送 50 个请求
+	var wg sync.WaitGroup
+	concurrency := 50
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			// 模拟一个 API 调用
+			resp, err := c.SendAndWait("test_action", map[string]any{"idx": idx}, 3*time.Second)
+			if err == nil {
+				assert.NotNil(t, resp)
+			}
+		}(i)
+	}
+
+	// 等待所有请求完成
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// 正常完成
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for requests to complete")
+	}
+
+	// 等待清理
+	time.Sleep(500 * time.Millisecond)
+
+	// 验证 goroutine 数量没有大幅增长
+	finalGoroutines := runtime.NumGoroutine()
+	t.Logf("Initial goroutines: %d, Final goroutines: %d", initialGoroutines, finalGoroutines)
+
+	// 允许少量增长，但不应该有大量泄漏
+	assert.Less(t, finalGoroutines, initialGoroutines+20, "goroutine leak detected")
+}
+
+// TestSendAndWaitTimeout 测试超时场景
+func TestSendAndWaitTimeout(t *testing.T) {
+	// 创建 WebSocket 服务器，不发送任何响应
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// 保持连接但什么都不发送
+		time.Sleep(10 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	c := NewWSClient("onebot-v11", WSModeReverse, wsURL)
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// 等待连接建立
+	time.Sleep(500 * time.Millisecond)
+
+	initialGoroutines := runtime.NumGoroutine()
+
+	// 发送一个会超时的请求
+	_, err = c.SendAndWait("test_action", nil, 1*time.Second)
+	assert.Error(t, err)
+
+	// 等待清理
+	time.Sleep(500 * time.Millisecond)
+
+	finalGoroutines := runtime.NumGoroutine()
+	t.Logf("Initial goroutines: %d, Final goroutines: %d", initialGoroutines, finalGoroutines)
+
+	// 验证没有 goroutine 泄漏
+	assert.Less(t, finalGoroutines, initialGoroutines+10, "goroutine leak after timeout")
+}
+
+// TestManyConcurrentTimeouts 测试大量并发超时
+func TestManyConcurrentTimeouts(t *testing.T) {
+	// 创建 WebSocket 服务器，响应很慢
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// 模拟慢响应
+		time.Sleep(5 * time.Second)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	c := NewWSClient("onebot-v11", WSModeReverse, wsURL)
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// 等待连接建立
+	time.Sleep(500 * time.Millisecond)
+
+	initialGoroutines := runtime.NumGoroutine()
+
+	// 发送 20 个会超时的并发请求
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.SendAndWait("test_action", nil, 500*time.Millisecond)
+			// 超时错误是预期的
+		}()
+	}
+
+	wg.Wait()
+	time.Sleep(1 * time.Second)
+
+	finalGoroutines := runtime.NumGoroutine()
+	t.Logf("Initial: %d, Final: %d, Diff: %d", initialGoroutines, finalGoroutines, finalGoroutines-initialGoroutines)
+
+	// 验证 goroutine 没有大量泄漏
+	assert.Less(t, finalGoroutines, initialGoroutines+30, "goroutine leak detected")
+}
+
+// TestResponseChCleanup 验证 responseCh 被正确清理
+func TestResponseChCleanup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+
+			var req map[string]interface{}
+			json.Unmarshal(data, &req)
+
+			// 慢响应
+			time.Sleep(200 * time.Millisecond)
+
+			resp := map[string]interface{}{
+				"status":  "ok",
+				"retcode": 0,
+				"data":    map[string]interface{}{},
+				"echo":    req["echo"],
+			}
+			respData, _ := json.Marshal(resp)
+			conn.WriteMessage(websocket.TextMessage, respData)
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	c := NewWSClient("onebot-v11", WSModeReverse, wsURL)
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// 发送 10 个请求
+	for i := 0; i < 10; i++ {
+		go func(idx int) {
+			c.SendAndWait("test_action", map[string]any{"idx": idx}, 5*time.Second)
+		}(i)
+	}
+
+	// 等待所有响应到达
+	time.Sleep(3 * time.Second)
+
+	// 检查 responseCh 是否被清理
+	c.mu.RLock()
+	respChLen := len(c.responseCh)
+	c.mu.RUnlock()
+
+	t.Logf("responseCh remaining entries: %d", respChLen)
+	assert.Equal(t, 0, respChLen, "responseCh should be empty after all responses received")
+}
+
+// TestComprehensiveHighFrequency 测试综合高频场景：多种消息类型、大量消息、随机异常、协程稳定性
+// 重点验证：ws连接是否出现"突然静默，无消息接收日志，无任何异常日志，心跳正常跑"的问题
+func TestComprehensiveHighFrequency(t *testing.T) {
+	const (
+		sendCount       = 500    // 发送数量
+		recvCount       = 5000   // 接收数量
+		sendRate        = 50     // 发送速率 50条/秒
+		recvRate        = 200    // 接收速率 200条/秒
+		anomalyInterval = 1000   // 异常间隔（每N条消息后）
+	)
+
+	// 各种消息类型
+	messageTypes := []string{"text", "image", "video", "record", "file"}
+
+	// 创建 WebSocket 服务器
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		var writeMu sync.Mutex
+		var anomalyCount int32
+		var silentStart time.Time
+		var isSilent bool
+
+		// 定期检查是否静默（无消息发送超过3秒）
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if isSilent && time.Since(silentStart) > 3*time.Second {
+					wsLogger.Warnf("Server: DETECTED SILENCE - no messages sent for 3 seconds!")
+				}
+			}
+		}()
+
+		// 处理请求并发送响应
+		go func() {
+			defer wsLogger.Info("Server: response handler exited")
+			for {
+				_, data, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+
+				var req map[string]interface{}
+				if err := json.Unmarshal(data, &req); err != nil {
+					continue
+				}
+
+				if echo, ok := req["echo"].(string); ok {
+					// 模拟网络延迟 1-10ms
+					delay := time.Duration(1+int(time.Now().UnixNano()%10)) * time.Millisecond
+					time.Sleep(delay)
+
+					resp := map[string]interface{}{
+						"status":  "ok",
+						"retcode": 0,
+						"data":    map[string]interface{}{"message_id": float64(time.Now().UnixNano() % 1000000)},
+						"echo":    echo,
+					}
+					respData, _ := json.Marshal(resp)
+					writeMu.Lock()
+					conn.WriteMessage(websocket.TextMessage, respData)
+					writeMu.Unlock()
+				}
+			}
+		}()
+
+		// 定期发送消息（模拟高频接收），包含多种消息类型
+		var sent int32
+		stopChan := make(chan struct{})
+
+		go func() {
+			defer wsLogger.Info("Server: message sender exited")
+			msgIdx := 0
+			ticker := time.NewTicker(time.Second / time.Duration(recvRate))
+
+			for {
+				select {
+				case <-stopChan:
+					return
+				case <-ticker.C:
+				}
+
+				currentSent := atomic.LoadInt32(&sent)
+				if currentSent >= recvCount {
+					ticker.Stop()
+					return
+				}
+
+				// 检测静默开始
+				if !isSilent {
+					isSilent = true
+					silentStart = time.Now()
+				}
+				isSilent = false
+
+				// 随机异常：每隔 anomalyInterval 条消息，发送非法数据
+				anomaly := atomic.AddInt32(&anomalyCount, 1)
+				if anomaly%anomalyInterval == 0 {
+					writeMu.Lock()
+					conn.WriteMessage(websocket.TextMessage, []byte("invalid json{"))
+					writeMu.Unlock()
+				}
+
+				msgType := messageTypes[msgIdx%len(messageTypes)]
+				msg := newMessage(msgType, msgIdx)
+
+				// 每隔 100 条消息，插入一条指令消息
+				if msgIdx > 0 && msgIdx%100 == 0 {
+					msg = map[string]interface{}{
+						"post_type":    "message",
+						"message_type": "group",
+						"group_id":     123456,
+						"user_id":      999888,
+						"self_id":      114514,
+						"message_id":   float64(msgIdx + 1000000),
+						"time":         time.Now().Unix(),
+						"message": map[string]interface{}{
+							"type": "text",
+							"data": map[string]interface{}{
+								"text": fmt.Sprintf("@bot #status"),
+							},
+						},
+					}
+				}
+
+				data, _ := json.Marshal(msg)
+
+				writeMu.Lock()
+				err := conn.WriteMessage(websocket.TextMessage, data)
+				writeMu.Unlock()
+
+				if err != nil {
+					wsLogger.Warnf("Server: write error: %v", err)
+					return
+				}
+
+				atomic.AddInt32(&sent, 1)
+				msgIdx++
+			}
+		}()
+
+		// 保持连接足够长时间（基于接收消息数量和速率）
+		expectedDuration := time.Duration(recvCount/recvRate+10) * time.Second
+		time.Sleep(expectedDuration)
+		close(stopChan)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// 创建 wsclient
+	var (
+		recvCounter      int32
+		lastRecvCount    int32
+		sendWg           sync.WaitGroup
+		sendSuccessCount int32
+		sendFailCount    int32
+		anomalyRecvCount int32
+		goroutineSamples []int
+		recvSamples      []int
+		silenceDetected  bool
+		silenceMu        sync.Mutex
+
+		// 指令响应相关
+		cmdTriggerCount int32
+		cmdResponseOk   int32
+		cmdResponseFail int32
+
+		// 用于指令处理的 channel
+		cmdChan = make(chan string, 100)
+	)
+
+	// 创建 wsclient（消息处理器通过 channel 触发指令响应）
+	c := NewWSClient("onebot-v11", WSModeReverse, wsURL,
+		WithWSHeartbeat(15*time.Second),
+		WithWSMessageHandler(func(b []byte) {
+			// 验证消息可以被解析
+			var msg map[string]interface{}
+			if err := json.Unmarshal(b, &msg); err != nil {
+				atomic.AddInt32(&anomalyRecvCount, 1)
+				return
+			}
+			atomic.AddInt32(&recvCounter, 1)
+
+			// 检测指令消息，触发响应
+			if rawMsg, ok := msg["message"].(map[string]interface{}); ok {
+				if text, ok := rawMsg["data"].(map[string]interface{}); ok {
+					if content, ok := text["text"].(string); ok {
+						// 匹配指令：@bot #ping, @bot #status, @bot #info 等
+						if len(content) > 6 && content[:6] == "@bot #" {
+							atomic.AddInt32(&cmdTriggerCount, 1)
+							// 通过 channel 发送指令，不直接调用 client
+							select {
+							case cmdChan <- content:
+							default:
+								// channel 满了，跳过
+							}
+						}
+					}
+				}
+			}
+		}))
+
+	// 启动指令响应处理 goroutine
+	go func() {
+		for range cmdChan {
+			resp, err := c.SendAndWait("get_group_info", map[string]any{
+				"group_id": 123456,
+			}, 5*time.Second)
+			if err != nil || resp == nil {
+				atomic.AddInt32(&cmdResponseFail, 1)
+			} else {
+				atomic.AddInt32(&cmdResponseOk, 1)
+			}
+		}
+	}()
+
+	err := c.Start()
+	require.NoError(t, err)
+	defer c.Stop()
+
+	// 等待连接建立
+	time.Sleep(500 * time.Millisecond)
+
+	initialGoroutines := runtime.NumGoroutine()
+	initialActiveReadLoops := c.activeReadLoops.Load()
+	initialActiveHeartbeat := c.activeHeartbeatLoops.Load()
+	initialActiveHandleConns := c.activeHandleConns.Load()
+
+	t.Logf("=== Initial State ===")
+	t.Logf("Goroutines: %d", initialGoroutines)
+	t.Logf("activeReadLoops: %d, activeHeartbeatLoops: %d, activeHandleConns: %d",
+		initialActiveReadLoops, initialActiveHeartbeat, initialActiveHandleConns)
+
+	// 启动静默检测goroutine（客户端视角）
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				currentRecv := atomic.LoadInt32(&recvCounter)
+				if currentRecv == lastRecvCount && currentRecv > 0 {
+					// 5秒内没有新消息
+					silenceMu.Lock()
+					if !silenceDetected {
+						silenceDetected = true
+						wsLogger.Warnf("Client: SILENCE DETECTED - no new messages for 1 second, recvCount=%d", currentRecv)
+					}
+					silenceMu.Unlock()
+				}
+				lastRecvCount = currentRecv
+			}
+		}
+	}()
+
+	// 启动定期采样goroutine
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				goroutineSamples = append(goroutineSamples, runtime.NumGoroutine())
+				recvSamples = append(recvSamples, int(atomic.LoadInt32(&recvCounter)))
+				wsLogger.Infof("Sampling: goroutines=%d, recv=%d, activeReadLoops=%d, activeHeartbeat=%d, activeHandleConns=%d",
+					runtime.NumGoroutine(), atomic.LoadInt32(&recvCounter),
+					c.activeReadLoops.Load(), c.activeHeartbeatLoops.Load(), c.activeHandleConns.Load())
+			}
+		}
+	}()
+
+	// 持续发送请求（匀速，降低并发压力）
+	sendTicker := time.NewTicker(time.Second / time.Duration(sendRate))
+	defer sendTicker.Stop()
+
+	for i := 0; i < sendCount; i++ {
+		sendWg.Add(1)
+		go func(idx int) {
+			defer sendWg.Done()
+			_, err := c.SendAndWait("send_msg", map[string]any{
+				"message":  fmt.Sprintf("comprehensive test message %d", idx),
+				"group_id": 123456,
+			}, 10*time.Second)
+			if err != nil {
+				atomic.AddInt32(&sendFailCount, 1)
+			} else {
+				atomic.AddInt32(&sendSuccessCount, 1)
+			}
+		}(i)
+
+		// 等待前一批发送完成再发送下一个
+		if i > 0 && i%50 == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		select {
+		case <-sendTicker.C:
+		}
+	}
+
+	// 等待发送完成
+	sendWg.Wait()
+	wsLogger.Infof("All sends completed: success=%d, fail=%d", sendSuccessCount, sendFailCount)
+
+	// 继续处理接收消息一段时间
+	time.Sleep(5 * time.Second)
+
+	finalGoroutines := runtime.NumGoroutine()
+	finalActiveReadLoops := c.activeReadLoops.Load()
+	finalActiveHeartbeat := c.activeHeartbeatLoops.Load()
+	finalActiveHandleConns := c.activeHandleConns.Load()
+	finalRecvCount := atomic.LoadInt32(&recvCounter)
+
+	t.Logf("=== Final State ===")
+	t.Logf("Goroutines: %d (diff: %+d)", finalGoroutines, finalGoroutines-initialGoroutines)
+	t.Logf("activeReadLoops: %d, activeHeartbeatLoops: %d, activeHandleConns: %d",
+		finalActiveReadLoops, finalActiveHeartbeat, finalActiveHandleConns)
+	t.Logf("Received messages: %d (anomaly dropped: %d)", finalRecvCount, anomalyRecvCount)
+	t.Logf("Goroutine samples: %v", goroutineSamples)
+	t.Logf("Receive samples: %v", recvSamples)
+	t.Logf("Command stats: triggered=%d, responseOk=%d, responseFail=%d",
+		atomic.LoadInt32(&cmdTriggerCount),
+		atomic.LoadInt32(&cmdResponseOk),
+		atomic.LoadInt32(&cmdResponseFail))
+
+	// 验证：goroutine 没有泄漏
+	maxAllowedGoroutines := initialGoroutines + 20
+	assert.Less(t, finalGoroutines, maxAllowedGoroutines,
+		"goroutine leak detected: %d > %d", finalGoroutines, maxAllowedGoroutines)
+
+	// 验证：活跃的协程应该接近0或0
+	assert.LessOrEqual(t, finalActiveReadLoops, int32(2),
+		"activeReadLoops should be 0-1, got %d", finalActiveReadLoops)
+	assert.LessOrEqual(t, finalActiveHeartbeat, int32(2),
+		"activeHeartbeatLoops should be 0-1, got %d", finalActiveHeartbeat)
+	assert.LessOrEqual(t, finalActiveHandleConns, int32(2),
+		"activeHandleConns should be 0-1, got %d", finalActiveHandleConns)
+
+	// 验证：应该接收到大量消息
+	minExpectedRecv := int32(float64(recvCount) * 0.5)
+	assert.Greater(t, finalRecvCount, minExpectedRecv,
+		"should have received at least %d messages, got %d", minExpectedRecv, finalRecvCount)
+
+	// 验证：没有出现静默问题（消息接收应该持续增长）
+	silenceMu.Lock()
+	assert.False(t, silenceDetected, "Silence was detected during test - possible connection issue!")
+	silenceMu.Unlock()
+}
+
+// newMessage 创建指定类型的消息
+func newMessage(msgType string, idx int) map[string]interface{} {
+	base := map[string]interface{}{
+		"post_type":    "message",
+		"message_type": "group",
+		"group_id":     123456,
+		"user_id":      789012,
+		"self_id":      114514,
+		"message_id":   float64(idx + 1000000),
+		"time":         time.Now().Unix(),
+	}
+
+	switch msgType {
+	case "text":
+		base["message"] = fmt.Sprintf("text message %d with some content", idx)
+	case "image":
+		base["message"] = map[string]interface{}{
+			"type": "image",
+			"data": map[string]interface{}{
+				"file":  fmt.Sprintf("image_%d.jpg", idx),
+				"url":   fmt.Sprintf("https://example.com/images/%d.jpg", idx),
+				"size":  1024 * 100,
+				"width": 1920,
+				"height": 1080,
+			},
+		}
+	case "video":
+		base["message"] = map[string]interface{}{
+			"type": "video",
+			"data": map[string]interface{}{
+				"file":    fmt.Sprintf("video_%d.mp4", idx),
+				"url":     fmt.Sprintf("https://example.com/videos/%d.mp4", idx),
+				"duration": 120,
+				"size":    1024 * 1024 * 50,
+			},
+		}
+	case "record":
+		base["message"] = map[string]interface{}{
+			"type": "record",
+			"data": map[string]interface{}{
+				"file":    fmt.Sprintf("audio_%d.mp3", idx),
+				"url":     fmt.Sprintf("https://example.com/audio/%d.mp3", idx),
+				"duration": 30,
+				"size":   1024 * 500,
+			},
+		}
+	case "file":
+		base["message"] = map[string]interface{}{
+			"type": "file",
+			"data": map[string]interface{}{
+				"file":    fmt.Sprintf("document_%d.pdf", idx),
+				"url":     fmt.Sprintf("https://example.com/files/%d.pdf", idx),
+				"name":    fmt.Sprintf("document_%d.pdf", idx),
+				"size":    1024 * 1024 * 10,
+			},
+		}
+	default:
+		base["message"] = fmt.Sprintf("unknown type message %d", idx)
+	}
+
+	return base
 }
