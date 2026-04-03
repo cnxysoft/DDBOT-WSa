@@ -17,8 +17,9 @@ var (
 
 // StartCookieRefreshMonitor 启动 Cookie 有效性监控和自动刷新
 func StartCookieRefreshMonitor(sub string) {
-	if !cfg.GetWeiboCookieRefreshEnable() {
-		logger.Debug("微博 Cookie 自动刷新功能未启用")
+	// API 模式才启动监控
+	if !cfg.IsWeiboAPIMode() {
+		logger.Debug("非 API 模式，不启动 Cookie 自动刷新监控")
 		return
 	}
 
@@ -136,8 +137,8 @@ func refreshCookieWithAPI(sub string) {
 
 // ManualRefreshCookie 手动触发 Cookie 刷新（供命令调用）
 func ManualRefreshCookie(sub string) error {
-	if !cfg.GetWeiboCookieRefreshEnable() {
-		return fmt.Errorf("微博 Cookie 自动刷新功能未启用")
+	if !cfg.IsWeiboAPIMode() {
+		return fmt.Errorf("非 API 模式，无法手动刷新 Cookie")
 	}
 
 	apiURL := cfg.GetWeiboCookieRefreshAPI()

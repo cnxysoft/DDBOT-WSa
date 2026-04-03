@@ -19,16 +19,16 @@ func freshCookieOpt(sub string) {
 	var cookies []*http.Cookie
 	var err error
 
-	// 如果启用了 Cookie 刷新 API，优先从 API 获取
-	if cfg.GetWeiboCookieRefreshEnable() {
+	// API 模式：强制从 API 获取
+	if cfg.IsWeiboAPIMode() {
 		cookies, err = FreshCookieFromAPI()
 		if err != nil {
-			logger.Errorf("FreshCookieFromAPI error %v, fallback to normal method", err)
+			logger.Errorf("FreshCookieFromAPI error %v", err)
+			logger.Warn("API 模式获取 Cookie 失败，微博功能可能无法正常使用")
+			return // 直接返回，不执行后续逻辑
 		}
-	}
-
-	// 如果从 API 获取失败或未启用 API，使用原有方法
-	if len(cookies) == 0 {
+	} else {
+		// 非 API 模式：使用原有逻辑
 		localutils.Retry(3, time.Second, func() bool {
 			if isGuestMode() {
 				cookies, err = FreshCookieGuest()
@@ -41,17 +41,61 @@ func freshCookieOpt(sub string) {
 
 	if err != nil {
 		logger.Errorf("FreshCookie error %v", err)
-	} else {
-		var opt []requests.Option
-		for _, cookie := range cookies {
-			// 如果配置了 SUB，使用配置的 SUB 值
-			if cookie.Name == "SUB" && sub != "" {
-				cookie.Value = sub
-			}
-			opt = append(opt, requests.HttpCookieOption(cookie))
-		}
-		visitorCookiesOpt.Store(opt)
+		return
 	}
+
+	var subValue string
+
+	// 优先使用配置中的 SUB（如果有）
+	if configuredSub := GetSettingCookie(); configuredSub != "" {
+		logger.Infof("使用配置中的 SUB")
+		subValue = configuredSub
+	} else if cfg.IsWeiboAPIMode() {
+		// API 模式：从 API 返回中提取 SUB
+		for _, cookie := range cookies {
+			if cookie.Name == "SUB" {
+				subValue = cookie.Value
+				break
+			}
+		}
+		if subValue == "" {
+			logger.Warnf("API 未返回 SUB Cookie")
+			return
+		}
+		logger.Infof("使用 API 返回的 SUB：%s...", subValue[:min(20, len(subValue))])
+
+		// 检查是否有 XSRF-TOKEN
+		var hasXsrf bool
+		for _, cookie := range cookies {
+			if cookie.Name == "XSRF-TOKEN" {
+				hasXsrf = true
+				break
+			}
+		}
+		if !hasXsrf {
+			logger.Warnf("API 未返回 XSRF-TOKEN Cookie，可能导致请求失败")
+		}
+	} else {
+		// 非 API 模式且无配置：使用原有逻辑生成的 Cookie
+		for _, cookie := range cookies {
+			if cookie.Name == "SUB" {
+				subValue = cookie.Value
+				break
+			}
+		}
+	}
+
+	if subValue == "" {
+		logger.Warnf("未找到有效的 SUB Cookie")
+		return
+	}
+
+	// 只设置 SUB Cookie
+	opt := []requests.Option{
+		requests.CookieOption("SUB", subValue),
+	}
+	visitorCookiesOpt.Store(opt)
+	logger.Infof("微博 SUB Cookie 已加载：%s...", subValue[:min(20, len(subValue))])
 }
 
 func GetSettingCookie() string {

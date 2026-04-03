@@ -23,6 +23,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -62,7 +63,7 @@ func (lgc *LspGroupCommand) Execute() {
 		if err := recover(); err != nil {
 			logger.WithField("stack", string(debug.Stack())).
 				Errorf("panic recovered: %v", err)
-			lgc.textReply("エラー発生：看到该信息表示BOT出了一些问题，该问题已记录")
+			lgc.textReply("エラー発生：看到该信息表示BOT出了一些问题，该問題已记录")
 		}
 	}()
 
@@ -159,6 +160,15 @@ func (lgc *LspGroupCommand) Execute() {
 				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
 			) {
 				lgc.CleanConcernCommand()
+			}
+		}
+	case ResubscribeCommand:
+		if lgc.requireNotDisable(ResubscribeCommand) {
+			if lgc.l.PermissionStateManager.RequireAny(
+				permission.AdminRoleRequireOption(lgc.uin()),
+				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+			) {
+				lgc.ResubscribeCommand()
 			}
 		}
 	default:
@@ -907,6 +917,41 @@ func (lgc *LspGroupCommand) CleanConcernCommand() {
 	ICleanConcern(lgc.NewMessageContext(log),
 		false, []int64{lgc.groupCode()}, cleanConcernCmd.Site, cleanConcernCmd.Type)
 
+}
+
+func (lgc *LspGroupCommand) ResubscribeCommand() {
+	log := lgc.DefaultLoggerWithCommand(lgc.CommandName())
+	log.Infof("run %v command", lgc.CommandName())
+	defer func() { log.Infof("%v command end", lgc.CommandName()) }()
+
+	if !lgc.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(lgc.uin()),
+		permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+	) {
+		lgc.textReply("权限不足")
+		return
+	}
+
+	// 调用微博 Concern 的一键重新订阅功能
+	weiboConcern, err := concern.GetConcernBySiteAndType("weibo", weibo.News)
+	if err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	wc, ok := weiboConcern.(*weibo.Concern)
+	if !ok {
+		lgc.textReply("失败 - 类型转换错误")
+		return
+	}
+
+	count, err := wc.ResubscribeAll(lgc.NewMessageContext(log), lgc.groupCode())
+	if err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	lgc.textSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
 }
 
 func (lgc *LspGroupCommand) DefaultLogger() *logrus.Entry {

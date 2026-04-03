@@ -20,6 +20,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
@@ -114,6 +115,8 @@ func (c *LspPrivateCommand) Execute() {
 		c.AbnormalConcernCheckCommand()
 	case CleanConcern:
 		c.CleanConcernCommand()
+	case ResubscribeCommand:
+		c.ResubscribeCommand()
 	default:
 		if CheckCustomPrivateCommand(c.CommandName()) {
 			func() {
@@ -226,8 +229,8 @@ func (c *LspPrivateCommand) CleanConcernCommand() {
 	var cleanConcernCmd struct {
 		Abnormal   bool    `optional:"" help:"清除异常订阅"`
 		GroupCodes []int64 `optional:"" short:"g" help:"清除指定群的订阅，多个可用英文逗号隔开"`
-		Site       string  `optional:"" short:"s" help:"清除指定的网站订阅,默认为全部"`
-		Type       string  `optional:"" short:"t" help:"清除指定的订阅类型,默认为全部"`
+		Site       string  `optional:"" short:"s" help:"清除指定的网站订阅，默认为全部"`
+		Type       string  `optional:"" short:"t" help:"清除指定的订阅类型，默认为全部"`
 	}
 
 	_, output := c.parseCommandSyntax(&cleanConcernCmd, c.CommandName())
@@ -240,7 +243,52 @@ func (c *LspPrivateCommand) CleanConcernCommand() {
 
 	ICleanConcern(c.NewMessageContext(log), cleanConcernCmd.Abnormal,
 		cleanConcernCmd.GroupCodes, cleanConcernCmd.Site, cleanConcernCmd.Type)
+}
 
+func (c *LspPrivateCommand) ResubscribeCommand() {
+	log := c.DefaultLoggerWithCommand(c.CommandName())
+	log.Infof("run %v command", c.CommandName())
+	defer func() { log.Infof("%v command end", c.CommandName()) }()
+
+	if !c.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(c.uin()),
+	) {
+		c.noPermission()
+		return
+	}
+
+	var resubscribeCmd struct {
+		GroupCode int64 `required:"" short:"g" help:"要重新订阅的群号码"`
+	}
+
+	_, output := c.parseCommandSyntax(&resubscribeCmd, c.CommandName())
+	if output != "" {
+		c.textReply(output)
+	}
+	if c.exit {
+		return
+	}
+
+	// 调用微博 Concern 的一键重新订阅功能
+	weiboConcern, err := concern.GetConcernBySiteAndType("weibo", weibo.News)
+	if err != nil {
+		c.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	wc, ok := weiboConcern.(*weibo.Concern)
+	if !ok {
+		c.textReply("失败 - 类型转换错误")
+		return
+	}
+
+	count, err := wc.ResubscribeAll(c.NewMessageContext(log), resubscribeCmd.GroupCode)
+	if err != nil {
+		c.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	c.textSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
 }
 
 func (c *LspPrivateCommand) WhosyourdaddyCommand() {
