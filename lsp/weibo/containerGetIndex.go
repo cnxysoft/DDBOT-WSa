@@ -32,7 +32,6 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 
 func apiContainerGetIndexProfileLogin(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
 	opts := buildRequestOptions(CreateReferer(uid))
-	opts = append(opts, requests.CookieOption("SUB", GetSettingCookie()))
 	opts = append(opts, CookieOption()...)
 	opts = append(opts, SetXsrfToken(opts))
 
@@ -62,29 +61,89 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 		ed := time.Now()
 		logger.WithField("FuncName", utils.FuncName()).Tracef("cost %v", ed.Sub(st))
 	}()
-	if isGuestMode() {
+	// API 模式或 Guest 模式：使用移动端 API（因为 API 返回的是移动端 Cookie）
+	if isGuestMode() || cfg.IsWeiboAPIMode() {
 		return apiContainerGetIndexCardsGuest(uid)
 	}
+	// Login 模式：使用桌面端 API
 	return apiContainerGetIndexCardsLogin(uid)
 }
 
 func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
+	// 获取 CookieOption
+	cookieOpts := CookieOption()
+	if len(cookieOpts) == 0 {
+		logger.Warnf("uid=%d: CookieOption 为空，未加载任何 Cookie", uid)
+	} else {
+		subValue := requests.ExtractCookieOption(cookieOpts, "SUB")
+		if subValue != "" {
+			logger.Debugf("uid=%d: 使用 SUB=%s...", uid, subValue[:min(20, len(subValue))])
+		} else {
+			logger.Warnf("uid=%d: CookieOption 中未找到 SUB", uid)
+		}
+	}
+
+	// 构建请求选项：先添加基础选项
 	opts := buildRequestOptions(CreateReferer(uid))
-	opts = append(opts, requests.CookieOption("SUB", GetSettingCookie()))
-	opts = append(opts, CookieOption()...)
+
+	// 然后添加 Cookie
+	opts = append(opts, cookieOpts...)
+
+	// 最后从完整的 opts 中提取 XSRF-TOKEN（这样就能从 Cookie 中提取了）
 	opts = append(opts, SetXsrfToken(opts))
+
+	// 调试：打印使用的 XSRF-TOKEN
+	xsrfToken := requests.ExtractCookieOption(cookieOpts, "XSRF-TOKEN")
+	if xsrfToken != "" {
+		logger.Debugf("uid=%d: 使用 XSRF-TOKEN=%s", uid, xsrfToken)
+	} else {
+		logger.Warnf("uid=%d: 未找到 XSRF-TOKEN", uid)
+	}
 
 	profileResp := new(ApiContainerGetIndexCardsResponse)
 	err := requests.Get(PathContainerGetIndex_Cards_Login, CreateParam(uid), &profileResp, opts...)
 	if err != nil {
+		// 调试：打印错误详情
+		logger.Errorf("uid=%d: 请求失败 - %v", uid, err)
+
+		// 尝试获取原始响应内容，看看返回了什么
+		var rawResp map[string]interface{}
+		rawErr := requests.Get(PathContainerGetIndex_Cards_Login, CreateParam(uid), &rawResp, opts...)
+		if rawErr != nil {
+			logger.Warnf("uid=%d: 无法解析为 JSON，可能返回了 HTML", uid)
+		}
+
+		// 如果是 API 模式且请求失败，提示用户可能需要配置 SUB
+		if cfg.IsWeiboAPIMode() && GetSettingCookie() == "" {
+			logger.Warnf("uid=%d: API 模式请求失败，建议您在 application.yaml 中配置有效的 SUB Cookie", uid)
+			logger.Warnf("uid=%d: 获取方法：登录 weibo.com → F12 → Application → Cookies → 复制 SUB 字段", uid)
+		}
 		return nil, err
 	}
+
+	// 调试：检查返回的 OK 状态
+	if profileResp.GetOk() != 1 {
+		logger.Warnf("uid=%d: API 返回非成功状态 ok=%d", uid, profileResp.GetOk())
+	}
+
 	return profileResp, nil
 }
 
 func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
+	// API 模式：使用从 API 获取的移动端 Cookie
+	// Guest 模式：使用自动生成的访客 Cookie
+	var cookieOpts []requests.Option
+	if cfg.IsWeiboAPIMode() {
+		cookieOpts = CookieOption()
+		if len(cookieOpts) == 0 {
+			logger.Warnf("uid=%d: API 模式 CookieOption 为空", uid)
+		}
+	} else {
+		cookieOpts = CookieOption()
+	}
+
 	opts := buildRequestOptions(CreateGuestReferer(uid))
-	opts = append(opts, CookieOption()...)
+	opts = append(opts, cookieOpts...)
 
 	guestResp := new(apiContainerGetIndexGuestCardsResponse)
 	err := requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)

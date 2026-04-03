@@ -201,11 +201,16 @@ func GetWeiboMode() string {
 		mode = "guest"
 		return mode
 	}
-	if mode != "guest" && mode != "login" {
+	if mode != "guest" && mode != "login" && mode != "api" {
 		logger.Warnf("GetWeiboMode invalid mode %q, fallback to guest", mode)
 		mode = "guest"
 	}
 	return mode
+}
+
+// IsWeiboAPIMode 检查是否使用 API 刷新模式
+func IsWeiboAPIMode() bool {
+	return GetWeiboMode() == "api"
 }
 
 func GetWeiboInterval() time.Duration {
@@ -214,6 +219,10 @@ func GetWeiboInterval() time.Duration {
 		interval = 30 * time.Second
 	}
 	return interval
+}
+
+func GetWeiboCookieRefreshAPI() string {
+	return strings.TrimSpace(config.GlobalConfig.GetString("weibo.cookieRefreshAPI"))
 }
 
 func GetExtDbEnable() bool {

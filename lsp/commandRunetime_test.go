@@ -20,7 +20,7 @@ func TestNewRuntime(t *testing.T) {
 	tc2 := tc.NewTestConcern(concern.GetNotifyChan(), test.Site2, []concern_type.Type{test.T2})
 	concern.RegisterConcern(tc2)
 
-	assert.Len(t, concern.ListSite(), 2)
+	assert.Len(t, concern.ListSite(), 3)
 	site, err := r.ParseRawSite(test.Site1)
 	assert.Nil(t, err)
 	assert.EqualValues(t, test.Site1, site)

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/admin"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -143,6 +144,8 @@ func Run() {
 	// 初始化 Modules
 	bot.StartService()
 
+	_, _ = admin.Start(&bot.Instance.Online, nil)
+
 	// 登录 跳过登录
 	//bot.Login()
 
@@ -257,10 +260,17 @@ douyin:
 # weibo 推送暂时需要设置 Cookie 才会启动。
 weibo:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
-  mode: guest             # weibo 运行模式，可选 guest / login
+  mode: guest             # weibo 运行模式，可选 guest / login / api
+                          # guest: 访客模式，自动生成临时 Cookie
+                          # login: 登录模式，需要配置 sub 或启用 qrlogin 扫码登录
+                          # api: API 模式，从外部 API 自动获取 Cookie（推荐）
   interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
-  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处。
-  qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录）
+  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时需要）。
+  qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
+  
+  # API 模式配置（当 mode: api 时使用）
+  # 从外部 API 自动获取 Cookie，无需手动配置 sub 或扫码登录
+  cookieRefreshAPI: "http://127.0.0.1:5000/api/Weibo/GetWeiboCookie"  # Cookie 刷新 API 地址
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
@@ -318,6 +328,10 @@ websocket:
   token:
   ws-server: 0.0.0.0:15630
   ws-reverse: ws://localhost:3001
+admin:
+  enable: false
+  addr: "127.0.0.1:15631"
+  token: ""
 
 # 自定义数据库设置
 # 启用后才会生成自定义数据库文件，并持久化保存

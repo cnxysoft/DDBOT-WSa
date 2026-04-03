@@ -74,6 +74,7 @@ const (
 	NoUpdateCommand      = "退订更新"
 	AbnormalConcernCheck = "检测异常订阅"
 	CleanConcern         = "清除订阅"
+	ResubscribeCommand   = "重新订阅" // 微博一键重新订阅
 )
 
 var allGroupCommand = [...]string{
