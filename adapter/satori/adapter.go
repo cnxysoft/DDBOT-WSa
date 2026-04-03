@@ -842,7 +842,7 @@ func (a *SatoriAdapter) handleReady(body readyBody) {
 		}
 		a.platform = login.Platform
 		a.loginUserID = login.User.ID
-		a.selfID = a.rememberID(login.User.ID)
+		a.selfID = a.rememberIDLocked(login.User.ID)
 		break
 	}
 	a.mu.Unlock()
@@ -864,7 +864,7 @@ func (a *SatoriAdapter) handleEvent(event eventBody) {
 	if event.Login != nil && event.Login.User != nil {
 		a.platform = event.Login.Platform
 		a.loginUserID = event.Login.User.ID
-		a.selfID = a.rememberID(event.Login.User.ID)
+		a.selfID = a.rememberIDLocked(event.Login.User.ID)
 	}
 	a.mu.Unlock()
 
@@ -1153,6 +1153,24 @@ func (a *SatoriAdapter) rawIDLocked(id int64) string {
 }
 
 func (a *SatoriAdapter) rememberID(raw string) int64 {
+	if raw == "" {
+		return 0
+	}
+	if value, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		a.mu.Lock()
+		a.idMap[value] = raw
+		a.mu.Unlock()
+		return value
+	}
+	hashed := hashStringToInt64(raw)
+	a.mu.Lock()
+	a.idMap[hashed] = raw
+	a.mu.Unlock()
+	return hashed
+}
+
+// rememberIDLocked 在持有 mu.Lock() 的情况下调用，避免重入死锁
+func (a *SatoriAdapter) rememberIDLocked(raw string) int64 {
 	if raw == "" {
 		return 0
 	}

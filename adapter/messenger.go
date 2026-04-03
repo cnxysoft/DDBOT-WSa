@@ -512,12 +512,13 @@ func (m *Messenger) AddGroupMember(groupID, userID int64) error {
 
 // RemoveGroupMember removes a member from the group cache after receiving a group_decrease event
 func (m *Messenger) RemoveGroupMember(groupID, userID int64) {
-	m.groupMu.Lock()
-	defer m.groupMu.Unlock()
+	// 先查找 group（不持有锁），避免在持有 groupMu.Lock() 的情况下调用需要 RLock 的 FindGroupByUin
 	group := m.FindGroupByUin(groupID)
 	if group == nil {
 		return
 	}
+	m.groupMu.Lock()
+	defer m.groupMu.Unlock()
 	for i, member := range group.Members {
 		if member.Uin == userID {
 			group.Members = append(group.Members[:i], group.Members[i+1:]...)
