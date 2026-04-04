@@ -45,17 +45,38 @@ func freshCookieOpt(sub string) {
 	}
 
 	var subValue string
+	var xsrfToken string
 
-	// 优先使用配置中的 SUB（如果有）
-	if configuredSub := GetSettingCookie(); configuredSub != "" {
+	// 优先使用传入的 sub 参数（如果有效）
+	if sub != "" {
+		logger.Infof("使用传入的 SUB 参数：%s...", sub[:min(20, len(sub))])
+		subValue = sub
+		// 从 cookies 中提取 XSRF-TOKEN（login 模式下 FreshCookieLogin 会返回）
+		for _, cookie := range cookies {
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
+				break
+			}
+		}
+	} else if configuredSub := GetSettingCookie(); configuredSub != "" {
+		// 其次使用配置中的 SUB
 		logger.Infof("使用配置中的 SUB")
 		subValue = configuredSub
+		// 从 cookies 中提取 XSRF-TOKEN
+		for _, cookie := range cookies {
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
+				break
+			}
+		}
 	} else if cfg.IsWeiboAPIMode() {
-		// API 模式：从 API 返回中提取 SUB
+		// API 模式：从 API 返回中提取 SUB 和 XSRF-TOKEN
 		for _, cookie := range cookies {
 			if cookie.Name == "SUB" {
 				subValue = cookie.Value
-				break
+			}
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
 			}
 		}
 		if subValue == "" {
@@ -64,15 +85,7 @@ func freshCookieOpt(sub string) {
 		}
 		logger.Infof("使用 API 返回的 SUB：%s...", subValue[:min(20, len(subValue))])
 
-		// 检查是否有 XSRF-TOKEN
-		var hasXsrf bool
-		for _, cookie := range cookies {
-			if cookie.Name == "XSRF-TOKEN" {
-				hasXsrf = true
-				break
-			}
-		}
-		if !hasXsrf {
+		if xsrfToken == "" {
 			logger.Warnf("API 未返回 XSRF-TOKEN Cookie，可能导致请求失败")
 		}
 	} else {
@@ -80,7 +93,9 @@ func freshCookieOpt(sub string) {
 		for _, cookie := range cookies {
 			if cookie.Name == "SUB" {
 				subValue = cookie.Value
-				break
+			}
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
 			}
 		}
 	}
@@ -90,9 +105,15 @@ func freshCookieOpt(sub string) {
 		return
 	}
 
-	// 只设置 SUB Cookie
+	// 设置 SUB 和 XSRF-TOKEN Cookie
 	opt := []requests.Option{
 		requests.CookieOption("SUB", subValue),
+	}
+	if xsrfToken != "" {
+		opt = append(opt, requests.CookieOption("XSRF-TOKEN", xsrfToken))
+		logger.Debugf("已加载 XSRF-TOKEN: %s...", xsrfToken[:min(10, len(xsrfToken))])
+	} else {
+		logger.Warnf("未找到 XSRF-TOKEN，部分 API 请求可能失败")
 	}
 	visitorCookiesOpt.Store(opt)
 	logger.Infof("微博 SUB Cookie 已加载：%s...", subValue[:min(20, len(subValue))])

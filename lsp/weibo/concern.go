@@ -52,10 +52,33 @@ func (c *Concern) Start() error {
 		logger.Info("微博运行模式：API 模式，将从外部 API 自动获取 Cookie")
 		// API 模式下 sub 保持为空，freshCookieOpt 会从 API 获取
 	} else if !isGuest {
-		// Login 模式：检查 cookie 或扫码登录
+		// Login 模式：检查 cookie、autorefresh 或扫码登录
 		sub = GetSettingCookie()
 		if sub == "" {
-			if GetQRLoginEnable() {
+			// 如果启用了 autorefresh，尝试从 API 获取初始 SUB（仅内存使用）
+			if cfg.GetWeiboAutoRefresh() {
+				apiURL := cfg.GetWeiboCookieRefreshAPI()
+				if apiURL != "" {
+					logger.Info("检测到 weibo.sub 为空但已启用 autorefresh，尝试从 API 获取初始 SUB...")
+					cookies, err := FreshCookieFromAPI()
+					if err != nil {
+						logger.Errorf("从 API 获取初始 SUB 失败：%v", err)
+					} else {
+						apiSub := ExtractSUBFromCookies(cookies)
+						if apiSub != "" {
+							sub = apiSub
+							logger.Infof("从 API 成功获取初始 SUB（仅内存使用）：%s...", sub[:min(20, len(sub))])
+						} else {
+							logger.Warn("API 未返回有效的 SUB Cookie")
+						}
+					}
+				} else {
+					logger.Warn("weibo.autorefresh 已启用但未配置 cookieRefreshAPI")
+				}
+			}
+
+			// 如果仍然没有 SUB，尝试扫码登录
+			if sub == "" && GetQRLoginEnable() {
 				logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
 				obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
 				if err != nil {
@@ -65,8 +88,11 @@ func (c *Concern) Start() error {
 				}
 				sub = obtained
 				logger.Infof("扫码登录成功，已获取 SUB。请写入 application.yaml -> weibo.sub 以便下次启动：%s", sub)
-			} else {
-				logger.Warn("微博 Cookie 未设置，将关闭微博推送功能。开启 weibo.qrlogin 可自动扫码获取。")
+			}
+
+			// 如果仍然没有 SUB，模块关闭
+			if sub == "" {
+				logger.Warn("微博 Cookie 未设置，将关闭微博推送功能。可开启 weibo.qrlogin 扫码或配置 weibo.autorefresh + cookieRefreshAPI 自动获取。")
 				return nil
 			}
 		}
@@ -77,6 +103,11 @@ func (c *Concern) Start() error {
 	// API 模式下启动自动监控
 	if isAPI {
 		StartCookieRefreshMonitor(sub)
+	}
+
+	// Login 模式下启动 SUB 自动刷新
+	if !isGuest && !isAPI {
+		StartSubAutoRefresh()
 	}
 
 	if !isGuest && !isAPI {
@@ -157,6 +188,9 @@ func (c *Concern) Stop() {
 
 	// 停止 Cookie 监控
 	StopCookieRefreshMonitor()
+
+	// 停止 SUB 自动刷新
+	StopSubAutoRefresh()
 
 	c.StateManager.Stop()
 	logger.Tracef("%v StateManager 已停止", Site)

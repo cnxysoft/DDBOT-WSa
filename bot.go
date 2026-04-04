@@ -267,6 +267,11 @@ weibo:
   interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
   sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时需要）。
   qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
+  autorefresh: false      # 是否启用 SUB 自动刷新（仅 mode: login 时有效）
+                          # 启用后：1) 启动时若 sub 为空则从 API 获取（仅内存使用）
+                          #      2) 每小时检查 SUB 是否变化，不同则自动替换（仅内存）
+                          #      3) 需要配合 cookieRefreshAPI 使用
+                          # 注意：不会修改配置文件中的 weibo.sub
   
   # API 模式配置（当 mode: api 时使用）
   # 从外部 API 自动获取 Cookie，无需手动配置 sub 或扫码登录

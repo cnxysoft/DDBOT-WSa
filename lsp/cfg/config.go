@@ -225,6 +225,11 @@ func GetWeiboCookieRefreshAPI() string {
 	return strings.TrimSpace(config.GlobalConfig.GetString("weibo.cookieRefreshAPI"))
 }
 
+// GetWeiboAutoRefresh 检查是否启用 SUB 自动刷新功能（仅 login 模式有效）
+func GetWeiboAutoRefresh() bool {
+	return config.GlobalConfig.GetBool("weibo.autorefresh")
+}
+
 func GetExtDbEnable() bool {
 	return config.GlobalConfig.GetBool("extDb.enable")
 }
