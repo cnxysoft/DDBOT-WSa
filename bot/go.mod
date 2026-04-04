@@ -12,7 +12,7 @@ replace (
 require (
 	github.com/Mrs4s/MiraiGo v0.0.0-20230627090859-19e3d172596e
 	github.com/cnxysoft/DDBOT-WSa v0.0.0-20250620022611-51ba1e929e90
-	github.com/cnxysoft/DDBOT-WSa/adapter v0.0.0-00010101000000-000000000000
+	github.com/cnxysoft/DDBOT-WSa/adapter v0.0.0
 	github.com/fumiama/go-base16384 v1.7.0
 	github.com/guonaihong/gout v0.3.7
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible

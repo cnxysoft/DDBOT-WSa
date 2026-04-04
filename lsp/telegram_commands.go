@@ -1,15 +1,18 @@
 package lsp
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
 	lsptelegram "github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 )
 
 // StartTelegramCommands sets up a Telegram receiving loop that parses commands
@@ -45,7 +48,7 @@ func (l *Lsp) StartTelegramCommands() {
 			lsptelegram.SendToChat(chatID, mmsg.NewText("pong"))
 			return
 		case "help":
-			lsptelegram.SendToChat(chatID, mmsg.NewText("可用命令: /whosyourdaddy /list /watch /unwatch /enable /disable /grant /config /silence /abnormal /clean /noupdate /help /ping\n说明: 在群聊中可省略 -g；站点默认 bilibili，仅在其他平台时使用 -s\n示例: /watch -s bilibili -t live 123456"))
+			lsptelegram.SendToChat(chatID, mmsg.NewText("可用命令：/whosyourdaddy /list /watch /unwatch /enable /disable /grant /config /silence /abnormal /clean /noupdate /resubscribe /help /ping\n说明：在群聊中可省略 -g；站点默认 bilibili，仅在其他平台时使用 -s\n示例：/watch -s bilibili -t live 123456\n/resubscribe -g <群号> - 一键重新订阅该群的所有微博用户"))
 			return
 		case "whosyourdaddy":
 			c := tgL.newTGContext(chatID, fromID, senderUin, 0)
@@ -363,12 +366,49 @@ func (l *Lsp) StartTelegramCommands() {
 			} else {
 				err = localdb.Set(key, "")
 				if err == nil {
-					c.TextReply("成功 - 您将不再接受更新消息")
+					c.TextReply("成功 - 您不再接受更新消息")
 				}
 			}
 			if err != nil {
 				c.TextReply("失败 - " + err.Error())
 			}
+			return
+		case "resubscribe", "重新订阅":
+			// /resubscribe -g <群号>
+			group, _, _ := parseFlags(args, defaultGroup)
+			if group == 0 {
+				lsptelegram.SendToChat(chatID, mmsg.NewText("用法：/resubscribe -g <群号>"))
+				return
+			}
+			c := tgL.newTGContext(chatID, fromID, senderUin, group)
+			// 检查权限：需要管理员权限
+			if !tgL.PermissionStateManager.RequireAny(
+				permission.AdminRoleRequireOption(senderUin),
+			) {
+				c.TextReply("权限不足")
+				return
+			}
+
+			// 调用微博 Concern 的一键重新订阅功能
+			weiboConcern, err := concern.GetConcernBySiteAndType("weibo", weibo.News)
+			if err != nil {
+				c.TextReply(fmt.Sprintf("失败 - %v", err))
+				return
+			}
+
+			wc, ok := weiboConcern.(*weibo.Concern)
+			if !ok {
+				c.TextReply("失败 - 类型转换错误")
+				return
+			}
+
+			count, err := wc.ResubscribeAll(c, group)
+			if err != nil {
+				c.TextReply(fmt.Sprintf("失败 - %v", err))
+				return
+			}
+
+			c.TextSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
 			return
 		default:
 			// 仅当用户使用了可识别的前缀（配置前缀或以'/'开头）时才回复未知命令，避免在群内刷屏
