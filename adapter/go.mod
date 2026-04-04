@@ -6,11 +6,13 @@ replace (
 	github.com/Mrs4s/MiraiGo => ../miraigo
 	github.com/Sora233/MiraiGo-Template => ../bot
 	github.com/cnxysoft/DDBOT-WSa/utils => ../utils
+	github.com/cnxysoft/DDBOT-WSa/utils/qqlog => ../utils/qqlog
 )
 
 require (
 	github.com/Mrs4s/MiraiGo v0.0.0-20230627090859-19e3d172596e
 	github.com/Sora233/MiraiGo-Template v0.0.0-20250614161613-2c6ee7380548
+	github.com/cnxysoft/DDBOT-WSa/utils/qqlog v0.0.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1

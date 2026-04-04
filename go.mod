@@ -14,6 +14,8 @@ replace github.com/cnxysoft/DDBOT-WSa/adapter/onebot-v11 => ./adapter/onebot-v11
 
 replace github.com/cnxysoft/DDBOT-WSa/adapter/satori => ./adapter/satori
 
+replace github.com/cnxysoft/DDBOT-WSa/utils/qqlog => ./utils/qqlog
+
 require (
 	github.com/Jeffail/gabs/v2 v2.7.0
 	github.com/Mrs4s/MiraiGo v0.0.0-20230627090859-19e3d172596e
@@ -21,8 +23,9 @@ require (
 	github.com/Sora233/MiraiGo-Template v0.0.0-20250614161613-2c6ee7380548
 	github.com/Sora233/sliceutil v0.0.0-20210120043858-459badd8d882
 	github.com/alecthomas/kong v0.7.1
-	github.com/cnxysoft/DDBOT-WSa/adapter v0.0.0-00010101000000-000000000000
+	github.com/cnxysoft/DDBOT-WSa/adapter v0.0.0
 	github.com/cnxysoft/DDBOT-WSa/lsp/eventbus v0.0.0-20251103113836-bf7ecd344df7
+	github.com/cnxysoft/DDBOT-WSa/utils/qqlog v0.0.0
 	github.com/davecgh/go-spew v1.1.1
 	github.com/dimchansky/utfbom v1.1.1
 	github.com/ericpauley/go-quantize v0.0.0-20200331213906-ae555eb2afa4

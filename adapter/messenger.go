@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	"github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
 )
@@ -73,6 +74,12 @@ type Messenger struct {
 	wg       sync.WaitGroup
 
 	eventDispatcher BotEventDispatcher
+
+	// 消息统计
+	groupMsgCount    atomic.Int64
+	privateMsgCount  atomic.Int64
+	groupSendCount   atomic.Int64
+	privateSendCount atomic.Int64
 }
 
 func NewMessenger(adapter Adapter) *Messenger {
@@ -85,7 +92,30 @@ func NewMessenger(adapter Adapter) *Messenger {
 
 	m.registerEventHandlers()
 
+	// 启动统计汇总定时器
+	go m.summaryTicker()
+
 	return m
+}
+
+// summaryTicker 每分钟输出一次消息统计汇总
+func (m *Messenger) summaryTicker() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if !qqlog.Enabled {
+				// qq-logs 未启用，输出统计到主日志
+				messengerLogger.Infof("消息统计: 收群消息 %d, 收私聊 %d, 发群消息 %d, 发私聊 %d",
+					m.groupMsgCount.Load(), m.privateMsgCount.Load(),
+					m.groupSendCount.Load(), m.privateSendCount.Load())
+			}
+		case <-m.stopChan:
+			return
+		}
+	}
 }
 
 func (m *Messenger) SetBotEventDispatcher(dispatcher BotEventDispatcher) {
@@ -155,7 +185,19 @@ func (m *Messenger) GetSelfID() int64 {
 func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessage, newstr string) SendResp {
 	messages := m.buildMessageSegments(msg)
 
+	// 获取群名称
+	groupName := "未知群聊"
+	if group := m.FindGroup(groupCode); group != nil {
+		groupName = group.Name
+	}
+
+	// 记录发送日志
+	if qqlog.Logger != nil {
+		qqlog.Logger.Infof("发送 群消息 给 %s(%d): %s", groupName, groupCode, newstr)
+	}
+
 	msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
+	m.groupSendCount.Add(1)
 	if err != nil {
 		messengerLogger.Errorf("Send group message failed: %v", err)
 		return SendResp{
@@ -180,7 +222,19 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessag
 func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage, newstr string) *message.PrivateMessage {
 	messages := m.buildMessageSegments(msg)
 
+	// 获取好友昵称
+	nickname := "未知用户"
+	if friend := m.FindFriend(target); friend != nil {
+		nickname = friend.Nickname
+	}
+
+	// 记录发送日志
+	if qqlog.Logger != nil {
+		qqlog.Logger.Infof("发送 私聊消息 给 %s(%d): %s", nickname, target, newstr)
+	}
+
 	msgID, err := m.Adapter.SendPrivateMessage(target, messages)
+	m.privateSendCount.Add(1)
 	if err != nil {
 		messengerLogger.Errorf("Send private message failed: %v", err)
 		return &message.PrivateMessage{Id: -1}
@@ -834,9 +888,11 @@ func (m *Messenger) handleRequestEvent(event *RequestEvent) {
 }
 
 func (m *Messenger) handleGroupMessage(event *GroupMessageEvent) {
+	m.groupMsgCount.Add(1)
 	messengerLogger.Debugf("handleGroupMessage called: group=%d, user=%d, msgID=%d", event.GroupID, event.UserID, event.MessageID)
 
 	msg := &message.GroupMessage{
+
 		Id:        int32(event.MessageID),
 		GroupCode: event.GroupID,
 		GroupName: "",
@@ -872,6 +928,7 @@ func (m *Messenger) handleGroupMessage(event *GroupMessageEvent) {
 }
 
 func (m *Messenger) handlePrivateMessage(event *PrivateMessageEvent) {
+	m.privateMsgCount.Add(1)
 	isFriend := m.FindFriend(event.UserID) != nil
 	nickname := ""
 	if !isFriend {

@@ -1048,11 +1048,21 @@ func reCall(msg interface{}) bool {
 	var msgId int32
 	switch e := msg.(type) {
 	case *message.GroupMessage:
-
 		msgId = e.Id
+		for _, elem := range e.Elements {
+			if re, ok := elem.(*message.ReplyElement); ok {
+				msgId = re.ReplySeq
+				break
+			}
+		}
 	case *message.PrivateMessage:
-
 		msgId = e.Id
+		for _, elem := range e.Elements {
+			if re, ok := elem.(*message.ReplyElement); ok {
+				msgId = re.ReplySeq
+				break
+			}
+		}
 	default:
 		panic(fmt.Sprintf("需要撤回的消息类型无法解析: %v", msg))
 	}

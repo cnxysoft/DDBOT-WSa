@@ -40,7 +40,6 @@ func (handle *EventHandle[T]) dispatch(client *QQClient, event T) {
 			fmt.Printf("event error: %v\n%s", pan, debug.Stack())
 		}
 	}()
-	fmt.Printf("dispatch: handlers count = %d\n", len(handle.handlers))
 	for _, handler := range handle.handlers {
 		handler(client, event)
 	}

@@ -1,22 +1,47 @@
 package logging
 
 import (
+	"io"
+	"os"
+	"path"
+	"sync"
+	"time"
+
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
+	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
-	"io"
-	"path"
-	"sync"
-	"time"
 
 	"github.com/Sora233/MiraiGo-Template/bot"
 )
+
+// levelWriter 根据日志级别将输出分流到 stdout 或 stderr
+type levelWriter struct {
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func (w *levelWriter) Write(p []byte) (n int, err error) {
+	// logrus 在写入前会在消息前添加 "level=\"warn\" " 这样的前缀
+	// 通过检测前缀判断级别
+	if len(p) >= 7 && string(p[0:7]) == `level="` {
+		// 提取级别标识
+		rest := p[7:]
+		if len(rest) >= 4 {
+			level := string(rest[0:4])
+			if level == "warn" || level == "erro" || level == "fata" {
+				return w.stderr.Write(p)
+			}
+		}
+	}
+	return w.stdout.Write(p)
+}
 
 const moduleId = "ddbot.logging"
 
@@ -40,28 +65,37 @@ func (m *logging) MiraiGoModule() bot.ModuleInfo {
 }
 
 func (m *logging) Init() {
-	// create a new logger for qq log
-	writer, err := rotatelogs.New(
-		path.Join("qq-logs", "%Y-%m-%d.log"),
-		rotatelogs.WithMaxAge(7*24*time.Hour),
-		rotatelogs.WithRotationTime(24*time.Hour),
-	)
-	if err != nil {
-		logrus.WithError(err).Error("unable to write logs")
-		return
-	}
-	qqlog := logrus.New()
+	qqLogger := logrus.New()
+
 	if !config.GlobalConfig.GetBool("qq-logs.enabled") && !config.GlobalConfig.GetBool("qq-logs.enable") {
-		qqlog.Out = io.Discard
+		// 未启用时丢弃所有输出
+		qqLogger.Out = io.Discard
+		qqlog.Enabled = false
+	} else {
+		qqlog.Enabled = true
+		// 创建文件 writer
+		writer, err := rotatelogs.New(
+			path.Join("qq-logs", "%Y-%m-%d.log"),
+			rotatelogs.WithMaxAge(7*24*time.Hour),
+			rotatelogs.WithRotationTime(24*time.Hour),
+		)
+		if err != nil {
+			logrus.WithError(err).Error("unable to write logs")
+			return
+		}
+		// 使用 levelWriter 根据日志级别分流到 stdout/stderr，同时写入文件
+		lvWriter := &levelWriter{stdout: os.Stdout, stderr: os.Stderr}
+		qqLogger.SetOutput(io.MultiWriter(writer, lvWriter))
+		qqLogger.AddHook(lfshook.NewHook(writer, &logrus.TextFormatter{
+			FullTimestamp:    true,
+			PadLevelText:     true,
+			QuoteEmptyFields: true,
+			ForceQuote:       true,
+		}))
 	}
-	qqlog.AddHook(lfshook.NewHook(writer, &logrus.TextFormatter{
-		FullTimestamp:    true,
-		PadLevelText:     true,
-		QuoteEmptyFields: true,
-		ForceQuote:       true,
-	}))
-	qqlog.SetLevel(logrus.DebugLevel)
-	logger = qqlog.WithField("module", moduleId)
+	qqLogger.SetLevel(logrus.DebugLevel)
+	logger = qqLogger.WithField("module", moduleId)
+	qqlog.Init(logger)
 }
 
 func (m *logging) PostInit() {
@@ -95,25 +129,15 @@ func (m *logging) Stop(b *bot.Bot, wg *sync.WaitGroup) {
 }
 
 func logGroupMessage(msg *message.GroupMessage) {
-	logger.WithFields(localutils.GroupLogFields(msg.GroupCode)).
-		WithFields(logrus.Fields{
-			"From":       "GroupMessage",
-			"MessageID":  msg.Id,
-			"MessageIID": msg.InternalId,
-			"SenderID":   msg.Sender.Uin,
-			"SenderName": msg.Sender.DisplayName(),
-		}).Info(msgstringer.MsgToString(msg.Elements))
+	name := msg.Sender.CardName
+	if name == "" {
+		name = msg.Sender.Nickname
+	}
+	logger.Infof("收到群 %s(%d) 内 %s(%d) 的消息: %s (%d)", msg.GroupName, msg.GroupCode, name, msg.Sender.Uin, msgstringer.MsgToString(msg.Elements), msg.Id)
 }
 
 func logPrivateMessage(msg *message.PrivateMessage) {
-	logger.WithFields(logrus.Fields{
-		"From":       "PrivateMessage",
-		"MessageID":  msg.Id,
-		"MessageIID": msg.InternalId,
-		"SenderID":   msg.Sender.Uin,
-		"SenderName": msg.Sender.DisplayName(),
-		"Target":     msg.Target,
-	}).Info(msgstringer.MsgToString(msg.Elements))
+	logger.Infof("收到 %s(%d) 的私聊消息: %s (%d)", msg.Sender.Nickname, msg.Sender.Uin, msgstringer.MsgToString(msg.Elements), msg.Id)
 }
 
 func logFriendMessageRecallEvent(event *client.FriendMessageRecalledEvent) {
@@ -200,11 +224,6 @@ func registerLog(b *bot.Bot) {
 		logDisconnect(event)
 	})
 
-	b.SelfGroupMessageEvent.Subscribe(func(qqClient *client.QQClient, groupMessage *message.GroupMessage) {
-		logGroupMessage(groupMessage)
-	})
-
-	b.SelfPrivateMessageEvent.Subscribe(func(qqClient *client.QQClient, privateMessage *message.PrivateMessage) {
-		logPrivateMessage(privateMessage)
-	})
+	// Note: SelfGroupMessageEvent and SelfPrivateMessageEvent are not logged separately
+	// to avoid duplicate logs when bot sends messages
 }

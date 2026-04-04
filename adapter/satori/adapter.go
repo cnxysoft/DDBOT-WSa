@@ -262,11 +262,6 @@ func (a *SatoriAdapter) SendGroupMessage(groupID int64, message interface{}) (in
 	}
 	segments := adapter.ParseMessageSegments(message)
 	content := a.renderMessageContent(segments)
-	if len(content) > 200 {
-		logger.Debugf("Satori SendGroupMessage to %d: %s...[truncated %d chars]", groupID, content[:200], len(content)-200)
-	} else {
-		logger.Debugf("Satori SendGroupMessage to %d: %s", groupID, content)
-	}
 	data, err := a.SendApi("message.create", map[string]interface{}{
 		"channel_id": channelID,
 		"content":    content,
@@ -294,11 +289,6 @@ func (a *SatoriAdapter) SendPrivateMessage(userID int64, message interface{}) (i
 	}
 	segments := adapter.ParseMessageSegments(message)
 	content := a.renderMessageContent(segments)
-	if len(content) > 200 {
-		logger.Debugf("Satori SendPrivateMessage to %d: %s...[truncated %d chars]", userID, content[:200], len(content)-200)
-	} else {
-		logger.Debugf("Satori SendPrivateMessage to %d: %s", userID, content)
-	}
 	data, err := a.SendApi("message.create", map[string]interface{}{
 		"channel_id": channelID,
 		"content":    content,
@@ -1025,7 +1015,6 @@ func (a *SatoriAdapter) dispatchNoticeEvent(event *adapter.NoticeEvent) {
 	a.mu.RLock()
 	handlers := append([]func(*adapter.NoticeEvent){}, a.noticeEventHandlers...)
 	a.mu.RUnlock()
-	logger.Debugf("Satori notice handlers count: %d", len(handlers))
 	for _, handler := range handlers {
 		handler(event)
 	}
@@ -1036,7 +1025,6 @@ func (a *SatoriAdapter) dispatchRequestEvent(event *adapter.RequestEvent) {
 	a.mu.RLock()
 	handlers := append([]func(*adapter.RequestEvent){}, a.requestEventHandlers...)
 	a.mu.RUnlock()
-	logger.Debugf("Satori request handlers count: %d", len(handlers))
 	for _, handler := range handlers {
 		handler(event)
 	}

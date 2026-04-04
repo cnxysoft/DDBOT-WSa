@@ -315,6 +315,11 @@ customCommandPrefix:
 # 日志等级，可选值：trace / debug / info / warn / error
 logLevel: info
 
+# QQ 消息日志，记录收发的 QQ 消息，输出到 qq-logs 文件夹
+# enable: true 启用，false 禁用（默认启用）
+qq-logs:
+  enable: true
+
 # 适配器选择：onebot-v11（默认）
 adapter:
   mode: onebot-v11
