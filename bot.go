@@ -262,14 +262,21 @@ weibo:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
   mode: guest             # weibo 运行模式，可选 guest / login / api
                           # guest: 访客模式，自动生成临时 Cookie
-                          # login: 登录模式，需要配置 sub 或启用 qrlogin 扫码登录
-                          # api: API 模式，从外部 API 自动获取 Cookie（推荐）
+                          # login: 登录模式，需要配置 sub 或启用 qrlogin/autorefresh
+                          # api: API 模式，从外部 API 自动获取 Cookie（推荐，但当出现api获取到的sub无法使用时请尝试使用login模式并开启autorefresh）
   interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
-  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时需要）。
+  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时可选）。
   qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
+  autorefresh: false      # 是否启用 SUB 自动刷新（mode: login/api 时有效）
+                          # 启用后：1) 启动时若 sub 为空则从 API 获取初始化（仅内存）
+                          #      2) 每小时检查 SUB 是否变化，不同则自动替换（仅内存）
+                          #      3) 只使用 SUB + XSRF-TOKEN，丢弃其他可能无效的字段
+                          #      4) 需要配合 cookieRefreshAPI 使用
+                          # 注意：不会修改配置文件中的 weibo.sub，每次重启重新获取
   
-  # API 模式配置（当 mode: api 时使用）
+  # API 模式配置（mode: api 或 mode: login + autorefresh 时使用）
   # 从外部 API 自动获取 Cookie，无需手动配置 sub 或扫码登录
+  # API 返回的所有 Cookie 中只会提取 SUB 和 XSRF-TOKEN 使用
   cookieRefreshAPI: "http://127.0.0.1:5000/api/Weibo/GetWeiboCookie"  # Cookie 刷新 API 地址
 
 youtube:

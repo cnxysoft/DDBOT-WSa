@@ -112,23 +112,46 @@ func refreshCookieWithAPI(sub string) {
 		return
 	}
 
-	// 应用新的 Cookie
-	var opt []requests.Option
+	// 提取 SUB 和 XSRF-TOKEN（和 login + autorefresh 模式一致）
+	var newSub string
+	var xsrfToken string
 	for _, cookie := range cookies {
-		// 保留用户配置的 SUB 值
-		if cookie.Name == "SUB" && sub != "" {
-			cookie.Value = sub
-			logger.Debug("使用配置中的 SUB 值")
+		if cookie.Name == "SUB" {
+			newSub = cookie.Value
 		}
-		opt = append(opt, requests.HttpCookieOption(cookie))
+		if cookie.Name == "XSRF-TOKEN" {
+			xsrfToken = cookie.Value
+		}
+	}
+
+	if newSub == "" {
+		logger.Error("API 未返回有效的 SUB Cookie")
+		return
+	}
+
+	// 如果传入了 sub 参数，优先使用传入的值（兼容旧逻辑）
+	if sub != "" {
+		newSub = sub
+		logger.Debug("使用传入的 SUB 值")
+	}
+
+	// 只设置 SUB 和 XSRF-TOKEN（和 login 模式一致）
+	opt := []requests.Option{
+		requests.CookieOption("SUB", newSub),
+	}
+	if xsrfToken != "" {
+		opt = append(opt, requests.CookieOption("XSRF-TOKEN", xsrfToken))
+		logger.Debugf("已加载 XSRF-TOKEN: %s...", xsrfToken[:min(10, len(xsrfToken))])
+	} else {
+		logger.Warn("API 未返回 XSRF-TOKEN，可能导致部分请求失败")
 	}
 
 	visitorCookiesOpt.Store(opt)
-	logger.Info("微博 Cookie 已成功从 API 刷新")
+	logger.Info("微博 Cookie 已成功从 API 刷新（仅 SUB + XSRF-TOKEN）")
 
 	// 刷新后验证 Cookie 是否有效
 	time.Sleep(1 * time.Second)
-	if isCookieValid(sub) {
+	if isCookieValid(newSub) {
 		logger.Info("Cookie 刷新验证成功")
 	} else {
 		logger.Warn("Cookie 刷新后验证失败，可能需要检查 API 返回的 Cookie 是否正确")

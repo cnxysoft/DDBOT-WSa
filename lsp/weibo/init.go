@@ -19,13 +19,28 @@ func freshCookieOpt(sub string) {
 	var cookies []*http.Cookie
 	var err error
 
-	// API 模式：强制从 API 获取
-	if cfg.IsWeiboAPIMode() {
+	// 如果传入了有效的 sub，直接使用（API 模式和 autorefresh 都会传入）
+	if sub != "" {
+		// 只需要获取 XSRF-TOKEN，SUB 已经由调用方提供
+		localutils.Retry(3, time.Second, func() bool {
+			if isGuestMode() {
+				cookies, err = FreshCookieGuest()
+			} else {
+				cookies, err = FreshCookieLogin()
+			}
+			return err == nil
+		})
+		if err != nil {
+			logger.Errorf("FreshCookie error %v", err)
+			return
+		}
+	} else if cfg.IsWeiboAPIMode() {
+		// API 模式且未传入 sub：从 API 获取（兼容旧逻辑）
 		cookies, err = FreshCookieFromAPI()
 		if err != nil {
 			logger.Errorf("FreshCookieFromAPI error %v", err)
 			logger.Warn("API 模式获取 Cookie 失败，微博功能可能无法正常使用")
-			return // 直接返回，不执行后续逻辑
+			return
 		}
 	} else {
 		// 非 API 模式：使用原有逻辑
@@ -45,43 +60,48 @@ func freshCookieOpt(sub string) {
 	}
 
 	var subValue string
+	var xsrfToken string
 
-	// 优先使用配置中的 SUB（如果有）
-	if configuredSub := GetSettingCookie(); configuredSub != "" {
+	// 优先使用传入的 sub 参数（如果有效）
+	if sub != "" {
+		logger.Infof("使用传入的 SUB 参数：%s...", sub[:min(20, len(sub))])
+		subValue = sub
+		// 从 cookies 中提取 XSRF-TOKEN
+		for _, cookie := range cookies {
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
+				break
+			}
+		}
+	} else if configuredSub := GetSettingCookie(); configuredSub != "" {
+		// 其次使用配置中的 SUB
 		logger.Infof("使用配置中的 SUB")
 		subValue = configuredSub
-	} else if cfg.IsWeiboAPIMode() {
-		// API 模式：从 API 返回中提取 SUB
+		// 从 cookies 中提取 XSRF-TOKEN
+		for _, cookie := range cookies {
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
+				break
+			}
+		}
+	} else {
+		// 从 API 或其他方式返回的 cookies 中提取 SUB 和 XSRF-TOKEN
 		for _, cookie := range cookies {
 			if cookie.Name == "SUB" {
 				subValue = cookie.Value
-				break
+			}
+			if cookie.Name == "XSRF-TOKEN" {
+				xsrfToken = cookie.Value
 			}
 		}
 		if subValue == "" {
-			logger.Warnf("API 未返回 SUB Cookie")
+			logger.Warnf("未找到 SUB Cookie")
 			return
 		}
-		logger.Infof("使用 API 返回的 SUB：%s...", subValue[:min(20, len(subValue))])
+		logger.Infof("使用从 API 获取的 SUB：%s...", subValue[:min(20, len(subValue))])
 
-		// 检查是否有 XSRF-TOKEN
-		var hasXsrf bool
-		for _, cookie := range cookies {
-			if cookie.Name == "XSRF-TOKEN" {
-				hasXsrf = true
-				break
-			}
-		}
-		if !hasXsrf {
-			logger.Warnf("API 未返回 XSRF-TOKEN Cookie，可能导致请求失败")
-		}
-	} else {
-		// 非 API 模式且无配置：使用原有逻辑生成的 Cookie
-		for _, cookie := range cookies {
-			if cookie.Name == "SUB" {
-				subValue = cookie.Value
-				break
-			}
+		if xsrfToken == "" {
+			logger.Warnf("未找到 XSRF-TOKEN Cookie，可能导致请求失败")
 		}
 	}
 
@@ -90,9 +110,15 @@ func freshCookieOpt(sub string) {
 		return
 	}
 
-	// 只设置 SUB Cookie
+	// 设置 SUB 和 XSRF-TOKEN Cookie
 	opt := []requests.Option{
 		requests.CookieOption("SUB", subValue),
+	}
+	if xsrfToken != "" {
+		opt = append(opt, requests.CookieOption("XSRF-TOKEN", xsrfToken))
+		logger.Debugf("已加载 XSRF-TOKEN: %s...", xsrfToken[:min(10, len(xsrfToken))])
+	} else {
+		logger.Warnf("未找到 XSRF-TOKEN，部分 API 请求可能失败")
 	}
 	visitorCookiesOpt.Store(opt)
 	logger.Infof("微博 SUB Cookie 已加载：%s...", subValue[:min(20, len(subValue))])
