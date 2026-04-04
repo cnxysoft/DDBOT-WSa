@@ -887,7 +887,7 @@ func (a *SatoriAdapter) dispatchMessage(event eventBody) {
 	a.messageChannelMap[internalMsgID] = channelID
 	a.msgIDMap[internalMsgID] = event.Message.ID
 	if event.Guild != nil {
-		guildID := a.rememberID(event.Guild.ID)
+		guildID := a.rememberIDLocked(event.Guild.ID)
 		if channelID != "" {
 			a.groupChannelMap[guildID] = channelID
 		}
