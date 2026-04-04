@@ -19,13 +19,28 @@ func freshCookieOpt(sub string) {
 	var cookies []*http.Cookie
 	var err error
 
-	// API 模式：强制从 API 获取
-	if cfg.IsWeiboAPIMode() {
+	// 如果传入了有效的 sub，直接使用（API 模式和 autorefresh 都会传入）
+	if sub != "" {
+		// 只需要获取 XSRF-TOKEN，SUB 已经由调用方提供
+		localutils.Retry(3, time.Second, func() bool {
+			if isGuestMode() {
+				cookies, err = FreshCookieGuest()
+			} else {
+				cookies, err = FreshCookieLogin()
+			}
+			return err == nil
+		})
+		if err != nil {
+			logger.Errorf("FreshCookie error %v", err)
+			return
+		}
+	} else if cfg.IsWeiboAPIMode() {
+		// API 模式且未传入 sub：从 API 获取（兼容旧逻辑）
 		cookies, err = FreshCookieFromAPI()
 		if err != nil {
 			logger.Errorf("FreshCookieFromAPI error %v", err)
 			logger.Warn("API 模式获取 Cookie 失败，微博功能可能无法正常使用")
-			return // 直接返回，不执行后续逻辑
+			return
 		}
 	} else {
 		// 非 API 模式：使用原有逻辑
@@ -51,7 +66,7 @@ func freshCookieOpt(sub string) {
 	if sub != "" {
 		logger.Infof("使用传入的 SUB 参数：%s...", sub[:min(20, len(sub))])
 		subValue = sub
-		// 从 cookies 中提取 XSRF-TOKEN（login 模式下 FreshCookieLogin 会返回）
+		// 从 cookies 中提取 XSRF-TOKEN
 		for _, cookie := range cookies {
 			if cookie.Name == "XSRF-TOKEN" {
 				xsrfToken = cookie.Value
@@ -69,8 +84,8 @@ func freshCookieOpt(sub string) {
 				break
 			}
 		}
-	} else if cfg.IsWeiboAPIMode() {
-		// API 模式：从 API 返回中提取 SUB 和 XSRF-TOKEN
+	} else {
+		// 从 API 或其他方式返回的 cookies 中提取 SUB 和 XSRF-TOKEN
 		for _, cookie := range cookies {
 			if cookie.Name == "SUB" {
 				subValue = cookie.Value
@@ -80,23 +95,13 @@ func freshCookieOpt(sub string) {
 			}
 		}
 		if subValue == "" {
-			logger.Warnf("API 未返回 SUB Cookie")
+			logger.Warnf("未找到 SUB Cookie")
 			return
 		}
-		logger.Infof("使用 API 返回的 SUB：%s...", subValue[:min(20, len(subValue))])
+		logger.Infof("使用从 API 获取的 SUB：%s...", subValue[:min(20, len(subValue))])
 
 		if xsrfToken == "" {
-			logger.Warnf("API 未返回 XSRF-TOKEN Cookie，可能导致请求失败")
-		}
-	} else {
-		// 非 API 模式且无配置：使用原有逻辑生成的 Cookie
-		for _, cookie := range cookies {
-			if cookie.Name == "SUB" {
-				subValue = cookie.Value
-			}
-			if cookie.Name == "XSRF-TOKEN" {
-				xsrfToken = cookie.Value
-			}
+			logger.Warnf("未找到 XSRF-TOKEN Cookie，可能导致请求失败")
 		}
 	}
 
