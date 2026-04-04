@@ -1052,7 +1052,7 @@ func (t *TwitterAPI) parseQuoteEntry(result *TweetResult) *Tweet {
 	}
 
 	if quotedResult.Legacy != nil {
-		if len(quotedResult.Legacy.ExtendedEntities.Media) > 0 {
+		if quotedResult.Legacy.ExtendedEntities != nil && len(quotedResult.Legacy.ExtendedEntities.Media) > 0 {
 			for _, m := range quotedResult.Legacy.ExtendedEntities.Media {
 				media := &Media{
 					Type: m.Type,
@@ -1244,9 +1244,9 @@ func (t *TwitterAPI) followUnfollow(ctx context.Context, userId, action string) 
 
 	// Check if response contains user data (success)
 	var userResp struct {
-		ID          string `json:"id"`
-		ScreenName  string `json:"screen_name"`
-		Following   bool   `json:"following"`
+		ID         string `json:"id"`
+		ScreenName string `json:"screen_name"`
+		Following  bool   `json:"following"`
 	}
 	if err := json.Unmarshal(decompressed, &userResp); err != nil {
 		return fmt.Errorf("failed to parse follow/unfollow response: %w", err)
@@ -1325,12 +1325,12 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 		Data struct {
 			UserResultByScreenName struct {
 				Result struct {
-					Typename                   string `json:"__typename"`
-					Core                       struct {
+					Typename string `json:"__typename"`
+					Core     struct {
 						Name       string `json:"name"`
 						ScreenName string `json:"screen_name"`
 					} `json:"core"`
-					ID                        string `json:"id"`
+					ID                       string `json:"id"`
 					RelationshipPerspectives struct {
 						Following bool `json:"following"`
 					} `json:"relationship_perspectives"`

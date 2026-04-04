@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build:*)",
+      "Bash(cd:*)",
+      "mcp__MiniMax__understand_image",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(go mod:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
