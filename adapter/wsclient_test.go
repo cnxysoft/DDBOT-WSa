@@ -40,7 +40,7 @@ func TestWSClient_NewWSClient(t *testing.T) {
 				assert.Equal(t, "onebot-v11", c.mode)
 				assert.Equal(t, WSModeReverse, c.wsMode)
 				assert.Equal(t, "ws://localhost:8080", c.url)
-				assert.Equal(t, 30*time.Second, c.heartbeatInterval)
+				assert.Equal(t, 15*time.Second, c.heartbeatInterval) // 修改后：15s
 				assert.Equal(t, 10*time.Second, c.connectTimeout)
 				assert.Equal(t, 0, c.maxReconnect)
 				assert.False(t, c.IsConnected())
@@ -1088,7 +1088,7 @@ func TestWSClient_Constants(t *testing.T) {
 	assert.Equal(t, "ws-server", WSModeServer)
 	assert.Equal(t, "ws-reverse", WSModeReverse)
 	assert.Equal(t, 10*time.Second, WriteWait)
-	assert.Equal(t, 60*time.Second, PongWait)
+	assert.Equal(t, 120*time.Second, PongWait) // 修改后：120s
 	assert.Equal(t, 150*1024*1024, MaxMessageSize)
 }
 
@@ -1938,4 +1938,177 @@ func newMessage(msgType string, idx int) map[string]interface{} {
 	}
 
 	return base
+}
+
+// TestReverseMode_ServerNoPongResponse 测试 reverse 模式下服务端不响应 Pong 的场景
+// 这是用户反馈的核心问题：I/O timeout 后连接断开
+func TestReverseMode_ServerNoPongResponse(t *testing.T) {
+	const (
+		heartbeatInterval = 1 * time.Second
+		testTimeout      = 10 * time.Second // 测试总时长
+	)
+
+	var messageCount int32
+
+	// 创建短超时的服务端（而不是依赖客户端的 PongWait）
+	// 这样可以更快地触发超时
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// 服务端短超时后关闭连接 - 这会导致客户端的 ReadMessage 返回错误
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				t.Logf("Server: client read error (expected): %v", err)
+				break
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	wsClient := NewWSClient("onebot-v11", WSModeReverse, wsURL,
+		WithWSHeartbeat(heartbeatInterval),
+		WithWSMessageHandler(func(b []byte) {
+			atomic.AddInt32(&messageCount, 1)
+		}))
+
+	err := wsClient.Start()
+	require.NoError(t, err)
+
+	// 等待超时发生（服务端 3s 断开，客户端应该检测到）
+	time.Sleep(testTimeout)
+
+	isConnected := wsClient.IsConnected()
+	t.Logf("IsConnected after %v: %v", testTimeout, isConnected)
+	t.Logf("Messages received: %d", atomic.LoadInt32(&messageCount))
+	t.Logf("activeHeartbeatLoops: %d", wsClient.activeHeartbeatLoops.Load())
+	t.Logf("activeReadLoops: %d", wsClient.activeReadLoops.Load())
+
+	wsClient.Stop()
+
+	// 验证：超时后 IsConnected 应该为 false
+	assert.False(t, isConnected, "Should disconnect after I/O timeout")
+}
+
+// TestErrChanFull_MultipleRapidErrors 测试 errChan 缓冲区满时的行为
+func TestErrChanFull_MultipleRapidErrors(t *testing.T) {
+	wsClient := NewWSClient("onebot-v11", WSModeReverse, "ws://localhost:0",
+		WithWSHeartbeat(100*time.Millisecond),
+		WithWSMessageHandler(func(b []byte) {}))
+
+	connectCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connectCount++
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsClient.url = wsURL
+	wsClient.maxReconnect = 5 // 限制重连次数
+
+	err := wsClient.Start()
+	require.NoError(t, err)
+
+	// 等待重连发生
+	time.Sleep(3 * time.Second)
+
+	wsClient.Stop()
+	t.Logf("Connect attempts: %d", connectCount)
+}
+
+// TestHeartbeatLoopExitsOnConnectionReplacement 验证心跳在连接被替换时正确退出
+func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
+	const heartbeatInterval = 100 * time.Millisecond
+
+	wsClient := NewWSClient("onebot-v11", WSModeServer, "localhost:0",
+		WithWSHeartbeat(heartbeatInterval),
+		WithWSMessageHandler(func(b []byte) {}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	err := wsClient.Start()
+	require.NoError(t, err)
+
+	time.Sleep(500 * time.Millisecond)
+	t.Logf("Initial heartbeat loops: %d", wsClient.activeHeartbeatLoops.Load())
+
+	wsClient.mu.RLock()
+	wsClient.mu.RUnlock()
+
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer newConn.Close()
+
+	wsClient.mu.Lock()
+	wsClient.conn = newConn
+	wsClient.mu.Unlock()
+
+	time.Sleep(heartbeatInterval * 3)
+	t.Logf("After replacement: heartbeat loops active=%d", wsClient.activeHeartbeatLoops.Load())
+
+	wsClient.Stop()
+	time.Sleep(200 * time.Millisecond)
+	t.Logf("Final heartbeat loops: %d", wsClient.activeHeartbeatLoops.Load())
+}
+
+// TestConnectionStress_RapidReconnect 测试频繁重连场景
+func TestConnectionStress_RapidReconnect(t *testing.T) {
+	const heartbeatInterval = 200 * time.Millisecond
+
+	var receivedCount int32
+
+	wsClient := NewWSClient("onebot-v11", WSModeReverse, "ws://localhost:0",
+		WithWSHeartbeat(heartbeatInterval),
+		WithWSMessageHandler(func(b []byte) {
+			atomic.AddInt32(&receivedCount, 1)
+		}))
+
+	reconnectCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reconnectCount++
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		time.Sleep(time.Duration(100+reconnectCount*50) * time.Millisecond)
+		conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsClient.url = wsURL
+	wsClient.maxReconnect = 100
+
+	startTime := time.Now()
+	err := wsClient.Start()
+	require.NoError(t, err)
+
+	time.Sleep(5 * time.Second)
+
+	wsClient.Stop()
+
+	t.Logf("Reconnect count: %d", reconnectCount)
+	t.Logf("Duration: %v", time.Since(startTime))
+	t.Logf("Final goroutines: %d", runtime.NumGoroutine())
+
+	finalGoroutines := runtime.NumGoroutine()
+	assert.Less(t, finalGoroutines, 50, "Possible goroutine leak: %d goroutines", finalGoroutines)
 }

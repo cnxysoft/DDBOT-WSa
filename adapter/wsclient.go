@@ -46,7 +46,7 @@ const (
 	WSModeServer   = "ws-server"
 	WSModeReverse  = "ws-reverse"
 	WriteWait      = 10 * time.Second
-	PongWait       = 60 * time.Second
+	PongWait       = 120 * time.Second // 120s timeout allows ~7 missed heartbeats (15s interval)
 	MaxMessageSize = 150 * 1024 * 1024 // 150MB
 )
 
@@ -114,7 +114,7 @@ func NewWSClient(mode, wsMode, url string, opts ...WSClientOption) *WSClient {
 		wsMode:            wsMode,
 		stopChan:          make(chan struct{}),
 		responseCh:        make(map[string]chan *WSResponse),
-		heartbeatInterval: 30 * time.Second,
+		heartbeatInterval: 15 * time.Second, // 15s interval, ~7x longer than PongWait for tolerance
 		connectTimeout:    10 * time.Second,
 		maxReconnect:      0,
 		reconnectCnt:      0,
@@ -275,7 +275,7 @@ func (c *WSClient) connect() error {
 
 func (c *WSClient) handleConnection(conn *websocket.Conn) {
 	wsLogger.Debugf("handleConnection: starting, conn=%p", conn)
-	readErrChan := make(chan error, 1)
+	readErrChan := make(chan error, 4) // 增大缓冲区，避免错误被丢弃
 	wsLogger.Debugf("handleConnection: readErrChan created, goroutine about to start")
 	defer func() {
 		if r := recover(); r != nil {
@@ -469,6 +469,14 @@ func (c *WSClient) heartbeatLoop(conn *websocket.Conn) {
 		case <-c.stopChan:
 			return
 		case <-ticker.C:
+			// 检查连接是否仍是当前连接
+			c.mu.RLock()
+			isCurrent := c.conn == conn
+			c.mu.RUnlock()
+			if !isCurrent {
+				wsLogger.Debugf("heartbeatLoop: connection replaced, exiting")
+				return
+			}
 			if err := c.writeRaw(conn, websocket.PingMessage, []byte{}); err != nil {
 				wsLogger.Debugf("heartbeatLoop write error: conn=%p, err=%v", conn, err)
 				return
