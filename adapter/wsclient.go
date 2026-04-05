@@ -45,9 +45,15 @@ func getCallerFuncName(skip int) string {
 const (
 	WSModeServer   = "ws-server"
 	WSModeReverse  = "ws-reverse"
-	WriteWait      = 10 * time.Second
+	WriteWait      = 10 * time.Second  // 基础写入超时（用于小消息）
 	PongWait       = 120 * time.Second // 120s timeout allows ~7 missed heartbeats (15s interval)
 	MaxMessageSize = 150 * 1024 * 1024 // 150MB
+
+	// 动态写入超时计算参数（参考 NapCat/LLOneBot 实现）
+	// 公式: baseTimeout + (dataSizeBytes / 1024 / speedKBps * 1000)
+	writeWaitBase    = 10 * time.Second // 基础超时 10s
+	writeWaitSpeedKB = 256             // 假设传输速率 256 KB/s（与 NapCat 一致）
+	writeWaitMax      = 30 * time.Minute // 最大超时 30min（与 NapCat 一致）
 )
 
 type WSResponse struct {
@@ -497,6 +503,23 @@ func (c *WSClient) heartbeatLoop(conn *websocket.Conn) {
 	}
 }
 
+// calcWriteWait 根据消息大小动态计算写入超时时间
+// 参考 NapCat/LLOneBot 实现，公式: baseTimeout + (dataSizeBytes / 1024 / speedKBps * 1000)
+// 基础超时 10s，传输速率 256KB/s，最大超时 30min
+func calcWriteWait(dataLen int) time.Duration {
+	if dataLen <= 0 {
+		return WriteWait
+	}
+	// 计算额外超时: dataLen / 1024 KB * (1000ms / 256 KB/s) = dataLen / 1024 * 1000 / 256 ms
+	kb := dataLen / 1024
+	extraMs := kb * 1000 / writeWaitSpeedKB
+	wait := writeWaitBase + time.Duration(extraMs)*time.Millisecond
+	if wait > writeWaitMax {
+		return writeWaitMax
+	}
+	return wait
+}
+
 func (c *WSClient) writeRaw(conn *websocket.Conn, messageType int, data []byte) error {
 	seq := nextLockSeq()
 	c.writeMu.Lock()
@@ -508,10 +531,14 @@ func (c *WSClient) writeRaw(conn *websocket.Conn, messageType int, data []byte) 
 	if conn == nil {
 		return fmt.Errorf("nil connection")
 	}
-	conn.SetWriteDeadline(time.Now().Add(WriteWait))
+	// Ping 消息使用固定短超时，因为 ping 应该很快
 	if messageType == websocket.PingMessage {
+		conn.SetWriteDeadline(time.Now().Add(WriteWait))
 		return conn.WriteControl(websocket.PingMessage, data, time.Now().Add(WriteWait))
 	}
+	// 根据消息大小动态计算等待时间
+	writeWait := calcWriteWait(len(data))
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	return conn.WriteMessage(messageType, data)
 }
 

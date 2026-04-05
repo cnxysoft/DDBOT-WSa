@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
@@ -12,6 +14,10 @@ import (
 )
 
 var logger = logrus.WithField("adapter", "onebot-v11")
+
+// URI 消息超时时间（NapCat/LLOneBot 需要先下载 URI 文件再上传）
+// 使用与 wsclient 一致的最大值，确保足够长
+const uriMessageTimeout = 30 * time.Minute
 
 type OneBotAdapter struct {
 	config   *adapter.AdapterConfig
@@ -26,6 +32,76 @@ type OneBotAdapter struct {
 	requestEventHandlers   []func(*adapter.RequestEvent)
 
 	handlersMu sync.RWMutex
+}
+
+// containsURI 检测消息参数是否包含 http/https/file URI
+// NapCat/LLOneBot 收到包含 URI 的消息后需要先下载文件再上传，
+// 这个过程可能比较慢，需要给更长的超时时间
+func containsURI(params map[string]interface{}) bool {
+	msg, ok := params["message"]
+	if !ok {
+		return false
+	}
+
+	switch m := msg.(type) {
+	case string:
+		// CQ码字符串可能包含 URI，但检测复杂，保守处理
+		return false
+	case []interface{}:
+		for _, seg := range m {
+			segment, ok := seg.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			segType, _ := segment["type"].(string)
+			data, _ := segment["data"].(map[string]interface{})
+
+			switch segType {
+			case "image", "video", "record", "file":
+				// 检查 url 或 file 字段是否包含 URI
+				if uri := getSegmentURI(data); uri != "" {
+					if isRemoteURI(uri) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// getSegmentURI 从 segment data 中获取 URI
+func getSegmentURI(data map[string]interface{}) string {
+	// 优先检查 url 字段
+	if url, ok := data["url"].(string); ok && url != "" {
+		return url
+	}
+	// 然后检查 file 字段
+	if file, ok := data["file"].(string); ok && file != "" {
+		return file
+	}
+	return ""
+}
+
+// isRemoteURI 判断是否为远程 URI（需要下载）
+func isRemoteURI(uri string) bool {
+	return strings.HasPrefix(uri, "http://") ||
+		strings.HasPrefix(uri, "https://") ||
+		strings.HasPrefix(uri, "file://")
+}
+
+// calcSendTimeout 根据消息内容计算合适的超时时间
+// 如果消息包含 URI，使用更长的超时（因为 NapCat/LLOneBot 需要先下载）
+func (a *OneBotAdapter) calcSendTimeout(action string, params map[string]interface{}) time.Duration {
+	// 只有发送消息的动作才需要特殊处理
+	switch action {
+	case "send_msg", "send_group_msg", "send_private_msg",
+		"send_group_forward_msg", "send_private_forward_msg":
+		if containsURI(params) {
+			return uriMessageTimeout
+		}
+	}
+	return a.config.Timeout
 }
 
 func NewOneBotAdapter(cfg *adapter.AdapterConfig) *OneBotAdapter {
@@ -87,7 +163,8 @@ func (a *OneBotAdapter) SendApi(action string, params map[string]interface{}) (i
 		return nil, fmt.Errorf("ws client not initialized")
 	}
 
-	resp, err := a.wsClient.SendAndWait(action, params, a.config.Timeout)
+	timeout := a.calcSendTimeout(action, params)
+	resp, err := a.wsClient.SendAndWait(action, params, timeout)
 	if err != nil {
 		logger.Warnf("SendApi error: %v", err)
 		return nil, err

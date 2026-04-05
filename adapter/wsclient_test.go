@@ -2112,3 +2112,32 @@ func TestConnectionStress_RapidReconnect(t *testing.T) {
 	finalGoroutines := runtime.NumGoroutine()
 	assert.Less(t, finalGoroutines, 50, "Possible goroutine leak: %d goroutines", finalGoroutines)
 }
+
+// TestCalcWriteWait 测试 calcWriteWait 函数的计算逻辑（参考 NapCat/LLOneBot 实现）
+// 公式: 10s + (dataLen / 1024 / 256 * 1000)ms，最大 30min
+func TestCalcWriteWait(t *testing.T) {
+	tests := []struct {
+		name        string
+		dataLen     int
+		expectWait  time.Duration
+	}{
+		{"空消息", 0, WriteWait},
+		{"1KB (接近基础超时)", 1024, 10*time.Second + 3*time.Millisecond},
+		{"100KB", 100 * 1024, 10*time.Second + 390*time.Millisecond},
+		{"1MB", 1024 * 1024, 14 * time.Second},
+		{"5MB", 5 * 1024 * 1024, 30 * time.Second},
+		{"10MB", 10 * 1024 * 1024, 50 * time.Second},
+		{"30MB", 30 * 1024 * 1024, 2*time.Minute + 10*time.Second},
+		{"100MB", 100 * 1024 * 1024, 6*time.Minute + 50*time.Second},
+		// 1GB 超过 30min 上限，应该被限制
+		{"1GB (超过上限，使用最大超时)", 1024 * 1024 * 1024, 30 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// calcWriteWait 是包内函数，直接调用
+			wait := calcWriteWait(tt.dataLen)
+			assert.Equal(t, tt.expectWait, wait, "dataLen=%d, expected=%v, got=%v", tt.dataLen, tt.expectWait, wait)
+		})
+	}
+}
