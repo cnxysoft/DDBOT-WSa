@@ -2,20 +2,26 @@
 {{ $msg := join "" (list "小黑盒-" .dynamic.User.Name "发布了新动态：\n") -}}
 {{ printf "%v%v\n" $msg .dynamic.Date -}}
 
-{{ if ne .dynamic.Title "" -}}
-    {{ printf "%v\n%v\n" .dynamic.Title .dynamic.Description -}}
-{{ else if ne .dynamic.Description "" -}}
-    {{ printf "%v\n" .dynamic.Description -}}
-{{ end -}}
-
-{{ if gt (len .dynamic.Images) 0 -}}
-    {{ range $v := .dynamic.Images -}}
-        {{ pic $v -}}
-    {{ end -}}
-{{ end -}}
-
 {{ if .dynamic.HasVideo -}}
-    {{ printf "【视频】%v\n" .dynamic.ShareURL -}}
+{{ if ne .dynamic.Title "" -}}
+{{ printf "%v\n" .dynamic.Title -}}
+{{ end -}}
+{{ if ne .dynamic.Description "" -}}
+{{ printf "%v\n" .dynamic.Description -}}
+{{ end -}}
+{{ pic .dynamic.VideoThumb -}}
+{{ printf "【视频】%v\n" .dynamic.VideoURL -}}
 {{ else -}}
-    {{ printf "%v" .dynamic.ShareURL -}}
+{{ if ne .dynamic.Title "" -}}
+{{ printf "%v\n" .dynamic.Title -}}
+{{ end -}}
+{{ if ne .dynamic.Description "" -}}
+{{ printf "%v\n" .dynamic.Description -}}
+{{ end -}}
+{{ if gt (len .dynamic.Images) 0 -}}
+{{ range $v := .dynamic.Images -}}
+{{ pic $v -}}
+{{ end -}}
+{{ end -}}
+{{ printf "%v" .dynamic.ShareURL -}}
 {{ end -}}

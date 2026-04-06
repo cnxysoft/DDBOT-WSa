@@ -59,6 +59,8 @@ type Moment struct {
 	Imgs        []string `json:"imgs"`
 	User        *UserInfo `json:"user"`
 	ShareURL    string   `json:"share_url"`
+	VideoThumb  string   `json:"video_thumb"`
+	VideoURL    string   `json:"video_url"`
 }
 
 // XHHDynamic 用于模板渲染的动态数据结构
@@ -69,9 +71,11 @@ type XHHDynamic struct {
 	User        struct {
 		Name string
 	}
-	Images    []string
-	HasVideo  bool
-	ShareURL  string
+	Images      []string
+	HasVideo    bool
+	ShareURL    string
+	VideoThumb  string
+	VideoURL    string
 }
 
 // NewsInfo 最新动态信息
@@ -116,6 +120,8 @@ func (c *CacheMoment) prepare() {
 		c.dynamic.Images = c.Moment.Imgs
 		c.dynamic.HasVideo = c.Moment.HasVideo == 1
 		c.dynamic.ShareURL = c.Moment.ShareURL
+		c.dynamic.VideoThumb = c.Moment.VideoThumb
+		c.dynamic.VideoURL = c.Moment.VideoURL
 		if c.Moment.CreateAt > 0 {
 			c.dynamic.Date = time.Unix(c.Moment.CreateAt, 0).Format("2006-01-02 15:04:05")
 		}

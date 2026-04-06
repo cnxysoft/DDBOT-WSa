@@ -302,6 +302,12 @@ twitcasting:
     created: false       # 是否显示开播时间
     image: false         # 是否显示直播封面
 
+# 小黑盒 动态推送
+heybox:
+  x_xhh_tokenid:              # 必需，未配置则不启用
+  interval: 30s               # 轮询间隔，默认30秒
+  onlyOnlineNotify: false     # 是否只推送上线后的动态
+
 concern:
   emitInterval: 5s
 

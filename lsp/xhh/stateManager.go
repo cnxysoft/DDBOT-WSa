@@ -32,11 +32,12 @@ func (*extraKeySet) MarkMomentIdKey(keys ...interface{}) string {
 	return localdb.XHHMarkMomentIdKey(keys...)
 }
 
-func (s *StateManager) AddUserInfo(info *UserInfo) error {
+// AddUserInfoWithKey 使用指定的key存储用户信息
+func (s *StateManager) AddUserInfoWithKey(key string, info *UserInfo) error {
 	if info == nil {
 		return errors.New("<nil userInfo>")
 	}
-	return s.SetJson(s.UserInfoKey(info.Userid), info)
+	return s.SetJson(s.UserInfoKey(key), info)
 }
 
 func (s *StateManager) GetUserInfo(userid string) (*UserInfo, error) {

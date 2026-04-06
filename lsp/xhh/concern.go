@@ -264,10 +264,11 @@ func (c *Concern) FindUserInfo(userid string, load bool) (*UserInfo, error) {
 		}
 		if len(eventsResp.Result.Moments) > 0 {
 			moment := eventsResp.Result.Moments[0]
-			err = c.AddUserInfo(moment.User)
+			err = c.AddUserInfoWithKey(userid, moment.User)
 			if err != nil {
-				logger.WithField("userid", userid).Errorf("AddUserInfo error %v", err)
+				logger.WithField("userid", userid).Errorf("AddUserInfoWithKey error %v", err)
 			}
+			return moment.User, nil
 		}
 	}
 	return c.GetUserInfo(userid)
