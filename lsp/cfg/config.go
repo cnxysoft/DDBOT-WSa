@@ -230,6 +230,22 @@ func GetWeiboAutoRefresh() bool {
 	return config.GlobalConfig.GetBool("weibo.autorefresh")
 }
 
+func GetHeyboxToken() string {
+	return strings.TrimSpace(config.GlobalConfig.GetString("heybox.x_xhh_tokenid"))
+}
+
+func GetHeyboxInterval() time.Duration {
+	interval := config.GlobalConfig.GetDuration("heybox.interval")
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	return interval
+}
+
+func GetHeyboxOnlyOnlineNotify() bool {
+	return config.GlobalConfig.GetBool("heybox.onlyOnlineNotify")
+}
+
 func GetExtDbEnable() bool {
 	return config.GlobalConfig.GetBool("extDb.enable")
 }

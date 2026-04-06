@@ -32,6 +32,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/xhh"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
 )

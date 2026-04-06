@@ -179,6 +179,15 @@ func WeiboNewsInfoKey(keys ...interface{}) string {
 func WeiboMarkMblogIdKey(keys ...interface{}) string {
 	return NamedKey("WeiboMarkMblogId", keys)
 }
+func XHHUserInfoKey(keys ...interface{}) string {
+	return NamedKey("XHHUserInfo", keys)
+}
+func XHHNewsInfoKey(keys ...interface{}) string {
+	return NamedKey("XHHNewsInfo", keys)
+}
+func XHHMarkMomentIdKey(keys ...interface{}) string {
+	return NamedKey("XHHMarkMomentId", keys)
+}
 func TwitterUserInfoKey(keys ...interface{}) string {
 	return NamedKey("TwitterUserInfo", keys)
 }
