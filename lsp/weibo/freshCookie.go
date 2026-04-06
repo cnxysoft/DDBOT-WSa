@@ -18,7 +18,6 @@ import (
 
 const (
 	pathWeiboCN                = "https://weibo.cn/pub/"
-	pathWeiboMobile            = "https://m.weibo.cn/"
 	pathWeiboDesktop           = "https://weibo.com"
 	pathPassportGenvisitorTest = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
 	pathPassportGenvisitorProd = "https://passport.weibo.com/visitor/genvisitor2"
@@ -75,17 +74,8 @@ func genvisitorLogin(externalOpts ...requests.Option) (*GenVisitorResponse, erro
 	return genvisitor(pathPassportGenvisitorProd, params, externalOpts...)
 }
 
-func refreshGuestFrom(jar *cookiejar.Jar) error {
+func refreshGuestCN(jar *cookiejar.Jar) error {
 	return requests.Get(pathWeiboCN, nil, nil,
-		requests.WithCookieJar(jar),
-		requests.AddUAOption(),
-		requests.ProxyOption(proxy_pool.PreferNone),
-		requests.TimeoutOption(time.Second*10),
-	)
-}
-
-func refreshGuestMobile(jar *cookiejar.Jar) error {
-	return requests.Get(pathWeiboMobile, nil, nil,
 		requests.WithCookieJar(jar),
 		requests.AddUAOption(),
 		requests.ProxyOption(proxy_pool.PreferNone),
@@ -118,21 +108,15 @@ func FreshCookieGuest() ([]*http.Cookie, error) {
 			genVisitorResp.GetRetcode(), genVisitorResp.GetMsg())
 	}
 
-	err = refreshGuestFrom(jar)
-	if err != nil {
-		logger.Errorf("refreshGuestFrom error %v", err)
-		return nil, err
-	}
-
-	err = refreshGuestMobile(jar)
+	err = refreshGuestCN(jar)
 	if err != nil {
 		logger.Errorf("refreshGuestMobile error %v", err)
 		return nil, err
 	}
 
-	cookieUrl, err := url.Parse(pathWeiboMobile)
+	cookieUrl, err := url.Parse(pathWeiboCN)
 	if err != nil {
-		panic(fmt.Sprintf("path %v url parse error", pathWeiboMobile))
+		panic(fmt.Sprintf("path %v url parse error", pathWeiboCN))
 	}
 	return jar.Cookies(cookieUrl), nil
 }
