@@ -150,7 +150,28 @@ func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsRespon
 	if err != nil {
 		return nil, err
 	}
-	return guestResp.ToCardsResponse(), nil
+
+	resp := guestResp.ToCardsResponse()
+
+	// 如果是 Guest 模式且返回 -100 错误，尝试刷新 Cookie 并重试一次
+	if !cfg.IsWeiboAPIMode() && resp.GetOk() == -100 {
+		logger.Warnf("uid=%d: 检测到 -100 错误（Cookie 失效），尝试刷新", uid)
+		if TryRefreshGuestCookie() {
+			// 刷新成功后重试一次
+			cookieOpts = CookieOption()
+			opts = buildRequestOptions(CreateGuestReferer(uid))
+			opts = append(opts, cookieOpts...)
+
+			guestResp = new(apiContainerGetIndexGuestCardsResponse)
+			err = requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
+			if err != nil {
+				return nil, err
+			}
+			resp = guestResp.ToCardsResponse()
+		}
+	}
+
+	return resp, nil
 }
 
 func buildRequestOptions(referer string) []requests.Option {

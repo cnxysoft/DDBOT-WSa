@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
@@ -14,6 +15,18 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/guonaihong/gout"
 	"github.com/sirupsen/logrus"
+)
+
+const (
+	// guestCookieRefreshInterval Guest Cookie 刷新的最小间隔
+	guestCookieRefreshInterval = 10 * time.Minute
+)
+
+var (
+	// guestCookieRefreshMu 保护 Guest Cookie 刷新状态
+	guestCookieRefreshMu sync.Mutex
+	// guestCookieLastRefresh 上次 Guest Cookie 刷新时间
+	guestCookieLastRefresh time.Time
 )
 
 const (
@@ -165,4 +178,50 @@ func FreshCookie() ([]*http.Cookie, error) {
 		return FreshCookieGuest()
 	}
 	return FreshCookieLogin()
+}
+
+// TryRefreshGuestCookie 尝试刷新 Guest Cookie（带 10 分钟限速）
+// 如果距上次刷新不足 10 分钟，则不会刷新
+// 刷新后丢弃旧的 Cookie，用新的替代
+func TryRefreshGuestCookie() bool {
+	guestCookieRefreshMu.Lock()
+	defer guestCookieRefreshMu.Unlock()
+
+	now := time.Now()
+	if !guestCookieLastRefresh.IsZero() && now.Sub(guestCookieLastRefresh) < guestCookieRefreshInterval {
+		logger.Debugf("Guest Cookie 刷新被限速，距离上次刷新还差 %v", guestCookieRefreshInterval-time.Since(guestCookieLastRefresh))
+		return false
+	}
+
+	logger.Info("检测到 -100 错误，开始刷新 Guest Cookie")
+	cookies, err := FreshCookieGuest()
+	if err != nil {
+		logger.Errorf("刷新 Guest Cookie 失败: %v", err)
+		return false
+	}
+
+	// 将新的 Cookie 转换为 Option 并存储
+	var subValue string
+	var xsrfToken string
+	for _, cookie := range cookies {
+		if cookie.Name == "SUB" {
+			subValue = cookie.Value
+		}
+		if cookie.Name == "XSRF-TOKEN" {
+			xsrfToken = cookie.Value
+		}
+	}
+
+	opt := []requests.Option{}
+	if subValue != "" {
+		opt = append(opt, requests.CookieOption("SUB", subValue))
+	}
+	if xsrfToken != "" {
+		opt = append(opt, requests.CookieOption("XSRF-TOKEN", xsrfToken))
+	}
+	visitorCookiesOpt.Store(opt)
+
+	guestCookieLastRefresh = now
+	logger.Infof("Guest Cookie 刷新成功，已更新到内存")
+	return true
 }
