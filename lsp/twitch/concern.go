@@ -170,10 +170,13 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 				streams, err := GetStreamsByLogins(logins)
 				if err != nil {
 					logger.Errorf("GetStreamsByLogins error %v", err)
-				} else {
-					for i := range streams {
-						liveMap[streams[i].UserLogin] = streams[i]
-					}
+					// API 失败时跳过本次轮询，避免空 liveMap 将所有频道误判为下播
+					freshCount.Add(1)
+					t.Reset(interval)
+					continue
+				}
+				for i := range streams {
+					liveMap[streams[i].UserLogin] = streams[i]
 				}
 			}
 
@@ -195,8 +198,8 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 					if isLive {
 						event := c.buildLiveEvent(login, stream, isLive, false, nil)
 						title = event.Title
-						if freshCount.Load() < freshCountLiveThreshold {
-							event.liveStatusChanged = true
+						event.liveStatusChanged = true
+						if freshCount.Load() >= freshCountLiveThreshold {
 							eventChan <- event
 						}
 					}
@@ -212,7 +215,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 							event := c.buildLiveEvent(login, stream, isLive, hasLast, last)
 							event.titleChanged = true
 							event.liveStatusChanged = false
-							if freshCount.Load() < freshCountLiveThreshold {
+							if freshCount.Load() >= freshCountLiveThreshold {
 								eventChan <- event
 							}
 							c.updateLastStatus(login, &LastStatus{Live: isLive, Title: stream.Title})
@@ -226,14 +229,14 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 
 				if isLive {
 					// 开播
-					if freshCount.Load() < freshCountLiveThreshold {
-						event.liveStatusChanged = true
+					event.liveStatusChanged = true
+					if freshCount.Load() >= freshCountLiveThreshold {
 						eventChan <- event
 					}
 				} else {
 					// 下播
-					if freshCount.Load() < freshCountOfflineThreshold {
-						event.liveStatusChanged = true
+					event.liveStatusChanged = true
+					if freshCount.Load() >= freshCountOfflineThreshold {
 						eventChan <- event
 					}
 				}
