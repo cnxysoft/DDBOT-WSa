@@ -537,6 +537,22 @@ type VideoVariant struct {
 	Bitrate     int64  `json:"bitrate,omitempty"`
 }
 
+// highestQualityMP4URL 返回最高比特率的mp4视频URL
+func highestQualityMP4URL(vi *VideoInfo) string {
+	if vi == nil {
+		return ""
+	}
+	var bestURL string
+	var bestBitrate int64
+	for _, v := range vi.Variants {
+		if v.ContentType == "video/mp4" && v.URL != "" && v.Bitrate > bestBitrate {
+			bestBitrate = v.Bitrate
+			bestURL = v.URL
+		}
+	}
+	return bestURL
+}
+
 type MediaSizes struct {
 	Large  *MediaSize `json:"large,omitempty"`
 	Medium *MediaSize `json:"medium,omitempty"`
@@ -922,13 +938,8 @@ func (t *TwitterAPI) parseRetweetEntry(result *TweetResult) *Tweet {
 					Type: m.Type,
 					Url:  m.MediaURLHTTPS,
 				}
-				if (m.Type == "video" || m.Type == "animated_gif") && m.VideoInfo != nil {
-					for _, v := range m.VideoInfo.Variants {
-						if v.ContentType == "video/mp4" && v.URL != "" {
-							media.Url = v.URL
-							break
-						}
-					}
+				if m.Type == "video" || m.Type == "animated_gif" {
+					media.Url = highestQualityMP4URL(m.VideoInfo)
 				}
 				tweet.Media = append(tweet.Media, media)
 			}
@@ -952,13 +963,8 @@ func (t *TwitterAPI) parseRetweetEntry(result *TweetResult) *Tweet {
 							Type: m.Type,
 							Url:  m.MediaURLHTTPS,
 						}
-						if (m.Type == "video" || m.Type == "animated_gif") && m.VideoInfo != nil {
-							for _, v := range m.VideoInfo.Variants {
-								if v.ContentType == "video/mp4" && v.URL != "" {
-									media.Url = v.URL
-									break
-								}
-							}
+						if m.Type == "video" || m.Type == "animated_gif" {
+							media.Url = highestQualityMP4URL(m.VideoInfo)
 						}
 						tweet.QuoteTweet.Media = append(tweet.QuoteTweet.Media, media)
 					}
@@ -1058,13 +1064,8 @@ func (t *TwitterAPI) parseQuoteEntry(result *TweetResult) *Tweet {
 					Type: m.Type,
 					Url:  m.MediaURLHTTPS,
 				}
-				if (m.Type == "video" || m.Type == "animated_gif") && m.VideoInfo != nil {
-					for _, v := range m.VideoInfo.Variants {
-						if v.ContentType == "video/mp4" && v.URL != "" {
-							media.Url = v.URL
-							break
-						}
-					}
+				if m.Type == "video" || m.Type == "animated_gif" {
+					media.Url = highestQualityMP4URL(m.VideoInfo)
 				}
 				tweet.QuoteTweet.Media = append(tweet.QuoteTweet.Media, media)
 			}
@@ -1126,13 +1127,8 @@ func (t *TwitterAPI) parseOriginalTweet(result *TweetResult) *Tweet {
 					Type: m.Type,
 					Url:  m.MediaURLHTTPS,
 				}
-				if (m.Type == "video" || m.Type == "animated_gif") && m.VideoInfo != nil {
-					for _, v := range m.VideoInfo.Variants {
-						if v.ContentType == "video/mp4" && v.URL != "" {
-							media.Url = v.URL
-							break
-						}
-					}
+				if m.Type == "video" || m.Type == "animated_gif" {
+					media.Url = highestQualityMP4URL(m.VideoInfo)
 				}
 				tweet.Media = append(tweet.Media, media)
 			}
