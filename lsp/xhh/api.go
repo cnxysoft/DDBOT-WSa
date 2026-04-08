@@ -165,6 +165,7 @@ func GenerateHkey(path string, t int64, nonce string) string {
 }
 
 // GetProfileEvents 获取用户动态列表
+// token: x_xhh_tokenid，如果为空则使用 smidv2
 func GetProfileEvents(token, userid string) (*EventsResponse, error) {
 	t := time.Now().Unix()
 	nonce := GenerateNonce()

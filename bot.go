@@ -304,7 +304,7 @@ twitcasting:
 
 # 小黑盒 动态推送
 heybox:
-  x_xhh_tokenid:              # 必需，未配置则不启用
+  x_xhh_tokenid:              # 可选，未配置时自动生成
   interval: 30s               # 轮询间隔，默认30秒
   onlyOnlineNotify: false     # 是否只推送上线后的动态
 

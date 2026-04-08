@@ -188,6 +188,12 @@ func XHHNewsInfoKey(keys ...interface{}) string {
 func XHHMarkMomentIdKey(keys ...interface{}) string {
 	return NamedKey("XHHMarkMomentId", keys)
 }
+func XHHSmidV2Key(keys ...interface{}) string {
+	return NamedKey("XHHSmidV2", keys)
+}
+func XHHSmidV2GenerateTimeKey(keys ...interface{}) string {
+	return NamedKey("XHHSmidV2GenerateTime", keys)
+}
 func TwitterUserInfoKey(keys ...interface{}) string {
 	return NamedKey("TwitterUserInfo", keys)
 }

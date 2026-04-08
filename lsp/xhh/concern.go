@@ -19,6 +19,7 @@ var online bool
 type Concern struct {
 	*StateManager
 	cacheStartTs int64
+	smidv2       string
 }
 
 func (c *Concern) Site() string {
@@ -38,13 +39,13 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 }
 
 func (c *Concern) Start() error {
-	token := cfg.GetHeyboxToken()
-	if token == "" {
-		logger.Info("小黑盒 x_xhh_tokenid 未配置，将关闭小黑盒推送功能")
-		return nil
+	// 初始化 smidv2，优先使用配置文件的 token，否则使用持久化的或生成新的
+	smidv2, err := GetSmidV2()
+	if err != nil {
+		logger.Warnf("初始化 smidv2 失败: %v", err)
 	}
-
-	logger.Info("小黑盒启动成功")
+	c.smidv2 = smidv2
+	logger.Infof("小黑盒启动成功，smidv2: %s", smidv2[:20]+"...")
 
 	// 使用 EmitQueue 进行轮询，间隔由 heybox.interval 配置控制
 	c.StateManager.UseEmitQueueWithSiteInterval("heybox")
@@ -102,7 +103,7 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype 
 	}
 
 	if r, _ := c.GetStateManager().GetConcern(userid); r.Empty() {
-		eventsResp, err := GetProfileEvents(cfg.GetHeyboxToken(), userid)
+		eventsResp, err := GetProfileEvents(c.smidv2, userid)
 		if err != nil {
 			log.Errorf("GetProfileEvents error %v", err)
 			return nil, fmt.Errorf("获取用户动态失败 - %v", err)
@@ -154,10 +155,26 @@ func (c *Concern) Get(id interface{}) (concern.IdentityInfo, error) {
 func (c *Concern) freshNews(userid string) (*NewsInfo, error) {
 	log := logger.WithField("userid", userid)
 
-	eventsResp, err := GetProfileEvents(cfg.GetHeyboxToken(), userid)
+	eventsResp, err := GetProfileEvents(c.smidv2, userid)
 	if err != nil {
-		log.Errorf("GetProfileEvents error %v", err)
-		return nil, err
+		log.Errorf("GetProfileEvents error %v，尝试替换 smidv2", err)
+		// 请求失败时生成新的 smidv2 替换
+		newSmidV2, _, refreshErr := GetAndRefreshSmidV2(c.smidv2)
+		if refreshErr != nil {
+			log.Errorf("GetAndRefreshSmidV2 error %v", refreshErr)
+			return nil, err
+		}
+		c.smidv2 = newSmidV2
+		log.Infof("smidv2 已替换，新值前20位: %s，尝试重新请求", newSmidV2[:20])
+		eventsResp, err = GetProfileEvents(c.smidv2, userid)
+		if err != nil {
+			log.Errorf("GetProfileEvents (after smidv2 refresh) error %v", err)
+			return nil, err
+		}
+		if eventsResp.GetOk() != 1 {
+			log.WithField("respOk", eventsResp.GetOk()).Errorf("GetProfileEvents not ok")
+			return nil, errors.New("GetProfileEvents not success")
+		}
 	}
 	if eventsResp.GetOk() != 1 {
 		log.WithField("respOk", eventsResp.GetOk()).Errorf("GetProfileEvents not ok")
@@ -253,7 +270,7 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 
 func (c *Concern) FindUserInfo(userid string, load bool) (*UserInfo, error) {
 	if load {
-		eventsResp, err := GetProfileEvents(cfg.GetHeyboxToken(), userid)
+		eventsResp, err := GetProfileEvents(c.smidv2, userid)
 		if err != nil {
 			logger.WithField("userid", userid).Errorf("GetProfileEvents error %v", err)
 			return nil, err
