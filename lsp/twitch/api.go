@@ -3,10 +3,12 @@ package twitch
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
@@ -33,6 +35,26 @@ type appToken struct {
 }
 
 var tokenStore = &appToken{}
+
+// consecutiveFailures 记录连续失败次数，用于判断是否需要重置连接池
+var consecutiveFailures atomic.Int32
+
+// resetTransportIfNeeded 在连续多次请求失败后关闭 DefaultTransport 的空闲连接，强制建立新连接
+func resetTransportIfNeeded() {
+	if consecutiveFailures.Load() >= 3 {
+		logger.Warn("Twitch API 连续多次请求超时，重置空闲连接")
+		http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+		consecutiveFailures.Store(0)
+	}
+}
+
+// invalidateToken 强制清除已缓存的 Token，下次请求时重新获取
+func invalidateToken() {
+	tokenStore.mu.Lock()
+	tokenStore.accessToken = ""
+	tokenStore.mu.Unlock()
+	logger.Warn("Twitch Token 已失效，下次请求时将重新获取")
+}
 
 // tokenResponse 是 Twitch OAuth2 token 响应
 type tokenResponse struct {
@@ -211,6 +233,9 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 		return nil, nil
 	}
 
+	// 如果之前连续失败多次，先重置连接池再发请求
+	resetTransportIfNeeded()
+
 	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
@@ -228,6 +253,7 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 
 		streams, err := getStreamsBatch(token, batch)
 		if err != nil {
+			consecutiveFailures.Add(1)
 			logger.Errorf("批量查询 Twitch 直播状态失败: %v", err)
 			return nil, err
 		}
@@ -237,6 +263,7 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 		}
 	}
 
+	consecutiveFailures.Store(0)
 	return allStreams, nil
 }
 
@@ -246,8 +273,13 @@ func getStreamsBatch(token string, logins []string) ([]StreamData, error) {
 	urlStr := fmt.Sprintf("%s/streams?%s", apiBase, query)
 
 	var resp StreamsResponse
-	err := requests.Get(urlStr, nil, &resp, apiOptions(token)...)
+	var httpCode int
+	opts := append(apiOptions(token), requests.HttpCodeOption(&httpCode))
+	err := requests.Get(urlStr, nil, &resp, opts...)
 	if err != nil {
+		if httpCode == http.StatusUnauthorized {
+			invalidateToken()
+		}
 		logger.WithField("logins", logins).Errorf("查询 Twitch 直播状态失败: %v", err)
 		return nil, fmt.Errorf("查询 Twitch 直播状态失败: %w", err)
 	}
