@@ -95,6 +95,24 @@ func (i *ImageBytesElement) Alternative(s string) *ImageBytesElement {
 	return i
 }
 
+// GetFile 返回可用于发送/转发的文件字符串
+// 优先级：Url > base64(Buf) > alternative
+func (i *ImageBytesElement) GetFile() string {
+	if i == nil {
+		return ""
+	}
+	if i.Url != "" {
+		if strings.HasPrefix(i.Url, "http://") || strings.HasPrefix(i.Url, "https://") {
+			return i.Url
+		}
+		return "file://" + strings.ReplaceAll(i.Url, `\`, `\\`)
+	}
+	if i.Buf != nil && len(i.Buf) > 0 {
+		return "base64://" + base64.StdEncoding.EncodeToString(i.Buf)
+	}
+	return i.alternative
+}
+
 func (i *ImageBytesElement) Type() message.ElementType {
 	return ImageBytes
 }

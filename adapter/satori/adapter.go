@@ -308,6 +308,94 @@ func (a *SatoriAdapter) SendPrivateMessage(userID int64, message interface{}) (i
 	return int32(parsed), nil
 }
 
+func (a *SatoriAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	channelID := a.resolveGroupChannelID(groupCode)
+	if channelID == "" {
+		return 0, "", fmt.Errorf("satori group channel not found: %d", groupCode)
+	}
+
+	content := a.renderForwardContent(nodes)
+	data, err := a.SendApi("message.create", map[string]interface{}{
+		"channel_id": channelID,
+		"content":    content,
+	})
+	if err != nil {
+		logger.Warnf("Satori SendGroupForwardMessage error: %v", err)
+		return 0, "", err
+	}
+	msgID := extractStringField(data, "id")
+	if msgID == "" {
+		return 0, "", nil
+	}
+	parsed := a.rememberID(msgID)
+	a.mu.Lock()
+	a.messageChannelMap[int32(parsed)] = channelID
+	a.mu.Unlock()
+	return int32(parsed), "", nil
+}
+
+func (a *SatoriAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	channelID, err := a.resolveDirectChannelID(userID)
+	if err != nil {
+		logger.Warnf("Satori SendPrivateForwardMessage resolve channel error: %v", err)
+		return 0, "", err
+	}
+
+	content := a.renderForwardContent(nodes)
+	data, err := a.SendApi("message.create", map[string]interface{}{
+		"channel_id": channelID,
+		"content":    content,
+	})
+	if err != nil {
+		logger.Warnf("Satori SendPrivateForwardMessage error: %v", err)
+		return 0, "", err
+	}
+	msgID := extractStringField(data, "id")
+	if msgID == "" {
+		return 0, "", nil
+	}
+	parsed := a.rememberID(msgID)
+	a.mu.Lock()
+	a.messageChannelMap[int32(parsed)] = channelID
+	a.mu.Unlock()
+	return int32(parsed), "", nil
+}
+
+// renderForwardContent renders forward message nodes to satori format
+func (a *SatoriAdapter) renderForwardContent(nodes []map[string]interface{}) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(`<message forward="true">`)
+	for _, node := range nodes {
+		nodeType, _ := node["type"].(string)
+		data, _ := node["data"].(map[string]interface{})
+		if data == nil {
+			continue
+		}
+		if nodeType == "node" {
+			// Render each node as a message
+			if id, ok := data["id"].(string); ok {
+				// Reference to existing message
+				builder.WriteString(`<message id="`)
+				builder.WriteString(htmlEscape(id))
+				builder.WriteString(`" forward="true"/>`)
+			} else if content, ok := data["content"].([]interface{}); ok {
+				// Custom content - render as nested messages
+				for _, c := range content {
+					if cMap, ok := c.(map[string]interface{}); ok {
+						seg := adapter.MessageSegment{Type: extractString(cMap["type"]), Data: cMap}
+						builder.WriteString(a.renderMessageContent([]adapter.MessageSegment{seg}))
+					}
+				}
+			}
+		}
+	}
+	builder.WriteString(`</message>`)
+	return builder.String()
+}
+
 func (a *SatoriAdapter) GetSelfID() int64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

@@ -132,6 +132,20 @@ func (h *HackedBot) SendApi(api string, params map[string]interface{}) (interfac
 	return h.Bot.SendApi(api, params)
 }
 
+func (h *HackedBot) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if !h.valid() {
+		return -1, "", fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SendGroupForwardMessage(groupCode, nodes, options)
+}
+
+func (h *HackedBot) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if !h.valid() {
+		return -1, "", fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SendPrivateForwardMessage(userID, nodes, options)
+}
+
 func (h *HackedBot) TESTSetUin(uin int64) {
 	h.testUin = uin
 }

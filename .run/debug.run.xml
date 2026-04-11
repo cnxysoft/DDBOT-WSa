@@ -2,12 +2,12 @@
   <configuration default="false" name="debug" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$/debug" />
-    <go_parameters value="-v -ldflags=&quot;-extldflags=-static&quot; -gcflags &quot;all=-N -l&quot; -tags cgo" />
+    <go_parameters value="-v -ldflags=&quot;-extldflags=-static&quot; -gcflags &quot;all=-N -l&quot;" />
     <parameters value="--debug" />
     <envs>
       <env name="GOARCH" value="amd64" />
       <env name="GOOS" value="windows" />
-      <env name="CGO_ENABLED" value="1" />
+      <env name="CGO_ENABLED" value="0" />
     </envs>
     <kind value="DIRECTORY" />
     <package value="github.com/cnxysoft/DDBOT-WSa" />

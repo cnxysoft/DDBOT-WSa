@@ -1277,6 +1277,64 @@ GetIgnoreExpire: Get配置，忽略key的过期时间，如果key曾经设置过
 {{ $duration := newDuration }}
 ```
 
+### 有序集合（Sorted Set）函数
+
+基于 buntdb 的有序集合，支持按分数（score）范围查询，适用于定时任务、优先级队列等场景。
+
+存储格式：`ss:{setName}:{member}`，索引类型为 `IndexFloat`，支持高效的 O(log n) 范围查询。
+
+`ZAdd` - 添加成员到有序集合
+```text
+{{ ZAdd "MySet" "member1" 100.0 }}
+{{ ZAdd "ReserveList" $key (getTime $date "unix") }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| member | string | 成员标识 |
+| score | number/string | 分数值（支持 float64、string、int 等类型，内部自动转换） |
+
+`ZRangeByScore` - 根据分数范围获取成员
+```text
+{{ $list := ZRangeByScore "ReserveList" 0 (getTime "now" "unix") }}
+{{ range $list }}
+    {{ .member }} - {{ .score }}
+{{ end }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| min | number/string | 最小分数（支持 string 类型，内部自动转换为 float64） |
+| max | number/string | 最大分数 |
+
+返回：`[]map[string]interface{}`，每个元素包含 `member`（成员）和 `score`（分数）字段。
+
+`ZRem` - 移除有序集合中的成员
+```text
+{{ ZRem "ReserveList" "member1" "member2" }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| members | ...string | 要移除的成员（可变参数） |
+
+**使用示例：定时任务**
+```text
+{{- /* 获取所有已到期的预约项 */ -}}
+{{ $dueList := ZRangeByScore "ReserveList" -9223372036854775808 (getTime "now" "unix") }}
+{{ range $dueList }}
+    {{ $data := getJson .member }}
+    {{ if $data }}
+        {{ /* 发送通知 */ }}
+    {{ end }}
+    {{ ZRem "ReserveList" .member }}
+    {{ del .member }}
+{{ end }}
+```
+
 ## 当前支持的命令模板
 
 命令通用模板变量：
@@ -1810,6 +1868,48 @@ ACFUN-{{ .name }}直播结束了
   <summary>默认模板</summary>
 
 *该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群消息事件（通用消息处理模板）
+
+模板名：`trigger.group.message.tmpl`
+
+**说明**：此模板会在**所有群消息**的命令执行完成后触发，适用于消息日志记录、关键字捕获、命令调用统计等场景。
+
+| 模板变量        | 类型                   | 含义                                       |
+|-------------|----------------------|------------------------------------------|
+| msg         | *message.GroupMessage | 完整的群消息对象                              |
+| group_code  | int64                | 群号码                                      |
+| group_name  | string               | 群名称                                      |
+| member_code | int64                | 发送者QQ号                                  |
+| member_name | string               | 发送者昵称                                   |
+| isCommand   | bool                 | 消息是否带有命令前缀（如`/roll`）                    |
+| isMatched   | bool                 | 命令是否匹配到了处理函数（仅当`isCommand`为true时有意义）    |
+| commandName | string               | 命令名称（无前缀），未带命令前缀时为空字符串                  |
+| raw_message | *message.GroupMessage | 完整的群消息对象（与`msg`相同）                      |
+| command     | map[string]string    | 所有命令名称的映射（便于在模板中获取命令前缀等配置）               |
+
+**使用方式**：
+
+1. 在 `template` 目录下创建 `trigger.group.message.tmpl` 文件
+2. 只要此文件存在（内容不限），就会在所有群消息处理完成后执行
+3. 文件为空时，模板不产生任何输出，不发送消息
+
+**示例用途**：
+
+- 记录所有群消息到外部系统
+- 关键字监听和自动回复
+- 命令使用统计
+- 消息日志
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送任何消息。只有当用户在 `template` 目录下创建了此文件后才会生效。*
 
 ```text
 ```

@@ -67,27 +67,26 @@ func (lgc *LspGroupCommand) Execute() {
 		}
 	}()
 
-	if len(lgc.CommandName()) == 0 {
-		return
-	}
-
-	log := lgc.DefaultLogger().WithField("cmd", lgc.GetCmdArgs())
-
 	if lgc.l.PermissionStateManager.CheckBlockList(lgc.uin()) ||
 		lgc.l.PermissionStateManager.CheckBlockList(lgc.groupCode()) {
-		log.Debug("blocked")
 		return
 	}
 
 	if !lgc.DebugCheck() {
-		log.Debugf("debug mode, skip execute.")
+		return
+	}
+
+	if len(lgc.CommandName()) == 0 {
+		// 非命令消息，执行通用消息模板
+		lgc.groupMessageTemplate(false, false)
 		return
 	}
 
 	if !lgc.AtCheck() {
-		log.Debugf("at check fail, skip execute")
 		return
 	}
+
+	log := lgc.DefaultLogger().WithField("cmd", lgc.GetCmdArgs())
 
 	log.Debug("execute command")
 
@@ -194,6 +193,8 @@ func (lgc *LspGroupCommand) Execute() {
 			log.Debug("no command matched")
 		}
 	}
+	// 命令执行完成后，执行通用消息模板（所有消息都触发）
+	lgc.groupMessageTemplate(true, true)
 	return
 }
 
@@ -1109,6 +1110,28 @@ func (lgc *LspGroupCommand) templateMsg(name string, data map[string]interface{}
 		return nil
 	}
 	return m
+}
+
+// groupMessageTemplate 执行通用群消息处理模板
+// isCommand: 是否有命令前缀（消息是否为命令）
+// isMatched: 命令是否匹配到了处理函数（仅当 isCommand 为 true 时有意义）
+func (lgc *LspGroupCommand) groupMessageTemplate(isCommand, isMatched bool) {
+	const templateName = "trigger.group.message.tmpl"
+	if template.LoadTemplate(templateName) == nil {
+		return
+	}
+	data := lgc.commonTemplateData()
+	data["isCommand"] = isCommand
+	data["isMatched"] = isMatched
+	data["commandName"] = lgc.CommandName()
+	m, err := template.LoadAndExec(templateName, data)
+	if err != nil {
+		logger.Errorf("groupMessageTemplate error %v", err)
+		return
+	}
+	if m != nil && len(m.Elements()) > 0 {
+		lgc.sendChain(m)
+	}
 }
 
 func (lgc *LspGroupCommand) NewMessageContext(log *logrus.Entry) *MessageContext {

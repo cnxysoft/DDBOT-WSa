@@ -121,6 +121,10 @@ func botUin() int64 {
 	return localutils.GetBot().GetUin()
 }
 
+func now() int64 {
+	return time.Now().Unix()
+}
+
 func isAdmin(uin int64, groupCode ...int64) bool {
 	key := localdb.Key("Permission", uin, "Admin")
 	ret := localdb.Exist(key)
@@ -779,7 +783,7 @@ func videoUri(uri string) (e *mmsg.VideoElement) {
 		}
 	END:
 		if e == nil {
-			e = mmsg.NewVideo(uri)
+			e = mmsg.NewVideoByLocal(uri)
 		}
 	}
 	return e
@@ -846,7 +850,7 @@ func recordUri(uri string) (e *mmsg.RecordElement) {
 		}
 	END:
 		if e == nil {
-			e = mmsg.NewRecord(uri)
+			e = mmsg.NewRecordByLocal(uri)
 		}
 	}
 	return e
@@ -909,7 +913,7 @@ func fileUri(uri string) (e *mmsg.FileElement) {
 		}
 	END:
 		if e == nil {
-			e = mmsg.NewFile(uri)
+			e = mmsg.NewFileByLocal(uri)
 		}
 	}
 	return e
@@ -985,15 +989,34 @@ func getFileUrl(groupCode int64, fileId string) string {
 	return botInstance.GetFileUrl(groupCode, fileId)
 }
 
-func getMsg(msgId int32) interface{} {
+// toInt32 converts various types to int32 for template functions
+func toInt32(v interface{}) int32 {
+	switch val := v.(type) {
+	case int32:
+		return val
+	case int64:
+		return int32(val)
+	case int:
+		return int32(val)
+	case float64:
+		return int32(val)
+	case string:
+		if i, err := strconv.ParseInt(val, 10, 32); err == nil {
+			return int32(i)
+		}
+	}
+	return 0
+}
+
+func getMsg(msgId interface{}) interface{} {
 	botInstance := localutils.GetBot()
 	if botInstance == nil {
 		logger.Error("bot 实例未找到")
 		return nil
 	}
-	ret, err := botInstance.GetMsg(msgId)
+	ret, err := botInstance.GetMsg(toInt32(msgId))
 	if err != nil {
-		logger.Errorf("获取消息失败: %v", err)
+		logger.Tracef("获取消息失败: %v", err)
 		return nil
 	}
 	return ret

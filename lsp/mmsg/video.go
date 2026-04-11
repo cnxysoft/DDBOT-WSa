@@ -56,6 +56,24 @@ func (v *VideoElement) Alternative(s string) *VideoElement {
 	return v
 }
 
+// GetFile 返回可用于发送/转发的文件字符串
+// 优先级：Url > base64(Buf) > alternative
+func (v *VideoElement) GetFile() string {
+	if v == nil {
+		return ""
+	}
+	if v.Url != "" {
+		if strings.HasPrefix(v.Url, "http://") || strings.HasPrefix(v.Url, "https://") {
+			return v.Url
+		}
+		return "file://" + strings.ReplaceAll(v.Url, `\`, `\\`)
+	}
+	if v.Buf != nil && len(v.Buf) > 0 {
+		return "base64://" + base64.StdEncoding.EncodeToString(v.Buf)
+	}
+	return v.alternative
+}
+
 func (v *VideoElement) Type() message.ElementType {
 	return Video
 }
