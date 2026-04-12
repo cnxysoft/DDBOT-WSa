@@ -1191,6 +1191,46 @@ func SecAnalysis(id string) (result map[string]interface{}) {
 	return
 }
 
+// parseEmojisFromRichTextNodes 解析 rich_text_nodes 中的表情包
+func parseEmojisFromRichTextNodes(richTextNodes []interface{}) []Emoji {
+	var emojis []Emoji
+	for _, node := range richTextNodes {
+		nodeMap, ok := node.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeType, ok := nodeMap["type"].(string)
+		if !ok || nodeType != "RICH_TEXT_NODE_TYPE_EMOJI" {
+			continue
+		}
+		emojiData, ok := nodeMap["emoji"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var e Emoji
+		if iconUrl, ok := emojiData["icon_url"].(string); ok {
+			e.IconUrl = iconUrl
+		}
+		if text, ok := emojiData["text"].(string); ok {
+			e.Text = text
+		}
+		if origText, ok := emojiData["orig_text"].(string); ok {
+			e.OrigText = origText
+		}
+		if jumpUrl, ok := emojiData["jump_url"].(string); ok {
+			e.JumpUrl = jumpUrl
+		}
+		if id, ok := emojiData["id"].(float64); ok {
+			e.Id = int64(id)
+		}
+		if packageId, ok := emojiData["package_id"].(float64); ok {
+			e.PackageId = int64(packageId)
+		}
+		emojis = append(emojis, e)
+	}
+	return emojis
+}
+
 func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDetail) {
 	code, ok := resp["code"].(float64)
 	if !ok || code != 0 {
@@ -1290,6 +1330,10 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 			if text, ok := desc["text"].(string); ok {
 				res.Content = text
 			}
+			// 解析 desc 中的表情包
+			if richTextNodes, ok := desc["rich_text_nodes"].([]interface{}); ok {
+				res.Emojis = append(res.Emojis, parseEmojisFromRichTextNodes(richTextNodes)...)
+			}
 		}
 
 		if major, ok := dynamic["major"].(map[string]interface{}); ok {
@@ -1302,34 +1346,7 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 					res.Content = text
 					// 解析表情包
 					if richTextNodes, ok := summary["rich_text_nodes"].([]interface{}); ok {
-						for _, node := range richTextNodes {
-							if nodeMap, ok := node.(map[string]interface{}); ok {
-								if nodeType, ok := nodeMap["type"].(string); ok && nodeType == "RICH_TEXT_NODE_TYPE_EMOJI" {
-									if emoji, ok := nodeMap["emoji"].(map[string]interface{}); ok {
-										emojiData := Emoji{}
-										if iconUrl, ok := emoji["icon_url"].(string); ok {
-											emojiData.IconUrl = iconUrl
-										}
-										if text, ok := emoji["text"].(string); ok {
-											emojiData.Text = text
-										}
-										if origText, ok := emoji["orig_text"].(string); ok {
-											emojiData.OrigText = origText
-										}
-										if jumpUrl, ok := emoji["jump_url"].(string); ok {
-											emojiData.JumpUrl = jumpUrl
-										}
-										if id, ok := emoji["id"].(float64); ok {
-											emojiData.Id = int64(id)
-										}
-										if packageId, ok := emoji["package_id"].(float64); ok {
-											emojiData.PackageId = int64(packageId)
-										}
-										res.Emojis = append(res.Emojis, emojiData)
-									}
-								}
-							}
-						}
+						res.Emojis = append(res.Emojis, parseEmojisFromRichTextNodes(richTextNodes)...)
 					}
 				}
 			}
