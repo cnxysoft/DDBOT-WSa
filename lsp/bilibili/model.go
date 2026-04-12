@@ -613,11 +613,15 @@ type DynamicDetail struct {
 		} `json:"decoration_card,omitempty"`
 	} `json:"author,omitempty"`
 	Reserve struct {
-		Title string `json:"title"`
-		Desc1 string `json:"desc1"`
-		Desc2 string `json:"desc2"`
-		Desc3 string `json:"desc3"`
+		Title   string `json:"title"`
+		Desc1   string `json:"desc1"`
+		Desc2   string `json:"desc2"`
+		Desc3   string `json:"desc3"`
+		SType   int    `json:"stype"`   // 1=视频预约, 2=直播预约
+		JumpUrl string `json:"jump_url"`
+		State   int    `json:"state"`   // 0=进行中, 1=直播中/已发布, 2=已结束
 	} `json:"reserve,omitempty"`
+	Vote *VoteInfo `json:"vote,omitempty"`
 	PGC struct {
 		Type     string `json:"type"`
 		Title    string `json:"title"`
@@ -668,6 +672,29 @@ type Emoji struct {
 	JumpUrl   string `json:"jump_url"`
 	OrigText  string `json:"orig_text"`
 	PackageId int64  `json:"package_id"`
+}
+
+// VoteInfo 投票信息
+type VoteInfo struct {
+	VoteId    int64       `json:"vote_id"`
+	Title     string      `json:"title"`
+	Desc      string      `json:"desc"`
+	JoinNum   int         `json:"join_num"`
+	ChoiceCnt int         `json:"choice_cnt"`
+	EndTime   int64       `json:"end_time"`
+	Status    int         `json:"status"`
+	Button    VoteButton  `json:"button"`
+}
+
+// VoteButton 投票按钮
+type VoteButton struct {
+	Type      int           `json:"type"`
+	JumpStyle VoteJumpStyle `json:"jump_style"`
+}
+
+// VoteJumpStyle 跳转样式
+type VoteJumpStyle struct {
+	Text string `json:"text"`
 }
 
 func (c *CacheCard) prepare() {
@@ -1401,6 +1428,51 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 					if reserve["desc3"] != nil {
 						res.Reserve.Desc3 = reserve["desc3"].(map[string]interface{})["text"].(string)
 					}
+					// 解析 SType 和 JumpUrl
+					if stype, ok := reserve["stype"].(float64); ok {
+						res.Reserve.SType = int(stype)
+					}
+					if jumpUrl, ok := reserve["jump_url"].(string); ok {
+						res.Reserve.JumpUrl = jumpUrl
+					}
+					// 计算预约状态
+					res.Reserve.State = calculateReserveState(reserve)
+				}
+			}
+			if additional["type"] == "ADDITIONAL_TYPE_VOTE" {
+				if vote, ok := additional["vote"].(map[string]interface{}); ok {
+					res.Vote = &VoteInfo{}
+					if voteId, ok := vote["vote_id"].(float64); ok {
+						res.Vote.VoteId = int64(voteId)
+					}
+					if title, ok := vote["title"].(string); ok {
+						res.Vote.Title = title
+					}
+					if desc, ok := vote["desc"].(string); ok {
+						res.Vote.Desc = desc
+					}
+					if joinNum, ok := vote["join_num"].(float64); ok {
+						res.Vote.JoinNum = int(joinNum)
+					}
+					if choiceCnt, ok := vote["choice_cnt"].(float64); ok {
+						res.Vote.ChoiceCnt = int(choiceCnt)
+					}
+					if endTime, ok := vote["end_time"].(float64); ok {
+						res.Vote.EndTime = int64(endTime)
+					}
+					if status, ok := vote["status"].(float64); ok {
+						res.Vote.Status = int(status)
+					}
+					if button, ok := vote["button"].(map[string]interface{}); ok {
+						if btnType, ok := button["type"].(float64); ok {
+							res.Vote.Button.Type = int(btnType)
+						}
+						if jumpStyle, ok := button["jump_style"].(map[string]interface{}); ok {
+							if text, ok := jumpStyle["text"].(string); ok {
+								res.Vote.Button.JumpStyle.Text = text
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1418,6 +1490,43 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 		}
 	}
 	return
+}
+
+// calculateReserveState 计算预约状态
+// State: 0=进行中, 1=直播中/已发布, 2=已结束
+func calculateReserveState(reserve map[string]interface{}) int {
+	stype, _ := reserve["stype"].(float64)
+
+	button, ok := reserve["button"].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+
+	buttonType, _ := button["type"].(float64)
+
+	if stype == 2 {
+		// 直播预约
+		if buttonType == 1 {
+			// button.type=1 表示正在直播
+			return 1
+		}
+		// button.type=2 需要检查 uncheck.disable
+		if uncheck, ok := button["uncheck"].(map[string]interface{}); ok {
+			if disable, ok := uncheck["disable"].(float64); ok && int(disable) == 1 {
+				return 2 // 已结束
+			}
+		}
+		return 0 // 进行中
+	} else if stype == 1 {
+		// 视频预约
+		if buttonType == 1 {
+			// button.type=1 + 有jump_url 表示视频已发布/已过期
+			return 1
+		}
+		return 0 // 进行中
+	}
+
+	return 0
 }
 
 func replaseDesc(text string, newText string) string {

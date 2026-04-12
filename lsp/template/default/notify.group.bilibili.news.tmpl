@@ -54,7 +54,7 @@
     {{ end -}}
     {{ if .dynamic.WithOrigin -}}
         {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name $DyVideo "：") -}}
-        {{ $orgTip = join "" (list "\n\n原视频：\n" $orgTopic $orgTitle) -}}
+        {{ $orgTip = join "" (list "\n\n原视频：" $orgTopic $orgTitle) -}}
     {{ else if eq $DyVideo "的动态视频" -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了动态视频" "：") -}}
     {{ else -}}
@@ -190,15 +190,33 @@
         {{ end -}}
     {{ end -}}
 {{ end -}}
-{{ if ne .dynamic.Detail.Reserve.Title "" -}}
-    {{ printf "%v\n%v - %v\n" .dynamic.Detail.Reserve.Title .dynamic.Detail.Reserve.Desc1 .dynamic.Detail.Reserve.Desc2 -}}
-    {{ if ne .dynamic.Detail.Reserve.Desc3 "" -}}
-        {{ printf "%v\n" .dynamic.Detail.Reserve.Desc3 -}}
-    {{ end -}}
-{{ else if ne .dynamic.OriginDetail.Reserve.Title "" -}}
-    {{ printf "%v\n%v - %v\n" .dynamic.OriginDetail.Reserve.Title .dynamic.OriginDetail.Reserve.Desc1 .dynamic.OriginDetail.Reserve.Desc2 -}}
-    {{ if ne .dynamic.OriginDetail.Reserve.Desc3 "" -}}
-        {{ printf "%v\n" .dynamic.OriginDetail.Reserve.Desc3 -}}
-    {{ end -}}
+{{- /* 优先使用 OriginDetail 的 Reserve，如果没有则使用 Detail 的 */ -}}
+{{- $r := .dynamic.OriginDetail.Reserve -}}
+{{- if eq $r.Title "" -}}
+{{- $r = .dynamic.Detail.Reserve -}}
+{{- end -}}
+{{- if ne $r.Title "" -}}
+{{ printf "\n%v\n" $r.Title -}}
+{{ if and (ne $r.Desc1 "") (ne $r.Desc2 "") -}}
+{{ printf "%v - %v\n" $r.Desc1 $r.Desc2 -}}
+{{ else if ne $r.Desc1 "" -}}
+{{ printf "%v\n" $r.Desc1 -}}
+{{ else if ne $r.Desc2 "" -}}
+{{ printf "%v\n" $r.Desc2 -}}
+{{ end -}}
+{{ if ne $r.Desc3 "" -}}
+{{ printf "%v\n" $r.Desc3 -}}
+{{ end -}}
+{{ end -}}
+{{- /* 投票信息 */ -}}
+{{- $vote := .dynamic.OriginDetail.Vote -}}
+{{- if eq $vote nil -}}
+{{- $vote = .dynamic.Detail.Vote -}}
+{{- end -}}
+{{ if $vote -}}
+{{ printf "\n%v\n" $vote.Title -}}
+{{ if $vote.Desc -}}
+{{ printf "%v\n" $vote.Desc -}}
+{{ end -}}
 {{ end -}}
 {{ .dynamic.DynamicUrl }}
