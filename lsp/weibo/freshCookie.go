@@ -30,7 +30,7 @@ var (
 )
 
 const (
-	pathWeiboCN                = "https://weibo.cn/pub/"
+	pathWeiboCN                = "https://m.weibo.cn/"
 	pathWeiboDesktop           = "https://weibo.com"
 	pathPassportGenvisitorTest = "https://visitor.passport.weibo.cn/visitor/genvisitor2"
 	pathPassportGenvisitorProd = "https://passport.weibo.com/visitor/genvisitor2"
@@ -200,24 +200,10 @@ func TryRefreshGuestCookie() bool {
 		return false
 	}
 
-	// 将新的 Cookie 转换为 Option 并存储
-	var subValue string
-	var xsrfToken string
-	for _, cookie := range cookies {
-		if cookie.Name == "SUB" {
-			subValue = cookie.Value
-		}
-		if cookie.Name == "XSRF-TOKEN" {
-			xsrfToken = cookie.Value
-		}
-	}
-
+	// 将新的 Cookie 全部转换为 Option 并存储
 	opt := []requests.Option{}
-	if subValue != "" {
-		opt = append(opt, requests.CookieOption("SUB", subValue))
-	}
-	if xsrfToken != "" {
-		opt = append(opt, requests.CookieOption("XSRF-TOKEN", xsrfToken))
+	for _, cookie := range cookies {
+		opt = append(opt, requests.CookieOption(cookie.Name, cookie.Value))
 	}
 	visitorCookiesOpt.Store(opt)
 
