@@ -30,9 +30,9 @@ func TestGetDescContent_Multi(t *testing.T) {
 	}{
 		{
 			name:              "转发动态-emoji在原动态(动态详情2)",
-			detailFile:        "../../debug/dynamic_detail_2.json",
+			detailFile:        "res/dynamic_detail_2.json",
 			targetDyId:        "1189906589005381649",
-			newFile:           "../../debug/dynamic_new_2.json",
+			newFile:           "res/dynamic_new_2.json",
 			expectMainEmojis:   0, // 主动态只有"转发动态"，emoji在origin
 			expectOriginEmojis: 1, // NoWorld emoji 在原动态
 			mainContent:       "转发动态",
@@ -40,9 +40,9 @@ func TestGetDescContent_Multi(t *testing.T) {
 		},
 		{
 			name:              "转发动态-emoji在主动态(动态详情3)",
-			detailFile:        "../../debug/dynamic_detail_3.json",
+			detailFile:        "res/dynamic_detail_3.json",
 			targetDyId:        "1189906090826924073",
-			newFile:           "../../debug/dynamic_new_3.json",
+			newFile:           "res/dynamic_new_3.json",
 			expectMainEmojis:   2, // 主动态 desc.rich_text_nodes 有2个 emoji
 			expectOriginEmojis: 0, // 原动态是视频，无 emoji
 			mainContent:       "妮莉安Lily",
@@ -50,9 +50,9 @@ func TestGetDescContent_Multi(t *testing.T) {
 		},
 		{
 			name:              "原始测试-emoji在正文(含转发-动态详情1)",
-			detailFile:        "../../debug/dynamic_detail.json",
+			detailFile:        "res/dynamic_detail.json",
 			targetDyId:        "1189893961821454336",
-			newFile:           "../../debug/dynamic_new.json",
+			newFile:           "res/dynamic_new.json",
 			expectMainEmojis:   1, // 主动态 desc.rich_text_nodes 有1个 emoji
 			expectOriginEmojis: 2, // 原动态 emoji 出现2次所以2个
 			mainContent:       "模糊小黄豆",
@@ -152,10 +152,10 @@ func TestSnapCastJSON(t *testing.T) {
 		name       string
 		detailFile string
 	}{
-		{"dynamic_detail_4", "../../debug/dynamic_detail_4.json"},
-		{"dynamic_detail_3", "../../debug/dynamic_detail_3.json"},
-		{"dynamic_detail_2", "../../debug/dynamic_detail_2.json"},
-		{"dynamic_detail_1", "../../debug/dynamic_detail.json"},
+		{"dynamic_detail_4", "res/dynamic_detail_4.json"},
+		{"dynamic_detail_3", "res/dynamic_detail_3.json"},
+		{"dynamic_detail_2", "res/dynamic_detail_2.json"},
+		{"dynamic_detail_1", "res/dynamic_detail.json"},
 	}
 
 	for _, tc := range testCases {
@@ -229,7 +229,7 @@ func replaceExt(filename, suffix string) string {
 // TestTemplateRender_Full 完整流程测试
 func TestTemplateRender_Full(t *testing.T) {
 	// 加载并测试 dynamic_detail_3（转发-emoji在主动态）
-	detailData, err := os.ReadFile("../../debug/dynamic_detail_3.json")
+	detailData, err := os.ReadFile("res/dynamic_detail_3.json")
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestTemplateRender_Full(t *testing.T) {
 // 验证模板使用 origin_detail 渲染被转发内容时，能否正确获取视频信息
 func TestDataFlow_ForwardVideo(t *testing.T) {
 	// 加载 dynamic_detail_3.json
-	detailData, err := os.ReadFile("../../debug/dynamic_detail_3.json")
+	detailData, err := os.ReadFile("res/dynamic_detail_3.json")
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
 	}
