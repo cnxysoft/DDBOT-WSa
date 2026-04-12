@@ -16,6 +16,7 @@ import (
 	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/local_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
@@ -301,6 +302,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			"group_code":   event.GroupCode,
 			"author_uin":   event.AuthorUin,
 			"operator_uin": event.OperatorUin,
+			"message_id":   event.MessageId,
 		}
 		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
 			data["group_name"] = gi.Name
@@ -1068,6 +1070,54 @@ func (l *Lsp) send(msg *message.SendingMessage, target mmsg.Target) interface{} 
 
 // SendMsg 总是返回至少一个
 func (l *Lsp) SendMsg(m *mmsg.MSG, target mmsg.Target) (res []interface{}) {
+	if m == nil {
+		switch target.TargetType() {
+		case mmsg.TargetPrivate:
+			res = append(res, &message.PrivateMessage{Id: -1})
+		case mmsg.TargetGroup:
+			res = append(res, &message.GroupMessage{Id: -1})
+		}
+		return
+	}
+
+	// 检查 elements 中是否有 ForwardElement
+	var forwardNodes []map[string]interface{}
+	var forwardOptions *adapter.ForwardOptions
+	for _, elem := range m.Elements() {
+		if fe, ok := elem.(*mmsg.ForwardElement); ok {
+			forwardNodes = append(forwardNodes, fe.Nodes...)
+			if fe.Options != nil {
+				// 转换 mmsg.ForwardOptions 为 adapter.ForwardOptions
+				forwardOptions = &adapter.ForwardOptions{
+					Prompt:  fe.Options.Prompt,
+					Source:  fe.Options.Source,
+					Summary: fe.Options.Summary,
+					News:    fe.Options.News,
+				}
+			}
+		}
+	}
+
+	if len(forwardNodes) > 0 {
+		switch target.TargetType() {
+		case mmsg.TargetPrivate:
+			msgID, _, err := l.sendPrivateForwardMessage(target.TargetCode(), forwardNodes, forwardOptions)
+			if err != nil {
+				res = append(res, &message.PrivateMessage{Id: -1})
+			} else {
+				res = append(res, &message.PrivateMessage{Id: msgID})
+			}
+		case mmsg.TargetGroup:
+			msgID, _, err := l.sendGroupForwardMessage(target.TargetCode(), forwardNodes, forwardOptions)
+			if err != nil {
+				res = append(res, &message.GroupMessage{Id: -1})
+			} else {
+				res = append(res, &message.GroupMessage{Id: msgID})
+			}
+		}
+		return
+	}
+
 	msgs := m.ToMessage(target)
 	if len(msgs) == 0 {
 		switch target.TargetType() {
@@ -1195,6 +1245,22 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *message.SendingMessage, rec
 	return res
 }
 
+// sendGroupForwardMessage 发送群合并转发消息
+func (l *Lsp) sendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if bot.Instance == nil {
+		return -1, "", fmt.Errorf("bot not initialized")
+	}
+	return bot.Instance.SendGroupForwardMessage(groupCode, nodes, options)
+}
+
+// sendPrivateForwardMessage 发送私聊合并转发消息
+func (l *Lsp) sendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if bot.Instance == nil {
+		return -1, "", fmt.Errorf("bot not initialized")
+	}
+	return bot.Instance.SendPrivateForwardMessage(userID, nodes, options)
+}
+
 var Instance = &Lsp{
 	concernNotify:          concern.ReadNotifyChan(),
 	stop:                   make(chan interface{}),
@@ -1211,4 +1277,6 @@ func init() {
 	template.RegisterExtFunc("currentMode", func() string {
 		return string(Instance.LspStateManager.GetCurrentMode())
 	})
+
+	// 注意：sorted set 索引在 ZAdd 时惰性创建，无需在 init 中预创建
 }

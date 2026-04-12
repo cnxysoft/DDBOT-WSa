@@ -169,6 +169,20 @@ func (bot *Bot) SendPrivateMessage(target int64, m interface{}, newstr string) *
 	return &message.PrivateMessage{Id: -1}
 }
 
+func (bot *Bot) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if bot.Messenger != nil {
+		return bot.Messenger.SendGroupForwardMessage(groupCode, nodes, options)
+	}
+	return -1, "", fmt.Errorf("messenger not initialized")
+}
+
+func (bot *Bot) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	if bot.Messenger != nil {
+		return bot.Messenger.SendPrivateForwardMessage(userID, nodes, options)
+	}
+	return -1, "", fmt.Errorf("messenger not initialized")
+}
+
 func (bot *Bot) GetGroupInfo(groupCode int64) (*adapter.GroupInfo, error) {
 	if bot.Messenger != nil {
 		return bot.Messenger.GetGroupInfo(groupCode)

@@ -207,8 +207,7 @@ func TestVideoFuncs(t *testing.T) {
 	// 测试video函数
 	e := video(videoFile)
 	assert.NotNil(t, e)
-	assert.EqualValues(t, videoFile, e.Url)
-	//assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
+	assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
 
 	// 测试videoUri函数
 	e = videoUri(tempDir)
@@ -237,8 +236,7 @@ func TestRecordFuncs(t *testing.T) {
 	// 测试record函数
 	e := record(recordFile)
 	assert.NotNil(t, e)
-	assert.EqualValues(t, recordFile, e.Url)
-	//assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
+	assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
 
 	// 测试recordUri函数
 	e = recordUri(tempDir)

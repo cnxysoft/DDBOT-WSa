@@ -7,6 +7,7 @@ replace (
 	github.com/cnxysoft/DDBOT-WSa => ../
 	github.com/cnxysoft/DDBOT-WSa/adapter => ../adapter
 	github.com/cnxysoft/DDBOT-WSa/utils => ../utils
+	github.com/cnxysoft/DDBOT-WSa/utils/qqlog => ../utils/qqlog
 )
 
 require (

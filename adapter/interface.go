@@ -237,6 +237,13 @@ type Adapter interface {
 	SetGroupAdmin(groupCode, memberUin int64, enable bool) error
 	EditGroupCard(groupCode, memberUin int64, card string) error
 	EditGroupTitle(groupCode, memberUin int64, title string) error
+
+	// SendGroupForwardMessage 发送群合并转发消息
+	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{...}}}
+	// options 顶层参数: prompt, source, summary, news (可选)
+	SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+	// SendPrivateForwardMessage 发送私聊合并转发消息
+	SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
 }
 
 type EventCallback func(interface{})
@@ -283,6 +290,15 @@ type SenderInfo struct {
 	Nickname string
 	Card     string
 	Role     string
+}
+
+// ForwardOptions 合并转发消息的顶层参数
+// 对应 onebot-v11 send_group_forward_msg API 的顶层字段
+type ForwardOptions struct {
+	Prompt  string   // 转发消息外显标题 (LLOneBot/NapCatQQ 支持)
+	Source  string   // 转发来源 (LLOneBot/NapCatQQ 支持)
+	Summary string   // 转发摘要 (LLOneBot/NapCatQQ 支持)
+	News    []string // 转发预览文本列表 (LLOneBot/NapCatQQ 支持)
 }
 
 // ConvertToMessageElements converts []MessageSegment to []message.IMessageElement
@@ -419,4 +435,10 @@ type BotCaller interface {
 	SendApi(api string, params map[string]interface{}) (interface{}, error)
 	GroupPoke(groupCode, target int64) error
 	FriendPoke(target int64) error
+	// SendGroupForwardMessage 发送群合并转发消息
+	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{id: "msgId"}}}
+	// options 顶层参数: prompt, source, summary, news (可选)
+	SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+	// SendPrivateForwardMessage 发送私聊合并转发消息
+	SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
 }

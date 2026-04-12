@@ -141,6 +141,11 @@ func builtins() FuncMap {
 		"getOptions":  getOptions,
 		"newDuration": newDuration,
 
+		// sorted set
+		"ZAdd":         ZAdd,
+		"ZRangeByScore": ZRangeByScore,
+		"ZRem":         ZRem,
+
 		// cast
 		"float64": toFloat64,
 		"int":     toInt,

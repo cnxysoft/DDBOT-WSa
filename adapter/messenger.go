@@ -251,6 +251,20 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage
 	}
 }
 
+func (m *Messenger) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
+	if m.Adapter == nil {
+		return -1, "", fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SendGroupForwardMessage(groupCode, nodes, options)
+}
+
+func (m *Messenger) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
+	if m.Adapter == nil {
+		return -1, "", fmt.Errorf("adapter not initialized")
+	}
+	return m.Adapter.SendPrivateForwardMessage(userID, nodes, options)
+}
+
 func (m *Messenger) buildMessageSegments(msg *message.SendingMessage) []MessageSegment {
 	var segments []MessageSegment
 
@@ -816,6 +830,7 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			GroupCode:   event.GroupID,
 			OperatorUin: event.OperatorID,
 			AuthorUin:   event.UserID,
+			MessageId:   int32(event.MessageID),
 		})
 	case "essence":
 		m.eventDispatcher.DispatchGroupEssenceChanged(&client.GroupDigestEvent{

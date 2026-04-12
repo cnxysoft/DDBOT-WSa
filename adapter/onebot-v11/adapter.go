@@ -209,6 +209,102 @@ func (a *OneBotAdapter) SendPrivateMessage(userID int64, message interface{}) (i
 	return 0, nil
 }
 
+func (a *OneBotAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	params := map[string]interface{}{
+		"group_id": groupCode,
+		"messages": nodes,
+	}
+
+	// 添加顶层参数 (prompt, source, summary, news)
+	if options != nil {
+		if options.Prompt != "" {
+			params["prompt"] = options.Prompt
+		}
+		if options.Source != "" {
+			params["source"] = options.Source
+		}
+		if options.Summary != "" {
+			params["summary"] = options.Summary
+		}
+		if len(options.News) > 0 {
+			news := make([]map[string]string, 0, len(options.News))
+			for _, n := range options.News {
+				news = append(news, map[string]string{"text": n})
+			}
+			params["news"] = news
+		}
+	}
+
+	data, err := a.SendApi("send_group_forward_msg", params)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if dataMap, ok := data.(map[string]interface{}); ok {
+		if msgID, ok := dataMap["message_id"].(float64); ok {
+			var forwardID string
+			// 优先使用 forward_id (LLOneBot)
+			if fid, ok := dataMap["forward_id"].(string); ok {
+				forwardID = fid
+			} else if resid, ok := dataMap["res_id"].(string); ok {
+				// fallback 到 res_id (NapCatQQ)
+				forwardID = resid
+			}
+			return int32(msgID), forwardID, nil
+		}
+	}
+
+	return 0, "", nil
+}
+
+func (a *OneBotAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	params := map[string]interface{}{
+		"user_id": userID,
+		"messages": nodes,
+	}
+
+	// 添加顶层参数 (prompt, source, summary, news)
+	if options != nil {
+		if options.Prompt != "" {
+			params["prompt"] = options.Prompt
+		}
+		if options.Source != "" {
+			params["source"] = options.Source
+		}
+		if options.Summary != "" {
+			params["summary"] = options.Summary
+		}
+		if len(options.News) > 0 {
+			news := make([]map[string]string, 0, len(options.News))
+			for _, n := range options.News {
+				news = append(news, map[string]string{"text": n})
+			}
+			params["news"] = news
+		}
+	}
+
+	data, err := a.SendApi("send_private_forward_msg", params)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if dataMap, ok := data.(map[string]interface{}); ok {
+		if msgID, ok := dataMap["message_id"].(float64); ok {
+			var forwardID string
+			// 优先使用 forward_id (LLOneBot)
+			if fid, ok := dataMap["forward_id"].(string); ok {
+				forwardID = fid
+			} else if resid, ok := dataMap["res_id"].(string); ok {
+				// fallback 到 res_id (NapCatQQ)
+				forwardID = resid
+			}
+			return int32(msgID), forwardID, nil
+		}
+	}
+
+	return 0, "", nil
+}
+
 func (a *OneBotAdapter) OnGroupMessage(handler func(*adapter.GroupMessageEvent)) {
 	a.handlersMu.Lock()
 	defer a.handlersMu.Unlock()

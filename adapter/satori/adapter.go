@@ -308,6 +308,313 @@ func (a *SatoriAdapter) SendPrivateMessage(userID int64, message interface{}) (i
 	return int32(parsed), nil
 }
 
+func (a *SatoriAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	channelID := a.resolveGroupChannelID(groupCode)
+	if channelID == "" {
+		return 0, "", fmt.Errorf("satori group channel not found: %d", groupCode)
+	}
+
+	content := a.renderForwardContent(nodes)
+	params := map[string]interface{}{
+		"channel_id": channelID,
+		"content":    content,
+	}
+
+	// 添加转发选项 (prompt, source, summary)
+	if options != nil {
+		if options.Prompt != "" {
+			params["prompt"] = options.Prompt
+		}
+		if options.Source != "" {
+			params["source"] = options.Source
+		}
+		if options.Summary != "" {
+			params["summary"] = options.Summary
+		}
+	}
+
+	data, err := a.SendApi("message.create", params)
+	if err != nil {
+		logger.Warnf("Satori SendGroupForwardMessage error: %v", err)
+		return 0, "", err
+	}
+	msgID := extractStringField(data, "id")
+	if msgID == "" {
+		return 0, "", nil
+	}
+	parsed := a.rememberID(msgID)
+	a.mu.Lock()
+	a.messageChannelMap[int32(parsed)] = channelID
+	a.mu.Unlock()
+	return int32(parsed), "", nil
+}
+
+func (a *SatoriAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	channelID, err := a.resolveDirectChannelID(userID)
+	if err != nil {
+		logger.Warnf("Satori SendPrivateForwardMessage resolve channel error: %v", err)
+		return 0, "", err
+	}
+
+	content := a.renderForwardContent(nodes)
+	params := map[string]interface{}{
+		"channel_id": channelID,
+		"content":    content,
+	}
+
+	// 添加转发选项 (prompt, source, summary)
+	if options != nil {
+		if options.Prompt != "" {
+			params["prompt"] = options.Prompt
+		}
+		if options.Source != "" {
+			params["source"] = options.Source
+		}
+		if options.Summary != "" {
+			params["summary"] = options.Summary
+		}
+	}
+
+	data, err := a.SendApi("message.create", params)
+	if err != nil {
+		logger.Warnf("Satori SendPrivateForwardMessage error: %v", err)
+		return 0, "", err
+	}
+	msgID := extractStringField(data, "id")
+	if msgID == "" {
+		return 0, "", nil
+	}
+	parsed := a.rememberID(msgID)
+	a.mu.Lock()
+	a.messageChannelMap[int32(parsed)] = channelID
+	a.mu.Unlock()
+	return int32(parsed), "", nil
+}
+
+// renderForwardContent renders forward message nodes to satori format
+func (a *SatoriAdapter) renderForwardContent(nodes []map[string]interface{}) string {
+	if len(nodes) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(`<message forward="true">`)
+	for _, node := range nodes {
+		nodeType, _ := node["type"].(string)
+		data, _ := node["data"].(map[string]interface{})
+		if data == nil {
+			continue
+		}
+		if nodeType == "node" {
+			// Extract sender info for <author> element
+			senderName := extractString(data["name"])
+			senderId := extractString(data["uin"])
+
+			if id, ok := data["id"].(string); ok {
+				// Reference to existing message
+				if senderName != "" || senderId != "" {
+					builder.WriteString(`<author`)
+					if senderName != "" {
+						builder.WriteString(` name="`)
+						builder.WriteString(htmlEscape(senderName))
+						builder.WriteString(`"`)
+					}
+					if senderId != "" {
+						builder.WriteString(` id="`)
+						builder.WriteString(htmlEscape(senderId))
+						builder.WriteString(`"`)
+					}
+					builder.WriteString(`/>`)
+				}
+				builder.WriteString(`<message id="`)
+				builder.WriteString(htmlEscape(id))
+				builder.WriteString(`" forward="true"/>`)
+			} else if content, ok := data["content"].([]map[string]interface{}); ok {
+				// Custom content - render with author element and nested message
+				if senderName != "" || senderId != "" {
+					builder.WriteString(`<author`)
+					if senderName != "" {
+						builder.WriteString(` name="`)
+						builder.WriteString(htmlEscape(senderName))
+						builder.WriteString(`"`)
+					}
+					if senderId != "" {
+						builder.WriteString(` id="`)
+						builder.WriteString(htmlEscape(senderId))
+						builder.WriteString(`"`)
+					}
+					builder.WriteString(`/>`)
+				}
+				builder.WriteString(`<message>`)
+				for _, c := range content {
+					segData, _ := c["data"].(map[string]interface{})
+					seg := adapter.MessageSegment{Type: extractString(c["type"]), Data: segData}
+					builder.WriteString(a.renderMessageContent([]adapter.MessageSegment{seg}))
+				}
+				builder.WriteString(`</message>`)
+			} else if content, ok := data["content"].(string); ok && content != "" {
+				// Plain text content
+				if senderName != "" || senderId != "" {
+					builder.WriteString(`<author`)
+					if senderName != "" {
+						builder.WriteString(` name="`)
+						builder.WriteString(htmlEscape(senderName))
+						builder.WriteString(`"`)
+					}
+					if senderId != "" {
+						builder.WriteString(` id="`)
+						builder.WriteString(htmlEscape(senderId))
+						builder.WriteString(`"`)
+					}
+					builder.WriteString(`/>`)
+				}
+				builder.WriteString(`<message>`)
+				builder.WriteString(htmlEscape(content))
+				builder.WriteString(`</message>`)
+			} else if contentList, ok := data["content"].([]interface{}); ok && len(contentList) > 0 {
+				// Nested forward - content is []interface{} containing inner nodes
+				if senderName != "" || senderId != "" {
+					builder.WriteString(`<author`)
+					if senderName != "" {
+						builder.WriteString(` name="`)
+						builder.WriteString(htmlEscape(senderName))
+						builder.WriteString(`"`)
+					}
+					if senderId != "" {
+						builder.WriteString(` id="`)
+						builder.WriteString(htmlEscape(senderId))
+						builder.WriteString(`"`)
+					}
+					builder.WriteString(`/>`)
+				}
+				builder.WriteString(`<message forward="true">`)
+				for _, item := range contentList {
+					if nodeMap, ok := item.(map[string]interface{}); ok {
+						// Each item is an inner node with type and data
+						innerData, _ := nodeMap["data"].(map[string]interface{})
+						if innerData == nil {
+							continue
+						}
+						// Extract inner sender info
+						innerSenderName := extractString(innerData["name"])
+						innerSenderId := extractString(innerData["uin"])
+
+						if id, ok := innerData["id"].(string); ok {
+							// Reference to existing message
+							if innerSenderName != "" || innerSenderId != "" {
+								builder.WriteString(`<author`)
+								if innerSenderName != "" {
+									builder.WriteString(` name="`)
+									builder.WriteString(htmlEscape(innerSenderName))
+									builder.WriteString(`"`)
+								}
+								if innerSenderId != "" {
+									builder.WriteString(` id="`)
+									builder.WriteString(htmlEscape(innerSenderId))
+									builder.WriteString(`"`)
+								}
+								builder.WriteString(`/>`)
+							}
+							builder.WriteString(`<message id="`)
+							builder.WriteString(htmlEscape(id))
+							builder.WriteString(`" forward="true"/>`)
+						} else if innerContent, ok := innerData["content"].([]map[string]interface{}); ok {
+							// Custom content with author and nested message
+							if innerSenderName != "" || innerSenderId != "" {
+								builder.WriteString(`<author`)
+								if innerSenderName != "" {
+									builder.WriteString(` name="`)
+									builder.WriteString(htmlEscape(innerSenderName))
+									builder.WriteString(`"`)
+								}
+								if innerSenderId != "" {
+									builder.WriteString(` id="`)
+									builder.WriteString(htmlEscape(innerSenderId))
+									builder.WriteString(`"`)
+								}
+								builder.WriteString(`/>`)
+							}
+							builder.WriteString(`<message>`)
+							for _, c := range innerContent {
+								segData, _ := c["data"].(map[string]interface{})
+								seg := adapter.MessageSegment{Type: extractString(c["type"]), Data: segData}
+								builder.WriteString(a.renderMessageContent([]adapter.MessageSegment{seg}))
+							}
+							builder.WriteString(`</message>`)
+						} else if innerContent, ok := innerData["content"].(string); ok && innerContent != "" {
+							// Plain text content
+							if innerSenderName != "" || innerSenderId != "" {
+								builder.WriteString(`<author`)
+								if innerSenderName != "" {
+									builder.WriteString(` name="`)
+									builder.WriteString(htmlEscape(innerSenderName))
+									builder.WriteString(`"`)
+								}
+								if innerSenderId != "" {
+									builder.WriteString(` id="`)
+									builder.WriteString(htmlEscape(innerSenderId))
+									builder.WriteString(`"`)
+								}
+								builder.WriteString(`/>`)
+							}
+							builder.WriteString(`<message>`)
+							builder.WriteString(htmlEscape(innerContent))
+							builder.WriteString(`</message>`)
+						} else if innerContentList, ok := innerData["content"].([]interface{}); ok && len(innerContentList) > 0 {
+							// Recursively nested forward
+							if innerSenderName != "" || innerSenderId != "" {
+								builder.WriteString(`<author`)
+								if innerSenderName != "" {
+									builder.WriteString(` name="`)
+									builder.WriteString(htmlEscape(innerSenderName))
+									builder.WriteString(`"`)
+								}
+								if innerSenderId != "" {
+									builder.WriteString(` id="`)
+									builder.WriteString(htmlEscape(innerSenderId))
+									builder.WriteString(`"`)
+								}
+								builder.WriteString(`/>`)
+							}
+							builder.WriteString(`<message forward="true">`)
+							for _, innerItem := range innerContentList {
+								if innerNodeMap, ok := innerItem.(map[string]interface{}); ok {
+									innerNodeData, _ := innerNodeMap["data"].(map[string]interface{})
+									if innerNodeData == nil {
+										continue
+									}
+									innerNodeSenderName := extractString(innerNodeData["name"])
+									innerNodeSenderId := extractString(innerNodeData["uin"])
+									if innerNodeSenderName != "" || innerNodeSenderId != "" {
+										builder.WriteString(`<author`)
+										if innerNodeSenderName != "" {
+											builder.WriteString(` name="`)
+											builder.WriteString(htmlEscape(innerNodeSenderName))
+											builder.WriteString(`"`)
+										}
+										if innerNodeSenderId != "" {
+											builder.WriteString(` id="`)
+											builder.WriteString(htmlEscape(innerNodeSenderId))
+											builder.WriteString(`"`)
+										}
+										builder.WriteString(`/>`)
+									}
+									builder.WriteString(`<message>`)
+									builder.WriteString(htmlEscape(extractString(innerNodeData["content"])))
+									builder.WriteString(`</message>`)
+								}
+							}
+							builder.WriteString(`</message>`)
+						}
+					}
+				}
+				builder.WriteString(`</message>`)
+			}
+		}
+	}
+	builder.WriteString(`</message>`)
+	return builder.String()
+}
+
 func (a *SatoriAdapter) GetSelfID() int64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

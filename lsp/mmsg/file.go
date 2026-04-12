@@ -2,11 +2,13 @@ package mmsg
 
 import (
 	"encoding/base64"
+	"os"
+	"strconv"
+	"strings"
+
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"strconv"
-	"strings"
 )
 
 type FileElement struct {
@@ -24,6 +26,17 @@ func NewFile(url string, Buf ...any) *FileElement {
 	}
 	if len(Buf) > 0 {
 		f.Buf = Buf[0].([]byte)
+	}
+	return f
+}
+
+func NewFileByLocal(path string) *FileElement {
+	f := &FileElement{}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		f.Buf = b
+	} else {
+		logger.WithField("filepath", path).Errorf("ReadFile error %v", err)
 	}
 	return f
 }
@@ -62,6 +75,24 @@ func (f *FileElement) Length(s string) *FileElement {
 	i, _ := strconv.ParseInt(s, 10, 64)
 	f.length = i
 	return f
+}
+
+// GetFile 返回可用于发送/转发的文件字符串
+// 优先级：Url > base64(Buf) > alternative
+func (f *FileElement) GetFile() string {
+	if f == nil {
+		return ""
+	}
+	if f.Url != "" {
+		if strings.HasPrefix(f.Url, "http://") || strings.HasPrefix(f.Url, "https://") {
+			return f.Url
+		}
+		return "file://" + strings.ReplaceAll(f.Url, `\`, `\\`)
+	}
+	if f.Buf != nil && len(f.Buf) > 0 {
+		return "base64://" + base64.StdEncoding.EncodeToString(f.Buf)
+	}
+	return f.alternative
 }
 
 func (f *FileElement) Type() message.ElementType {
