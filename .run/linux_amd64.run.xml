@@ -2,7 +2,7 @@
   <configuration default="false" name="linux_amd64" type="GoApplicationRunConfiguration" factoryName="Go Application">
     <module name="DDBOT-WSa" />
     <working_directory value="$PROJECT_DIR$" />
-    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_linux_amd64 -v -ldflags=&quot;-s -w -extldflags=-static -extldflags '-Wl,--gc-sections'&quot; -trimpath" />
+    <go_parameters value="-o $ProjectFileDir$\dist\DDBOT_linux_amd64 -v -pgo=auto -ldflags=&quot;-s -w -extldflags=-static -extldflags '-Wl,--gc-sections'&quot; -trimpath" />
     <envs>
       <env name="GOOS" value="linux" />
       <env name="GOARCH" value="amd64" />

@@ -1,6 +1,6 @@
 module github.com/Sora233/MiraiGo-Template
 
-go 1.24.5
+go 1.26.2
 
 replace (
 	github.com/Mrs4s/MiraiGo => ../miraigo

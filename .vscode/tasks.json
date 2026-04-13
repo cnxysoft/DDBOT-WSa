@@ -8,6 +8,7 @@
 			"args": [
 				"-o",
 				"${workspaceRoot}\\dist\\DDBOT_windows_amd64.exe",
+				"-pgo=auto",
 				"-ldflags=-s -w"
 			],
 			"options": {
@@ -33,6 +34,7 @@
 			"args": [
 				"-o",
 				"${workspaceRoot}\\dist\\DDBOT_windows_arm64.exe",
+				"-pgo=auto",
 				"-ldflags=-s -w"
 			],
 			"options": {
@@ -58,6 +60,7 @@
 			"args": [
 				"-o",
 				"${workspaceRoot}\\dist\\DDBOT_linux_amd64",
+				"-pgo=auto",
 				"-ldflags=-s -w"
 			],
 			"options": {
@@ -83,6 +86,7 @@
 			"args": [
 				"-o",
 				"${workspaceRoot}\\dist\\DDBOT_linux_arm64",
+				"-pgo=auto",
 				"-ldflags=-s -w"
 			],
 			"options": {

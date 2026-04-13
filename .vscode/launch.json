@@ -18,7 +18,7 @@
                 "CGO_ENABLED": "1"
             },
             "console": "integratedTerminal",
-            "buildFlags": ["-v", "-ldflags=-extldflags=-static", "-tags=cgo"],
+            "buildFlags": ["-v", "-pgo=auto", "-ldflags=-extldflags=-static", "-tags=cgo"],
             "args": [
                 "--debug"
             ]

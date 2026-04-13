@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: [ '1.23.4' ]
+        go: [ '1.26.2' ]
 
     steps:
       - uses: actions/checkout@v3
@@ -59,43 +59,43 @@ jobs:
     strategy:
       matrix:
         include:
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: linux
             goarch: amd64
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: linux
             goarch: 386
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: linux
             goarch: arm
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: linux
             goarch: arm64
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: 386
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: amd64
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: arm
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: arm64
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: darwin
             goarch: amd64
             runner: macos-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: darwin
             goarch: arm64
             runner: macos-latest
@@ -184,7 +184,7 @@ jobs:
           export BINARY_NAME="DDBOT"
           if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cli.exe"; else export BINARY_NAME="$BINARY_NAME-cli"; fi
           echo "Building CLI version: $BINARY_NAME for $GOOS/$GOARCH"
-          go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+          go build -v -trimpath -pgo=auto -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
       
       - name: Build CGO version
         if: ${{ !(matrix.goos == 'windows' && matrix.goarch == 'arm') }}
@@ -248,7 +248,7 @@ jobs:
 
           # use env form to avoid writing go env -w
           env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED="$CGO_ENABLED" CC="$CC" \
-            go build -v -trimpath -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
+            go build -v -trimpath -pgo=auto -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
 
       - name: List build artifacts
         run: ls -la
