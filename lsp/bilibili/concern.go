@@ -113,8 +113,8 @@ func (c *Concern) Start() error {
 		c.UseFreshFunc(c.emitQueueFresher())
 	} else {
 		c.UseFreshFunc(c.fresh())
+		c.wg.Add(1)
 		go func() {
-			c.wg.Add(1)
 			defer c.wg.Done()
 			c.SyncSub()
 			tick := time.Tick(time.Hour)

@@ -56,8 +56,8 @@ func (c *Concern) Start() error {
 	Init()
 	c.UseNotifyGeneratorFunc(c.notifyGenerator())
 	c.UseFreshFunc(c.fresh())
+	c.wg.Add(1)
 	go func() {
-		c.wg.Add(1)
 		defer c.wg.Done()
 		c.SyncSub()
 		tick := time.Tick(time.Hour)
