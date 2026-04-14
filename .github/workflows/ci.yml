@@ -59,43 +59,39 @@ jobs:
     strategy:
       matrix:
         include:
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: linux
             goarch: amd64
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: linux
             goarch: 386
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: linux
             goarch: arm
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: linux
             goarch: arm64
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: windows
             goarch: 386
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: windows
             goarch: amd64
             runner: ubuntu-latest
-          - go: '1.25.9'
-            goos: windows
-            goarch: arm
-            runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: windows
             goarch: arm64
             runner: ubuntu-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: darwin
             goarch: amd64
             runner: macos-latest
-          - go: '1.25.9'
+          - go: '1.26.2'
             goos: darwin
             goarch: arm64
             runner: macos-latest
