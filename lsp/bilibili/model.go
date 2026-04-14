@@ -18,6 +18,7 @@ import (
 )
 
 const PathWebDynamicDetail = "/x/polymer/web-dynamic/v1/detail"
+const PathWebDynamicDetailPic = "/x/polymer/web-dynamic/v1/detail/pic"
 
 type NewsInfo struct {
 	UserInfo
@@ -1276,6 +1277,50 @@ func parseEmojisFromRichTextNodes(richTextNodes []interface{}) []Emoji {
 	return emojis
 }
 
+// fetchViewPicsByRid 通过 rid 请求 API 获取 VIEW_PICTURE 节点的图片列表
+func fetchViewPicsByRid(rid string) []PicInfo {
+	url := BPath(PathWebDynamicDetailPic)
+	params := map[string]string{"id": rid}
+	var opts = []requests.Option{
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.RetryOption(3),
+	}
+	opts = append(opts, GetVerifyOption()...)
+	var resp bytes.Buffer
+	if err := requests.Get(url, params, &resp, opts...); err != nil {
+		logger.WithField("rid", rid).Errorf("fetchViewPicsByRid get failed %v", err)
+		return nil
+	}
+	var raw struct {
+		Code int `json:"code"`
+		Data []struct {
+			Height float64 `json:"height"`
+			Size   float64 `json:"size"`
+			Src    string  `json:"src"`
+			Width  float64 `json:"width"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Bytes(), &raw); err != nil {
+		logger.WithField("rid", rid).Errorf("fetchViewPicsByRid unmarshal failed %v", err)
+		return nil
+	}
+	if raw.Code != 0 {
+		logger.WithField("rid", rid).Warnf("fetchViewPicsByRid code: %v", raw.Code)
+		return nil
+	}
+	pics := make([]PicInfo, 0, len(raw.Data))
+	for _, d := range raw.Data {
+		pics = append(pics, PicInfo{
+			Height: int(d.Height),
+			Size:   int(d.Size),
+			Src:    d.Src,
+			Width:  int(d.Width),
+		})
+	}
+	return pics
+}
+
 // parseViewPicturesFromRichTextNodes 解析 rich_text_nodes 中的 VIEW_PICTURE 节点图片
 func parseViewPicturesFromRichTextNodes(richTextNodes []interface{}) []DescViewPictures {
 	var viewPictures []DescViewPictures
@@ -1321,6 +1366,11 @@ func parseViewPicturesFromRichTextNodes(richTextNodes []interface{}) []DescViewP
 				}
 				vp.Pics = append(vp.Pics, p)
 			}
+		}
+
+		// 节点本身无 pics 时通过 rid 二次请求 API 获取图片
+		if len(vp.Pics) == 0 && vp.Rid != "" {
+			vp.Pics = fetchViewPicsByRid(vp.Rid)
 		}
 
 		viewPictures = append(viewPictures, vp)

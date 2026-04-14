@@ -50,6 +50,7 @@ var BasePath = map[string]string{
 	PathRoomInfo:                        BaseLiveHost,
 	PathWebAreaList:                     BaseLiveHost,
 	PathWebDynamicDetail:                BaseHost,
+	PathWebDynamicDetailPic:             BaseHost,
 }
 
 type VerifyInfo struct {
