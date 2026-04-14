@@ -662,6 +662,24 @@ type DynamicDetail struct {
 	Content   string `json:"content"`
 	// 表情包列表
 	Emojis []Emoji `json:"emojis,omitempty"`
+	// desc.rich_text_nodes 中 VIEW_PICTURE 节点的图片
+	DescViewPictures []DescViewPictures `json:"desc_view_pictures,omitempty"`
+}
+
+// DescViewPictures desc.rich_text_nodes 中 VIEW_PICTURE 节点的图片信息
+type DescViewPictures struct {
+	JumpUrl string     `json:"jump_url"`
+	Rid     string     `json:"rid"`
+	Text    string     `json:"text"`
+	Pics    []PicInfo  `json:"pics"`
+}
+
+// PicInfo VIEW_PICTURE 节点中的单张图片信息
+type PicInfo struct {
+	Height int    `json:"height"`
+	Size   int    `json:"size"`
+	Src    string `json:"src"`
+	Width  int    `json:"width"`
 }
 
 // Emoji 表情包结构
@@ -1258,6 +1276,58 @@ func parseEmojisFromRichTextNodes(richTextNodes []interface{}) []Emoji {
 	return emojis
 }
 
+// parseViewPicturesFromRichTextNodes 解析 rich_text_nodes 中的 VIEW_PICTURE 节点图片
+func parseViewPicturesFromRichTextNodes(richTextNodes []interface{}) []DescViewPictures {
+	var viewPictures []DescViewPictures
+	for _, node := range richTextNodes {
+		nodeMap, ok := node.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeType, ok := nodeMap["type"].(string)
+		if !ok || nodeType != "RICH_TEXT_NODE_TYPE_VIEW_PICTURE" {
+			continue
+		}
+
+		var vp DescViewPictures
+		if jumpUrl, ok := nodeMap["jump_url"].(string); ok {
+			vp.JumpUrl = jumpUrl
+		}
+		if rid, ok := nodeMap["rid"].(string); ok {
+			vp.Rid = rid
+		}
+		if text, ok := nodeMap["text"].(string); ok {
+			vp.Text = text
+		}
+
+		if pics, ok := nodeMap["pics"].([]interface{}); ok {
+			for _, pic := range pics {
+				picMap, ok := pic.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				var p PicInfo
+				if height, ok := picMap["height"].(float64); ok {
+					p.Height = int(height)
+				}
+				if size, ok := picMap["size"].(float64); ok {
+					p.Size = int(size)
+				}
+				if src, ok := picMap["src"].(string); ok {
+					p.Src = src
+				}
+				if width, ok := picMap["width"].(float64); ok {
+					p.Width = int(width)
+				}
+				vp.Pics = append(vp.Pics, p)
+			}
+		}
+
+		viewPictures = append(viewPictures, vp)
+	}
+	return viewPictures
+}
+
 func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDetail) {
 	code, ok := resp["code"].(float64)
 	if !ok || code != 0 {
@@ -1360,6 +1430,7 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 			// 解析 desc 中的表情包
 			if richTextNodes, ok := desc["rich_text_nodes"].([]interface{}); ok {
 				res.Emojis = append(res.Emojis, parseEmojisFromRichTextNodes(richTextNodes)...)
+				res.DescViewPictures = append(res.DescViewPictures, parseViewPicturesFromRichTextNodes(richTextNodes)...)
 			}
 		}
 

@@ -31,7 +31,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Image.Description -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n" $orgTip .dynamic.Image.Description -}}
     {{ if .dynamic.Image.Bytes -}}
         {{ pic .dynamic.Image.Bytes -}}
     {{ else if .dynamic.Image.ImageUrls -}}
@@ -46,7 +56,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Text.Content -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n" $orgTip .dynamic.Text.Content -}}
 {{ else if eq .dynamic.Type 8 -}}
     {{ $DyVideo := "的视频" -}}
     {{ if eq .dynamic.Video.Action "发布了动态" -}}
@@ -61,9 +81,29 @@
         {{ $msg = join "" (list .dynamic.User.Name .dynamic.Video.Action "：") -}}
     {{ end -}}
     {{ if eq $DyVideo "的动态视频" -}}
-        {{ printf "%v\n%v\n%v%v%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Video.Dynamic -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+        {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+        {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+        {{ if .dynamic.Detail.DescViewPictures -}}
+            {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+                {{ range $p := $vp.Pics -}}
+                    {{ pic $p.Src -}}
+                {{ end -}}
+            {{ end -}}
+        {{ end -}}
+        {{ printf "%v%v\n" $orgTip .dynamic.Video.Dynamic -}}
     {{ else -}}
-        {{ printf "%v\n%v\n%v%v%v%v%v\n标题：%v\n简介：%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Video.Dynamic .dynamic.Video.Title .dynamic.Video.Desc -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+        {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+        {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+        {{ if .dynamic.Detail.DescViewPictures -}}
+            {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+                {{ range $p := $vp.Pics -}}
+                    {{ pic $p.Src -}}
+                {{ end -}}
+            {{ end -}}
+        {{ end -}}
+        {{ printf "%v%v\n标题：%v\n简介：%v\n" $orgTip .dynamic.Video.Dynamic .dynamic.Video.Title .dynamic.Video.Desc -}}
     {{ end -}}
     {{ pic .dynamic.Video.CoverUrl -}}
 {{ else if eq .dynamic.Type 64 -}}
@@ -78,7 +118,17 @@
         {{ $title = "" -}}
     {{ end -}}
     {{ if .parse_post -}}
-        {{ printf "%v\n%v\n%v%v%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Post.Title -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+        {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+        {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+        {{ if .dynamic.Detail.DescViewPictures -}}
+            {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+                {{ range $p := $vp.Pics -}}
+                    {{ pic $p.Src -}}
+                {{ end -}}
+            {{ end -}}
+        {{ end -}}
+        {{ printf "%v%v\n" $orgTip .dynamic.Post.Title -}}
         {{ range $v := parseBiliPost $PostUrl -}}
             {{ if eq $v.Type "text" -}}
                 {{ printf "%v\n" $v.Ele -}}
@@ -87,7 +137,17 @@
             {{ end -}}
         {{ end -}}
     {{ else -}}
-        {{ printf "%v\n%v\n%v%v%v%v%v\n%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Post.Title .dynamic.Post.Summary -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+        {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+        {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+        {{ if .dynamic.Detail.DescViewPictures -}}
+            {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+                {{ range $p := $vp.Pics -}}
+                    {{ pic $p.Src -}}
+                {{ end -}}
+            {{ end -}}
+        {{ end -}}
+        {{ printf "%v%v\n%v\n" $orgTip .dynamic.Post.Title .dynamic.Post.Summary -}}
         {{ if .dynamic.Post.ImageUrls -}}
             {{ range $v := .dynamic.Post.ImageUrls -}}
                 {{ pic $v -}}
@@ -101,7 +161,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "投稿了新音频：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v\n%v\n%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Music.Title .dynamic.Music.Intro .dynamic.Music.Author -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n%v\n%v\n" $orgTip .dynamic.Music.Title .dynamic.Music.Intro .dynamic.Music.Author -}}
     {{ pic .dynamic.Music.CoverUrl -}}
 {{ else if eq .dynamic.Type 2048 -}}
     {{ if .dynamic.WithOrigin -}}
@@ -110,7 +180,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发表了新动态：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v\n%v\n%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Sketch.Content .dynamic.Sketch.Title .dynamic.Sketch.DescText -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n%v\n%v\n" $orgTip .dynamic.Sketch.Content .dynamic.Sketch.Title .dynamic.Sketch.DescText -}}
     {{ if ne .dynamic.Sketch.CoverUrl "" -}}
         {{ pic .dynamic.Sketch.CoverUrl -}}
     {{ end -}}
@@ -121,7 +201,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了直播信息：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Live.Title -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n" $orgTip .dynamic.Live.Title -}}
     {{ pic .dynamic.Live.CoverUrl -}}
 {{ else if eq .dynamic.Type 4300 -}}
     {{ if .dynamic.WithOrigin -}}
@@ -130,7 +220,17 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了收藏夹：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.MyList.Title -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n" $orgTip .dynamic.MyList.Title -}}
     {{ pic .dynamic.MyList.CoverUrl -}}
 {{ else if eq .dynamic.Type 1024 -}}
     {{ if .dynamic.WithOrigin -}}
@@ -138,21 +238,58 @@
     {{ else -}}
         {{ $msg = join "" (list .dynamic.User.Name "发布了新动态：") -}}
     {{ end -}}
-    {{ printf "%v\n%v\n%v%v%v%v\n%v\n" $msg .dynamic.Date $topic $title .dynamic.Content $orgTip .dynamic.Miss.Tips -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+    {{ printf "%v%v%v" $topic $title .dynamic.Content -}}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+    {{ printf "%v%v\n" $orgTip .dynamic.Miss.Tips -}}
 {{ else if eq .dynamic.Type 1 -}}
     {{- .dynamic.User.Name }}转发了{{ .dynamic.OriginUser.Name }}的动态：
     {{- .dynamic.Date }}
     {{- .dynamic.Content }}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
 {{ else if eq .dynamic.Type 4302 -}}
     {{- .dynamic.User.Name }}转发了{{ .dynamic.Course.Name }}的{{ .dynamic.Course.Badge }}：
     {{- .dynamic.Date }}
-    {{- .dynamic.Content }}\n原课程：
+    {{- .dynamic.Content }}
+    {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+    {{ if .dynamic.Detail.DescViewPictures -}}
+        {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+            {{ range $p := $vp.Pics -}}
+                {{ pic $p.Src -}}
+            {{ end -}}
+        {{ end -}}
+    {{ end -}}
+\n原课程：
     {{- .dynamic.Course.Title }}
     {{ pic .dynamic.Course.CoverUrl -}}
 {{ else -}}
     {{ if .dynamic.WithOrigin -}}
         {{ $msg = join "" (list .dynamic.User.Name "转发了动态：") -}}
-        {{ printf "%v\n%v\n%v\n" $msg .dynamic.Date .dynamic.Content -}}
+        {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
+        {{ printf "%v" .dynamic.Content -}}
+        {{- /* 主动态 desc 中的 VIEW_PICTURE 图片 */ -}}
+        {{ if .dynamic.Detail.DescViewPictures -}}
+            {{ range $vp := .dynamic.Detail.DescViewPictures -}}
+                {{ range $p := $vp.Pics -}}
+                    {{ pic $p.Src -}}
+                {{ end -}}
+            {{ end -}}
+        {{ end -}}
+        {{ printf "\n" -}}
         {{ if ne .dynamic.Default.Title "" -}}
             {{ printf "标题：%v\n类型：%v\n" .dynamic.Default.Title .dynamic.Default.TypeName -}}
         {{ end -}}
@@ -191,32 +328,32 @@
     {{ end -}}
 {{ end -}}
 {{- /* 优先使用 OriginDetail 的 Reserve，如果没有则使用 Detail 的 */ -}}
-{{- $r := .dynamic.OriginDetail.Reserve -}}
-{{- if eq $r.Title "" -}}
-{{- $r = .dynamic.Detail.Reserve -}}
-{{- end -}}
-{{- if ne $r.Title "" -}}
-{{ printf "\n%v\n" $r.Title -}}
-{{ if and (ne $r.Desc1 "") (ne $r.Desc2 "") -}}
-{{ printf "%v - %v\n" $r.Desc1 $r.Desc2 -}}
-{{ else if ne $r.Desc1 "" -}}
-{{ printf "%v\n" $r.Desc1 -}}
-{{ else if ne $r.Desc2 "" -}}
-{{ printf "%v\n" $r.Desc2 -}}
+{{ $r := .dynamic.OriginDetail.Reserve -}}
+{{ if eq $r.Title "" -}}
+    {{ $r = .dynamic.Detail.Reserve -}}
 {{ end -}}
-{{ if ne $r.Desc3 "" -}}
-{{ printf "%v\n" $r.Desc3 -}}
-{{ end -}}
+{{ if ne $r.Title "" -}}
+    {{ printf "\n%v\n" $r.Title -}}
+    {{ if and (ne $r.Desc1 "") (ne $r.Desc2 "") -}}
+        {{ printf "%v - %v\n" $r.Desc1 $r.Desc2 -}}
+    {{ else if ne $r.Desc1 "" -}}
+        {{ printf "%v\n" $r.Desc1 -}}
+    {{ else if ne $r.Desc2 "" -}}
+        {{ printf "%v\n" $r.Desc2 -}}
+    {{ end -}}
+    {{ if ne $r.Desc3 "" -}}
+        {{ printf "%v\n" $r.Desc3 -}}
+    {{ end -}}
 {{ end -}}
 {{- /* 投票信息 */ -}}
-{{- $vote := .dynamic.OriginDetail.Vote -}}
-{{- if eq $vote nil -}}
-{{- $vote = .dynamic.Detail.Vote -}}
-{{- end -}}
-{{ if $vote -}}
-{{ printf "\n%v\n" $vote.Title -}}
-{{ if $vote.Desc -}}
-{{ printf "%v\n" $vote.Desc -}}
+{{ $vote := .dynamic.OriginDetail.Vote -}}
+{{ if eq $vote nil -}}
+    {{ $vote = .dynamic.Detail.Vote -}}
 {{ end -}}
+{{ if $vote -}}
+    {{ printf "\n%v\n" $vote.Title -}}
+    {{ if $vote.Desc -}}
+        {{ printf "%v\n" $vote.Desc -}}
+    {{ end -}}
 {{ end -}}
 {{ .dynamic.DynamicUrl }}
