@@ -53,7 +53,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cast v1.9.2
 	github.com/stretchr/testify v1.11.1
-	github.com/tidwall/buntdb v1.2.10
+	github.com/tidwall/buntdb v1.3.2
 	github.com/tidwall/gjson v1.18.0
 	go.uber.org/atomic v1.11.0
 	golang.org/x/sync v0.16.0
