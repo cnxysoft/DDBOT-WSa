@@ -34,6 +34,7 @@ require (
 	github.com/bytedance/sonic v1.9.2 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/cnxysoft/DDBOT-WSa/lsp/eventbus v0.0.0-20251103113836-bf7ecd344df7 // indirect
+	github.com/cnxysoft/DDBOT-WSa/utils/qqlog v0.0.0 // indirect
 	github.com/ericpauley/go-quantize v0.0.0-20200331213906-ae555eb2afa4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fumiama/imgsz v0.0.4 // indirect
