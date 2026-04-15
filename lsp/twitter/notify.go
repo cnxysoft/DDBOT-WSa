@@ -643,8 +643,8 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	} else {
 		proxyStr = proxy.ProxyString()
 	}
-	if _, err = os.Stat("./res"); os.IsNotExist(err) {
-		if err = os.MkdirAll("./res", 0755); err != nil {
+	if _, err = os.Stat("./tmp"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./tmp", 0755); err != nil {
 			return "", err
 		}
 	}
@@ -652,7 +652,7 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	if IsGif {
 		fileExt = "gif"
 	}
-	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + fileExt)
+	filePath, _ := filepath.Abs("./tmp/" + uuid.New().String() + "." + fileExt)
 
 	if IsGif {
 		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
@@ -882,7 +882,7 @@ func tryDownloadBestImage(finalURL string) (string, error) {
 	return "", lastErr
 }
 
-// ======== 下载图片到 ./res/<uuid>.<ext> 并异步清理 ========
+// ======== 下载图片到 ./tmp/<uuid>.<ext> 并异步清理 ========
 
 func downloadImageLocal(imgURL string) (string, error) {
 	var buf bytes.Buffer
@@ -893,8 +893,8 @@ func downloadImageLocal(imgURL string) (string, error) {
 		return "", err
 	}
 
-	if _, err := os.Stat("./res"); os.IsNotExist(err) {
-		if err = os.MkdirAll("./res", 0755); err != nil {
+	if _, err := os.Stat("./tmp"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./tmp", 0755); err != nil {
 			return "", err
 		}
 	}
@@ -931,7 +931,7 @@ func downloadImageLocal(imgURL string) (string, error) {
 		}
 	}
 
-	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + ext)
+	filePath, _ := filepath.Abs("./tmp/" + uuid.New().String() + "." + ext)
 	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
 		return "", err
 	}

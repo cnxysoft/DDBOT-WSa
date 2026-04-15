@@ -2,6 +2,8 @@ package twitter
 
 import (
 	"net/http/cookiejar"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -22,6 +24,34 @@ var (
 
 func init() {
 	concern.RegisterConcern(newConcern(concern.GetNotifyChan()))
+}
+
+// cleanupTmpDir 清理 ./tmp 目录下的所有临时文件
+func cleanupTmpDir() {
+	tmpDir := filepath.Clean("./tmp")
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warnf("清理 tmp 目录失败: %v", err)
+		}
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		filePath := filepath.Join(tmpDir, entry.Name())
+		// 防止路径遍历攻击
+		if filepath.Dir(filePath) != tmpDir {
+			logger.Warnf("跳过非法路径: %s", filePath)
+			continue
+		}
+		if err := os.Remove(filePath); err != nil {
+			logger.Warnf("清理临时文件 %s 失败: %v", filePath, err)
+		} else {
+			logger.Debugf("已清理临时文件: %s", filePath)
+		}
+	}
 }
 
 func setCookies() {
@@ -51,7 +81,7 @@ func setCookies() {
 
 		twitterAPI = NewTwitterAPI(ct0, authToken, bearerToken, queryId, screenName)
 
-		// 自动获取 screenName 和 main.js URL - 一次请求获取所有数据
+		// 自动获取 screenName 和 queryId
 		if twitterAPI != nil && twitterAPI.IsEnabled() {
 			if screenName == "" {
 				logger.Info("Cookie验证：正在获取账号信息...")
@@ -80,11 +110,11 @@ func setCookies() {
 					}
 				}
 
-				// 获取 queryId 和 Bearer token (使用已获取的 mainJsUrl)
+				// 获取 queryId（从 sw.js → LoggedInMain 提取缓存）
 				if twitterAPI != nil && twitterAPI.IsEnabled() && mainJsUrl != "" {
-					logger.Info("正在从 main.js 获取最新的 queryId 和 Bearer token...")
-					if err := RefreshAPIFromMainJSWithUrl(mainJsUrl); err != nil {
-						logger.Warnf("获取 queryId/Bearer 失败，使用默认配置: %v", err)
+					logger.Info("正在从 sw.js 刷新 queryId 缓存...")
+					if err := RefreshAPIFromMainJS(); err != nil {
+						logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 					} else {
 						logger.Infof("成功获取 queryId: %s", twitterAPI.queryId)
 					}
@@ -93,10 +123,10 @@ func setCookies() {
 				logger.Infof("使用配置的screenName: %s", screenName)
 				twitterAPI.screenName = screenName
 
-				// 也获取最新的 queryId 和 Bearer token
-				logger.Info("正在从 main.js 获取最新的 queryId 和 Bearer token...")
+				// 从 sw.js 刷新 queryId 缓存
+				logger.Info("正在从 sw.js 刷新 queryId 缓存...")
 				if err := RefreshAPIFromMainJS(); err != nil {
-					logger.Warnf("获取 queryId/Bearer 失败，使用默认配置: %v", err)
+					logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 				} else {
 					logger.Infof("成功获取 queryId: %s", twitterAPI.queryId)
 				}

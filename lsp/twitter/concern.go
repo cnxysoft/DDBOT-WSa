@@ -607,6 +607,8 @@ retry:
 }
 
 func (t *twitterConcern) Start() error {
+	// 清理 ./tmp 目录下的旧临时文件
+	cleanupTmpDir()
 	// 以用户设置覆盖默认设置
 	setCookies()
 	// 如果需要启用轮询器，可以使用下面的方法

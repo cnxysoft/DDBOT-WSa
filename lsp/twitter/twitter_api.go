@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -26,7 +29,74 @@ const (
 
 	DefaultHomeTimelineQueryId = "0vp2Au9doTKsbn2vIk48Dg"
 	DefaultBearerToken         = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+
+	queryIdCacheFile = "./res/twitter_queryids.json"
 )
+
+var queryIdMutex sync.RWMutex
+
+// QueryIdCache 保存从 LoggedInMain bundle 提取的所有 queryId
+type QueryIdCache struct {
+	UpdatedAt time.Time          `json:"updated_at"`
+	Operations map[string]string `json:"operations"` // operationName -> queryId
+}
+
+// LoadQueryIdCache 从本地文件加载 queryId 缓存
+func LoadQueryIdCache() (*QueryIdCache, error) {
+	data, err := os.ReadFile(queryIdCacheFile)
+	if err != nil {
+		return nil, err
+	}
+	var cache QueryIdCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return &cache, nil
+}
+
+// SaveQueryIdCache 保存 queryId 缓存到本地文件
+func SaveQueryIdCache(cache *QueryIdCache) error {
+	// 确保目录存在
+	dir := filepath.Dir(queryIdCacheFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(queryIdCacheFile, data, 0644)
+}
+
+// GetQueryId 获取指定 operation 的 queryId
+func (c *QueryIdCache) GetQueryId(operationName string) string {
+	if c == nil {
+		return ""
+	}
+	return c.Operations[operationName]
+}
+
+// GetProfileSpotlightsQueryId 获取 ProfileSpotlightsQuery 的 queryId（优先从缓存）
+func GetProfileSpotlightsQueryId() string {
+	if cache, err := LoadQueryIdCache(); err == nil {
+		if id := cache.GetQueryId("ProfileSpotlightsQuery"); id != "" {
+			return id
+		}
+	}
+	return "mzoqrVGwk-YTSGME1dRfXQ" // fallback 硬编码
+}
+
+// IsCacheExpired 检查缓存是否过期
+func (c *QueryIdCache) IsCacheExpired() bool {
+	if c == nil {
+		return true
+	}
+	interval := config.GlobalConfig.GetDuration("twitter.queryIdRefreshInterval")
+	if interval <= 0 {
+		interval = time.Hour * 24 * 7 // 默认7天
+	}
+	return time.Since(c.UpdatedAt) > interval
+}
 
 // TwitterAPI handles official X.com API requests
 type TwitterAPI struct {
@@ -204,96 +274,192 @@ func (t *TwitterAPI) FetchInitialState() (screenName, mainJsUrl string, err erro
 	return screenName, mainJsUrl, nil
 }
 
-func (t *TwitterAPI) FetchQueryIdAndBearerFromMainJs(mainJsUrl string) (queryId, bearer string, err error) {
-	if t == nil || !t.IsEnabled() {
-		return "", "", errors.New("twitter API not configured")
-	}
-
-	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
-		requests.TimeoutOption(time.Second * 60),
-		requests.AddUAOption(UserAgent),
-		requests.HeaderOption("Accept", "*/*"),
-		requests.HeaderOption("Accept-Language", "en-US,en;q=0.9"),
-		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br"),
-		requests.HeaderOption("Referer", TwitterHomeURL),
-		requests.RetryOption(3),
-	}
-
-	var resp bytes.Buffer
-	err = requests.Get(mainJsUrl, nil, &resp, opts...)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to fetch main.js: %w", err)
-	}
-
-	decompressed, err := decompressResponse(resp.Bytes())
-	if err != nil {
-		return "", "", fmt.Errorf("decompress main.js failed: %w", err)
-	}
-
-	jsContent := string(decompressed)
-
-	queryIdPattern := `queryId:"([a-zA-Z0-9_-]{20,})",operationName:"HomeLatestTimeline"`
-	queryIdRe := regexp.MustCompile(queryIdPattern)
-	queryIdMatches := queryIdRe.FindStringSubmatch(jsContent)
-	if len(queryIdMatches) < 2 {
-		return "", "", errors.New("queryId not found in main.js")
-	}
-	queryId = queryIdMatches[1]
-
-	bearerPattern := `[Bb]earer\s+(AAAA%?[a-zA-Z0-9%]+)`
-	bearerRe := regexp.MustCompile(bearerPattern)
-	bearerMatches := bearerRe.FindStringSubmatch(jsContent)
-	if len(bearerMatches) < 2 {
-		return "", "", errors.New("bearerToken not found in main.js")
-	}
-	bearer = bearerMatches[1]
-
-	return queryId, bearer, nil
-}
-
 func RefreshAPIFromMainJS() error {
 	if TwitterMode != ModeAPI || twitterAPI == nil {
 		return nil
 	}
 
-	_, mainJsUrl, err := twitterAPI.FetchInitialState()
-	if err != nil {
-		return fmt.Errorf("failed to fetch main.js URL: %w", err)
-	}
-	if mainJsUrl == "" {
-		return errors.New("main.js URL not found")
+	// 先尝试从本地缓存加载
+	cache, err := LoadQueryIdCache()
+	if err == nil && !cache.IsCacheExpired() {
+		homeId := cache.GetQueryId("HomeLatestTimeline")
+		if homeId != "" {
+			twitterAPI.queryId = homeId
+			logger.Infof("Using cached queryId: %s (updated %v ago)", homeId, time.Since(cache.UpdatedAt))
+			return nil
+		}
 	}
 
-	return refreshAPIWithMainJsUrl(mainJsUrl)
+	// 缓存不存在或已过期，从 sw.js 重新抓取
+	logger.Info("QueryId cache miss or expired, fetching from sw.js...")
+
+	// 先从 sw.js 获取 LoggedInMain bundle URL
+	bundleUrl, err := twitterAPI.FetchLoggedInMainBundleUrl()
+	if err != nil {
+		return fmt.Errorf("failed to fetch LoggedInMain bundle URL: %w", err)
+	}
+	if bundleUrl == "" {
+		return errors.New("bundle.LoggedInMain URL not found in sw.js")
+	}
+
+	return refreshAPIWithBundleUrl(bundleUrl)
 }
 
-func RefreshAPIFromMainJSWithUrl(mainJsUrl string) error {
-	if TwitterMode != ModeAPI || twitterAPI == nil {
-		return nil
+// FetchLoggedInMainBundleUrl fetches sw.js and extracts the bundle.LoggedInMain.{hash}.js URL
+func (t *TwitterAPI) FetchLoggedInMainBundleUrl() (string, error) {
+	if t == nil || !t.IsEnabled() {
+		return "", errors.New("twitter API not configured")
 	}
-	if mainJsUrl == "" {
-		return errors.New("main.js URL is empty")
+
+	opts := []requests.Option{
+		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.TimeoutOption(time.Second * 30),
+		requests.AddUAOption(UserAgent),
+		requests.HeaderOption("Accept", "*/*"),
+		requests.HeaderOption("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),
+		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br"),
+		requests.HeaderOption("Referer", "https://x.com/"),
+		requests.CookieOption("ct0", t.ct0),
+		requests.CookieOption("auth_token", t.authToken),
+		requests.RetryOption(3),
 	}
-	return refreshAPIWithMainJsUrl(mainJsUrl)
+
+	var resp bytes.Buffer
+	err := requests.Get("https://x.com/sw.js", nil, &resp, opts...)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch sw.js: %w", err)
+	}
+
+	decompressed, err := decompressResponse(resp.Bytes())
+	if err != nil {
+		return "", fmt.Errorf("decompress sw.js failed: %w", err)
+	}
+
+	content := string(decompressed)
+
+	// 从 self.ASSETS=[...] 数组中匹配 bundle.LoggedInMain.{hash}.js
+	bundlePattern := `https://abs\.twimg\.com/responsive-web/client-web/bundle\.LoggedInMain\.[a-z0-9]+\.js`
+	re := regexp.MustCompile(bundlePattern)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) < 1 {
+		return "", errors.New("bundle.LoggedInMain URL not found in sw.js")
+	}
+
+	return matches[0], nil
 }
 
-func refreshAPIWithMainJsUrl(mainJsUrl string) error {
-	queryId, bearer, err := twitterAPI.FetchQueryIdAndBearerFromMainJs(mainJsUrl)
+// refreshAPIWithBundleUrl fetches the LoggedInMain bundle, extracts all queryId pairs, saves to cache and updates twitterAPI
+func refreshAPIWithBundleUrl(bundleUrl string) error {
+	cache, err := twitterAPI.FetchAllQueryIdsFromBundle(bundleUrl)
 	if err != nil {
-		return fmt.Errorf("failed to extract queryId/bearer from main.js: %w", err)
+		return fmt.Errorf("failed to extract queryId from LoggedInMain: %w", err)
 	}
 
-	if queryId != "" {
-		twitterAPI.queryId = queryId
-		logger.Infof("Updated queryId from main.js: %s", queryId)
+	// 保存到本地文件
+	if err := SaveQueryIdCache(cache); err != nil {
+		logger.Warnf("Failed to save queryId cache: %v", err)
+	} else {
+		logger.Infof("QueryId cache saved to %s (%d operations)", queryIdCacheFile, len(cache.Operations))
 	}
-	if bearer != "" {
-		twitterAPI.bearerToken = bearer
-		logger.Infof("Updated bearer token from main.js")
+
+	// 更新 twitterAPI 的 queryId（加锁防止并发写入）
+	if homeId := cache.GetQueryId("HomeLatestTimeline"); homeId != "" {
+		queryIdMutex.Lock()
+		twitterAPI.queryId = homeId
+		queryIdMutex.Unlock()
+		logger.Infof("HomeLatestTimeline queryId: %s", homeId)
+	} else {
+		logger.Warn("HomeLatestTimeline queryId not found in cache")
 	}
 
 	return nil
+}
+
+// RefreshQueryIdForce 强制从 sw.js 刷新 queryId（忽略缓存），用于运行时检测到 queryId 失效时调用
+func RefreshQueryIdForce() error {
+	if TwitterMode != ModeAPI || twitterAPI == nil {
+		return nil
+	}
+
+	bundleUrl, err := twitterAPI.FetchLoggedInMainBundleUrl()
+	if err != nil {
+		return fmt.Errorf("failed to fetch LoggedInMain bundle URL: %w", err)
+	}
+	if bundleUrl == "" {
+		return errors.New("bundle.LoggedInMain URL not found in sw.js")
+	}
+
+	if err := refreshAPIWithBundleUrl(bundleUrl); err != nil {
+		return err
+	}
+	logger.Infof("QueryId refreshed successfully: %s", twitterAPI.queryId)
+	return nil
+}
+
+// IsQueryNotFoundError 判断错误是否是 "Query not found"（queryId 失效）
+func IsQueryNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "Query not found") ||
+		strings.Contains(errStr, "query not found") ||
+		strings.Contains(errStr, "QUERY_NOT_FOUND")
+}
+
+// FetchAllQueryIdsFromBundle fetches the LoggedInMain bundle JS and extracts ALL queryId:operationName pairs
+func (t *TwitterAPI) FetchAllQueryIdsFromBundle(bundleUrl string) (*QueryIdCache, error) {
+	if t == nil || !t.IsEnabled() {
+		return nil, errors.New("twitter API not configured")
+	}
+
+	opts := []requests.Option{
+		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.TimeoutOption(time.Second * 30),
+		requests.AddUAOption(UserAgent),
+		requests.HeaderOption("Accept", "*/*"),
+		requests.HeaderOption("Accept-Language", "en-US,en;q=0.9"),
+		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br"),
+		requests.HeaderOption("Referer", "https://x.com/"),
+		requests.RetryOption(3),
+	}
+
+	var resp bytes.Buffer
+	err := requests.Get(bundleUrl, nil, &resp, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch LoggedInMain bundle: %w", err)
+	}
+
+	decompressed, err := decompressResponse(resp.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("decompress LoggedInMain bundle failed: %w", err)
+	}
+
+	content := string(decompressed)
+
+	// 匹配所有 queryId: "xxx", operationName: "yyy" 的 pair
+	// 格式：queryId: "xxxxxxxxxxxxxxxxxxxx", operationName: "OperationName"
+	pattern := `queryId:\s*"([a-zA-Z0-9_-]{20,})",\s*operationName:\s*"([^"]+)"`
+	re := regexp.MustCompile(pattern)
+	allMatches := re.FindAllStringSubmatch(content, -1)
+
+	operations := make(map[string]string)
+	for _, m := range allMatches {
+		if len(m) == 3 {
+			operations[m[2]] = m[1]
+		}
+	}
+
+	if len(operations) == 0 {
+		return nil, errors.New("no queryId found in LoggedInMain bundle")
+	}
+
+	logger.Infof("Extracted %d queryId:operationName pairs from LoggedInMain bundle", len(operations))
+
+	return &QueryIdCache{
+		UpdatedAt:  time.Now(),
+		Operations: operations,
+	}, nil
 }
 
 func RefreshTwitterAPIFromConfig() {
@@ -640,7 +806,12 @@ func (t *TwitterAPI) HomeTimeline(ctx context.Context, cursor string) (*HomeTime
 		ResponsiveWebEnhanceCardsEnabled:                               false,
 	}
 
-	apiURL := fmt.Sprintf("%s/%s/HomeLatestTimeline", TwitterGraphQLAPI, t.queryId)
+	// 加锁读取 queryId，防止刷新时与其他请求冲突
+	queryIdMutex.RLock()
+	currentQueryId := t.queryId
+	queryIdMutex.RUnlock()
+
+	apiURL := fmt.Sprintf("%s/%s/HomeLatestTimeline", TwitterGraphQLAPI, currentQueryId)
 
 	var resp HomeTimelineResponse
 
@@ -648,7 +819,7 @@ func (t *TwitterAPI) HomeTimeline(ctx context.Context, cursor string) (*HomeTime
 		req := HomeTimelineRequest{
 			Variables: variables,
 			Features:  features,
-			QueryID:   t.queryId,
+			QueryID:   currentQueryId,
 		}
 		reqBody, err := json.Marshal(req)
 		if err != nil {
@@ -662,7 +833,7 @@ func (t *TwitterAPI) HomeTimeline(ctx context.Context, cursor string) (*HomeTime
 		req := HomeTimelineRequest{
 			Variables: variables,
 			Features:  features,
-			QueryID:   t.queryId,
+			QueryID:   currentQueryId,
 		}
 		var err error
 		err = t.doGet(ctx, apiURL, req, &resp)
@@ -672,7 +843,130 @@ func (t *TwitterAPI) HomeTimeline(ctx context.Context, cursor string) (*HomeTime
 	}
 
 	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("GraphQL errors: %v", resp.Errors)
+		err := fmt.Errorf("GraphQL errors: %v", resp.Errors)
+		// 检测 queryId 失效，自动刷新并重试一次（防止无限循环）
+		if IsQueryNotFoundError(err) {
+			logger.Warnf("QueryId 可能失效，正在刷新...")
+			if refreshErr := RefreshQueryIdForce(); refreshErr == nil {
+				logger.Infof("QueryId 已刷新为 %s，重试 HomeTimeline...", twitterAPI.queryId)
+				return twitterAPI.homeTimelineWithRefresh(ctx, cursor, true)
+			} else {
+				logger.Warnf("QueryId 刷新失败: %v", refreshErr)
+			}
+		}
+		return nil, err
+	}
+
+	if resp.Data == nil || resp.Data.Home == nil || resp.Data.Home.HomeTimelineURT == nil {
+		return nil, errors.New("invalid API response: missing data")
+	}
+
+	return t.parseTimelineResponse(resp.Data.Home.HomeTimelineURT)
+}
+
+func (t *TwitterAPI) homeTimelineWithRefresh(ctx context.Context, cursor string, refreshed bool) (*HomeTimelineResult, error) {
+	if !t.IsEnabled() {
+		return nil, errors.New("twitter API not configured with cookies")
+	}
+
+	variables := HomeTimelineVariables{
+		Count:                  20,
+		EnableRanking:          false,
+		IncludePromotedContent: true,
+		RequestContext:         "launch",
+		SeenTweetIDs:           []string{},
+		Cursor:                 cursor,
+	}
+
+	features := HomeTimelineFeatures{
+		RwebVideoScreenEnabled:                                         false,
+		ProfileLabelImprovementsPcfLabelInPostEnabled:                  true,
+		ResponsiveWebProfileRedirectEnabled:                            false,
+		RwebTipjarConsumptionEnabled:                                   false,
+		VerifiedPhoneLabelEnabled:                                      false,
+		CreatorSubscriptionsTweetPreviewAPIEnabled:                     true,
+		ResponsiveWebGraphqlTimelineNavigationEnabled:                  true,
+		ResponsiveWebGraphqlSkipUserProfileImageExtensionsEnabled:      false,
+		PremiumContentAPIReadEnabled:                                   false,
+		CommunitiesWebEnableTweetCommunityResultsFetch:                 true,
+		C9sTweetAnatomyModeratorBadgeEnabled:                           true,
+		ResponsiveWebGrokAnalyzeButtonFetchTrendsEnabled:               false,
+		ResponsiveWebGrokAnalyzePostFollowupsEnabled:                   true,
+		ResponsiveWebJetfuelFrame:                                      true,
+		ResponsiveWebGrokShareAttachmentEnabled:                        true,
+		ResponsiveWebGrokAnnotationsEnabled:                            true,
+		ArticlesPreviewEnabled:                                         true,
+		ResponsiveWebEditTweetAPIEnabled:                               true,
+		GraphqlIsTranslatableRwebTweetIsTranslatableEnabled:            true,
+		ViewCountsEverywhereAPIEnabled:                                 true,
+		LongformNotetweetsConsumptionEnabled:                           true,
+		ResponsiveWebTwitterArticleTweetConsumptionEnabled:             true,
+		TweetAwardsWebTippingEnabled:                                   false,
+		ContentDisclosureIndicatorEnabled:                              true,
+		ContentDisclosureAIGeneratedIndicatorEnabled:                   true,
+		ResponsiveWebGrokShowGrokTranslatedPost:                        false,
+		ResponsiveWebGrokAnalysisButtonFromBackend:                     true,
+		PostCtasFetchEnabled:                                           false,
+		FreedomOfSpeechNotReachFetchEnabled:                            true,
+		StandardizedNudgesMisinfo:                                      true,
+		TweetWithVisibilityResultsPreferGqlLimitedActionsPolicyEnabled: true,
+		LongformNotetweetsRichTextReadEnabled:                          true,
+		LongformNotetweetsInlineMediaEnabled:                           false,
+		ResponsiveWebGrokImageAnnotationEnabled:                        true,
+		ResponsiveWebGrokImagineAnnotationEnabled:                      true,
+		ResponsiveWebGrokCommunityNoteAutoTranslationIsEnabled:         false,
+		ResponsiveWebEnhanceCardsEnabled:                               false,
+	}
+
+	// 加锁读取 queryId，防止刷新时与其他请求冲突
+	queryIdMutex.RLock()
+	currentQueryId := t.queryId
+	queryIdMutex.RUnlock()
+
+	apiURL := fmt.Sprintf("%s/%s/HomeLatestTimeline", TwitterGraphQLAPI, currentQueryId)
+
+	var resp HomeTimelineResponse
+
+	if cursor == "" {
+		req := HomeTimelineRequest{
+			Variables: variables,
+			Features:  features,
+			QueryID:   currentQueryId,
+		}
+		reqBody, err := json.Marshal(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		err = t.doPost(ctx, apiURL, reqBody, &resp)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		req := HomeTimelineRequest{
+			Variables: variables,
+			Features:  features,
+			QueryID:   currentQueryId,
+		}
+		var err error
+		err = t.doGet(ctx, apiURL, req, &resp)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(resp.Errors) > 0 {
+		err := fmt.Errorf("GraphQL errors: %v", resp.Errors)
+		// 检测 queryId 失效，自动刷新并重试一次（refreshed=true 时不再重试，防止无限循环）
+		if !refreshed && IsQueryNotFoundError(err) {
+			logger.Warnf("QueryId 可能失效，正在刷新...")
+			if refreshErr := RefreshQueryIdForce(); refreshErr == nil {
+				logger.Infof("QueryId 已刷新为 %s，重试 HomeTimeline...", twitterAPI.queryId)
+				return t.homeTimelineWithRefresh(ctx, cursor, true)
+			} else {
+				logger.Warnf("QueryId 刷新失败: %v", refreshErr)
+			}
+		}
+		return nil, err
 	}
 
 	if resp.Data == nil || resp.Data.Home == nil || resp.Data.Home.HomeTimelineURT == nil {
@@ -1270,7 +1564,7 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 		return nil, errors.New("twitter API not configured with cookies")
 	}
 
-	queryId := "mzoqrVGwk-YTSGME1dRfXQ"
+	queryId := GetProfileSpotlightsQueryId()
 	apiURL := fmt.Sprintf("https://x.com/i/api/graphql/%s/ProfileSpotlightsQuery", queryId)
 
 	variables := map[string]string{"screen_name": screenName}
@@ -1299,6 +1593,107 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 		requests.HeaderOption("sec-fetch-mode", "cors"),
 		requests.HeaderOption("sec-fetch-site", "same-origin"),
 		requests.HeaderOption("X-Twitter-Active-User", "yes"),
+		requests.HeaderOption("X-Twitter-Auth-Type", "OAuth2Session"),
+		requests.HeaderOption("Referer", fmt.Sprintf("https://x.com/%s", screenName)),
+		requests.CookieOption("ct0", t.ct0),
+		requests.CookieOption("auth_token", t.authToken),
+		requests.RetryOption(3),
+	}
+
+	var rawResp []byte
+	err = requests.PostBody(apiURL, reqBytes, &rawResp, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("ProfileSpotlightsQuery request failed: %w", err)
+	}
+
+	decompressed, err := decompressResponse(rawResp)
+	if err != nil {
+		return nil, fmt.Errorf("decompress failed: %w", err)
+	}
+
+	var resp struct {
+		Data struct {
+			UserResultByScreenName struct {
+				Result struct {
+					Typename string `json:"__typename"`
+					Core     struct {
+						Name       string `json:"name"`
+						ScreenName string `json:"screen_name"`
+					} `json:"core"`
+					ID                       string `json:"id"`
+					RelationshipPerspectives struct {
+						Following bool `json:"following"`
+					} `json:"relationship_perspectives"`
+				} `json:"result"`
+			} `json:"user_result_by_screen_name"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+			Code    int    `json:"code"`
+		} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(decompressed, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse ProfileSpotlightsQuery response: %w", err)
+	}
+
+	if len(resp.Errors) > 0 {
+		err := fmt.Errorf("ProfileSpotlightsQuery error: %s", resp.Errors[0].Message)
+		// 检测 queryId 失效，自动刷新并重试一次
+		if IsQueryNotFoundError(err) {
+			logger.Warnf("ProfileSpotlightsQuery queryId 可能失效，正在刷新...")
+			if refreshErr := RefreshQueryIdForce(); refreshErr == nil {
+				logger.Infof("QueryId 已刷新，重试 GetUserByScreenName...")
+				return t.getUserByScreenNameWithRefresh(ctx, screenName, true)
+			} else {
+				logger.Warnf("QueryId 刷新失败: %v", refreshErr)
+			}
+		}
+		return nil, err
+	}
+
+	result := &resp.Data.UserResultByScreenName.Result
+	return &UserProfileInfo{
+		RestID:      result.ID,
+		ScreenName:  result.Core.ScreenName,
+		Name:        result.Core.Name,
+		IsFollowing: resp.Data.UserResultByScreenName.Result.RelationshipPerspectives.Following,
+	}, nil
+}
+
+func (t *TwitterAPI) getUserByScreenNameWithRefresh(ctx context.Context, screenName string, refreshed bool) (*UserProfileInfo, error) {
+	if !t.IsEnabled() {
+		return nil, errors.New("twitter API not configured with cookies")
+	}
+
+	queryId := GetProfileSpotlightsQueryId()
+	apiURL := fmt.Sprintf("https://x.com/i/api/graphql/%s/ProfileSpotlightsQuery", queryId)
+
+	variables := map[string]string{"screen_name": screenName}
+	reqBody := map[string]interface{}{
+		"variables": variables,
+	}
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	opts := []requests.Option{
+		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.TimeoutOption(time.Second * 30),
+		requests.AddUAOption(UserAgent),
+		requests.HeaderOption("authorization", "Bearer "+t.bearerToken),
+		requests.HeaderOption("x-csrf-token", t.ct0),
+		requests.HeaderOption("content-type", "application/json"),
+		requests.HeaderOption("Accept", "*/*"),
+		requests.HeaderOption("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),
+		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br"),
+		requests.HeaderOption("sec-ch-ua", `"Chromium";v="135", "Not-A.Brand";v="8"`),
+		requests.HeaderOption("sec-ch-ua-mobile", "?0"),
+		requests.HeaderOption("sec-ch-ua-platform", `"Windows"`),
+		requests.HeaderOption("sec-fetch-dest", "empty"),
+		requests.HeaderOption("sec-fetch-mode", "cors"),
+		requests.HeaderOption("sec-fetch-site", "same-origin"),
 		requests.HeaderOption("X-Twitter-Auth-Type", "OAuth2Session"),
 		requests.HeaderOption("Referer", fmt.Sprintf("https://x.com/%s", screenName)),
 		requests.CookieOption("ct0", t.ct0),
