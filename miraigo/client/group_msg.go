@@ -115,7 +115,6 @@ func (c *QQClient) RealSendMSG(groupCode int64, m *message.SendingMessage, newst
 		group = new(GroupInfo)
 		group.Name = "未知群聊"
 		group.Code = groupCode
-		group.Client = c
 	}
 	logger.Infof("发送 群消息 给 %s(%v): %s", group.Name, finalGroupID, SliceMessage(newstr))
 	data, err := c.SendApi("send_group_msg", map[string]any{

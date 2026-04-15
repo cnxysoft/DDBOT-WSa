@@ -344,6 +344,11 @@ func (a *OneBotAdapter) handleMessage(data []byte) {
 
 	postType, _ := msg["post_type"].(string)
 
+	// Debug: print echo value for API responses
+	rawEcho := msg["echo"]
+	logger.Debugf("handleMessage: post_type=%s, echo=%v (type=%T), has_status=%v",
+		postType, rawEcho, rawEcho, msg["status"] != nil)
+
 	switch postType {
 	case "message":
 		a.handleMessageEvent(msg)
@@ -463,6 +468,8 @@ func (a *OneBotAdapter) handleNoticeEvent(msg map[string]interface{}) {
 		File:         getFile(msg["file"]),
 		OperatorNick: getString(msg["operator_nick"]),
 		Times:        getInt(msg["times"]),
+		CardNew:      getString(msg["card_new"]),
+		CardOld:      getString(msg["card_old"]),
 	}
 
 	if likes, ok := msg["likes"].([]interface{}); ok && len(likes) > 0 {
@@ -622,6 +629,7 @@ func (a *OneBotAdapter) GetStrangerInfo(userID int64) (map[string]interface{}, e
 func (a *OneBotAdapter) GetGroupInfo(groupID int64) (*adapter.GroupInfo, error) {
 	data, err := a.SendApi("get_group_info", map[string]interface{}{
 		"group_id": groupID,
+		"no_cache": false,
 	})
 	if err != nil {
 		return nil, err
@@ -637,8 +645,9 @@ func (a *OneBotAdapter) GetGroupInfo(groupID int64) (*adapter.GroupInfo, error) 
 			GroupName:       getString(groupMap["group_name"]),
 			MemberCount:     getInt(groupMap["member_count"]),
 			MaxMemberCount:  getInt(groupMap["max_member_count"]),
-			GroupCreateTime: getInt64(groupMap["group_create_time"]),
-			GroupLevel:      getInt(groupMap["group_level"]),
+			GroupCreateTime: getInt64FromMap(groupMap, "group_create_time", "groupCreateTime"),
+			GroupLevel:      getIntFromMap(groupMap, "group_level", "groupGrade"),
+			OwnerUin:        getInt64FromMap(groupMap, "owner_id", "ownerUin"),
 		}, nil
 	}
 
@@ -903,6 +912,28 @@ func getInt64(v interface{}) int64 {
 
 func getInt(v interface{}) int {
 	return int(getInt64(v))
+}
+
+func getInt64FromMap(m map[string]interface{}, keys ...string) int64 {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if n := getInt64(v); n != 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func getIntFromMap(m map[string]interface{}, keys ...string) int {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if n := getInt(v); n != 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 func getBool(v interface{}) bool {

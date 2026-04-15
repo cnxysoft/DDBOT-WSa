@@ -884,7 +884,11 @@ func (c *LspPrivateCommand) QuitCommand() {
 			return
 		}
 	} else {
-		gi.Quit()
+		if err := c.bot.SetGroupLeave(quitCmd.GroupCode, false); err != nil {
+			log.Errorf("退出群【%v】失败: %v", displayName, err)
+			c.textSend(fmt.Sprintf("退出群【%v】失败: %v", displayName, err))
+			return
+		}
 		log.Debugf("已退出群【%v】", displayName)
 		c.textSend(fmt.Sprintf("已退出群【%v】", displayName))
 	}

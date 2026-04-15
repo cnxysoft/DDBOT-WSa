@@ -82,6 +82,8 @@ type NoticeEvent struct {
 	EmojiCount   int
 	OperatorNick string
 	Times        int
+	CardNew      string
+	CardOld      string
 }
 
 type RequestEvent struct {
@@ -161,6 +163,7 @@ type GroupInfo struct {
 
 	GroupID          int64
 	GroupName        string
+	OwnerUin         int64
 	MaxMemberCount_  int
 	GroupCreateTime_ int64
 	GroupLevel_      int
@@ -435,6 +438,8 @@ type BotCaller interface {
 	SendApi(api string, params map[string]interface{}) (interface{}, error)
 	GroupPoke(groupCode, target int64) error
 	FriendPoke(target int64) error
+	EditGroupCard(groupCode, memberUin int64, card string) error
+	SetGroupLeave(groupCode int64, isDismiss bool) error
 	// SendGroupForwardMessage 发送群合并转发消息
 	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{id: "msgId"}}}
 	// options 顶层参数: prompt, source, summary, news (可选)

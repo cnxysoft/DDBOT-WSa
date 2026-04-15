@@ -408,7 +408,7 @@ func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 				return
 			}
 		}
-		c.handleMessage(message)
+		go c.handleMessage(message)
 	}
 }
 
@@ -418,13 +418,13 @@ func (c *WSClient) handleMessage(message []byte) {
 	if err := json.Unmarshal(message, &resp); err == nil && resp.Echo != "" {
 		c.mu.Lock()
 		if isDebugLoggingEnabled() {
-			wsLogger.Debugf(">>> mu.Lock() #%d  caller=%s  [handleMessage echo]", nextLockSeq(), getCallerFuncName(2))
+			wsLogger.Debugf(">>> mu.Lock() #%d  caller=%s  [handleMessage echo] echo=%s", nextLockSeq(), getCallerFuncName(2), resp.Echo)
 		}
 		if ch, exists := c.responseCh[resp.Echo]; exists {
 			delete(c.responseCh, resp.Echo)
 			c.mu.Unlock()
 			if isDebugLoggingEnabled() {
-				wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [handleMessage echo]", nextLockSeq(), getCallerFuncName(2))
+				wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [handleMessage echo] found channel for echo=%s", nextLockSeq(), getCallerFuncName(2), resp.Echo)
 			}
 			select {
 			case ch <- &resp:
@@ -435,7 +435,7 @@ func (c *WSClient) handleMessage(message []byte) {
 		}
 		c.mu.Unlock()
 		if isDebugLoggingEnabled() {
-			wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [handleMessage echo]", nextLockSeq(), getCallerFuncName(2))
+			wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [handleMessage echo] no channel for echo=%s, responseCh len=%d", nextLockSeq(), getCallerFuncName(2), resp.Echo, len(c.responseCh))
 		}
 	}
 
@@ -570,10 +570,10 @@ func (c *WSClient) SendAndWait(action string, params map[string]any, timeout tim
 			close(ch)
 			delete(c.responseCh, echo)
 		}
-		c.mu.Unlock()
 		if isDebugLoggingEnabled() {
-			wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [SendAndWait cleanup]", nextLockSeq(), getCallerFuncName(2))
+			wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [SendAndWait cleanup] responseCh len=%d", nextLockSeq(), getCallerFuncName(2), len(c.responseCh))
 		}
+		c.mu.Unlock()
 	}()
 	req := map[string]any{"action": action, "params": params, "echo": echo}
 	data, err := json.Marshal(req)

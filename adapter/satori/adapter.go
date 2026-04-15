@@ -1262,6 +1262,7 @@ func (a *SatoriAdapter) dispatchRecall(event eventBody) {
 
 func (a *SatoriAdapter) dispatchNotice(event eventBody) {
 	var noticeType string
+	var cardNew string
 	switch event.Type {
 	case "guild-member-added", "friend-added":
 		noticeType = "group_increase"
@@ -1269,6 +1270,9 @@ func (a *SatoriAdapter) dispatchNotice(event eventBody) {
 		noticeType = "group_decrease"
 	case "guild-member-updated":
 		noticeType = "group_card"
+		if event.Member != nil {
+			cardNew = event.Member.Nick
+		}
 	case "guild-added":
 		noticeType = "group_increase"
 	default:
@@ -1283,6 +1287,7 @@ func (a *SatoriAdapter) dispatchNotice(event eventBody) {
 		GroupID:    rememberGuildID(a, event),
 		UserID:     rememberEventUserID(a, event),
 		OperatorID: rememberOperatorID(a, event),
+		CardNew:    cardNew,
 	})
 }
 

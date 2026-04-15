@@ -507,7 +507,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			}
 			minfo := info.FindMember(bot.Uin)
 			if minfo != nil {
-				minfo.EditCard(rename)
+				localutils.GetBot().EditGroupCard(info.Code, bot.Uin, rename)
 			}
 		}
 
@@ -548,7 +548,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 				log = log.WithField(fmt.Sprintf("%v订阅", c.Site()), len(ids))
 			}
 		}
-		if event.Operator == nil {
+		if event.Operator == nil || event.Operator.Uin == bot.Uin {
 			log.Info("退出群聊")
 		} else {
 			log.Infof("被 %v 踢出群聊", event.Operator.DisplayName())

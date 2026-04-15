@@ -2,14 +2,11 @@ package client
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"runtime/debug"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/pkg/errors"
@@ -20,7 +17,6 @@ import (
 	"github.com/Mrs4s/MiraiGo/client/pb/oidb"
 	"github.com/Mrs4s/MiraiGo/client/pb/profilecard"
 	"github.com/Mrs4s/MiraiGo/internal/proto"
-	"github.com/Mrs4s/MiraiGo/utils"
 )
 
 type (
@@ -36,8 +32,6 @@ type (
 		Members         []*GroupMemberInfo
 		// 最后一条信息的SEQ,只有通过 GetGroupInfo 函数获取的 GroupInfo 才会有
 		LastMsgSeq int64
-
-		Client *QQClient
 
 		lock sync.RWMutex
 	}
@@ -244,7 +238,6 @@ func decodeGroupInfoResponse(c *QQClient, pkt *network.Packet) (any, error) {
 		MaxMemberCount:  uint16(info.GroupInfo.GroupMemberMaxNum.Unwrap()),
 		Members:         []*GroupMemberInfo{},
 		LastMsgSeq:      int64(info.GroupInfo.GroupCurMsgSeq.Unwrap()),
-		Client:          c,
 	}, nil
 }
 
@@ -260,62 +253,6 @@ func (c *QQClient) uploadGroupHeadPortrait(groupCode int64, img []byte) error {
 	}
 	rsp.Body.Close()
 	return nil
-}
-
-func (g *GroupInfo) UpdateName(newName string) {
-	if g.AdministratorOrOwner() && newName != "" && strings.Count(newName, "") <= 20 {
-		g.Client.updateGroupName(g.Code, newName)
-		g.Name = newName
-	}
-}
-
-func (g *GroupInfo) UpdateGroupHeadPortrait(img []byte) {
-	if g.AdministratorOrOwner() {
-		_ = g.Client.uploadGroupHeadPortrait(g.Uin, img)
-	}
-}
-
-func (g *GroupInfo) MuteAll(mute bool) {
-	if g.AdministratorOrOwner() {
-		g.Client.groupMuteAll(g.Code, mute)
-	}
-}
-
-func (g *GroupInfo) MuteAnonymous(id, nick string, seconds int32) error {
-	payload := fmt.Sprintf("anony_id=%v&group_code=%v&seconds=%v&anony_nick=%v&bkn=%v", url.QueryEscape(id), g.Code, seconds, nick, g.Client.getCSRFToken())
-	rsp, err := utils.HttpPostBytesWithCookie("https://qqweb.qq.com/c/anonymoustalk/blacklist", []byte(payload), g.Client.getCookies(), "application/x-www-form-urlencoded")
-	if err != nil {
-		return errors.Wrap(err, "failed to request blacklist")
-	}
-	var muteResp struct {
-		RetCode int `json:"retcode"`
-		CGICode int `json:"cgicode"`
-	}
-	err = json.Unmarshal(rsp, &muteResp)
-	if err != nil {
-		return errors.Wrap(err, "failed to parse muteResp")
-	}
-	if muteResp.RetCode != 0 {
-		return errors.Errorf("retcode %v", muteResp.RetCode)
-	}
-	if muteResp.CGICode != 0 {
-		return errors.Errorf("retcode %v", muteResp.CGICode)
-	}
-	return nil
-}
-
-func (g *GroupInfo) Quit() {
-	if g.SelfPermission() != Owner {
-		g.Client.quitGroup(g)
-	}
-}
-
-func (g *GroupInfo) SelfPermission() MemberPermission {
-	return g.FindMember(g.Client.Uin).Permission
-}
-
-func (g *GroupInfo) AdministratorOrOwner() bool {
-	return g.SelfPermission() == Administrator || g.SelfPermission() == Owner
 }
 
 func (g *GroupInfo) FindMember(uin int64) *GroupMemberInfo {
@@ -368,77 +305,4 @@ func (m *GroupMemberInfo) DisplayName() string {
 		return m.Nickname
 	}
 	return m.CardName
-}
-
-func (m *GroupMemberInfo) EditCard(card string) {
-	if m.CardChangable() && len(card) <= 60 {
-		m.Group.Client.editMemberCard(m.Group.Code, m.Uin, card)
-		m.CardName = card
-	}
-}
-
-func (m *GroupMemberInfo) Poke() {
-	m.Group.Client.SendGroupPoke(m.Group.Code, m.Uin)
-}
-
-func (m *GroupMemberInfo) SetAdmin(flag bool) {
-	if m.Group.OwnerUin == m.Group.Client.Uin {
-		m.Group.Client.setGroupAdmin(m.Group.Code, m.Uin, flag)
-	}
-}
-
-func (m *GroupMemberInfo) EditSpecialTitle(title string) {
-	if m.Group.SelfPermission() == Owner && len(title) <= 18 {
-		m.Group.Client.editMemberSpecialTitle(m.Group.Code, m.Uin, title)
-		m.SpecialTitle = title
-	}
-}
-
-func (m *GroupMemberInfo) Kick(msg string, block bool) error {
-	if m.Uin != m.Group.Client.Uin && m.Manageable() {
-		m.Group.Client.KickGroupMembers(m.Group.Code, msg, block, m.Uin)
-		return nil
-	} else {
-		return errors.New("not manageable")
-	}
-}
-
-func (m *GroupMemberInfo) Mute(time uint32) error {
-	if time >= 2592000 {
-		return errors.New("time is not in range")
-	}
-	if m.Uin != m.Group.Client.Uin && m.Manageable() {
-		m.Group.Client.groupMute(m.Group.Code, m.Uin, time)
-		return nil
-	} else {
-		return errors.New("not manageable")
-	}
-}
-
-func (g *GroupInfo) SetAnonymous(enable bool) {
-	if g.AdministratorOrOwner() {
-		g.Client.setGroupAnonymous(g.Code, enable)
-	}
-}
-
-func (m *GroupMemberInfo) Manageable() bool {
-	if m.Uin == m.Group.Client.Uin {
-		return true
-	}
-	self := m.Group.SelfPermission()
-	if self == Member || m.Permission == Owner {
-		return false
-	}
-	return m.Permission != Administrator || self == Owner
-}
-
-func (m *GroupMemberInfo) CardChangable() bool {
-	if m.Uin == m.Group.Client.Uin {
-		return true
-	}
-	self := m.Group.SelfPermission()
-	if self == Member {
-		return false
-	}
-	return m.Permission != Owner
 }

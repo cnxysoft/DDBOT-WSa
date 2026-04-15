@@ -125,6 +125,13 @@ func (h *HackedBot) RecallMsg(msgId int32) error {
 	return h.Bot.RecallMsg(msgId)
 }
 
+func (h *HackedBot) EditGroupCard(groupCode, memberUin int64, card string) error {
+	if !h.valid() {
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.EditGroupCard(groupCode, memberUin, card)
+}
+
 func (h *HackedBot) SendApi(api string, params map[string]interface{}) (interface{}, error) {
 	if !h.valid() {
 		return nil, fmt.Errorf("bot not valid")
@@ -144,6 +151,13 @@ func (h *HackedBot) SendPrivateForwardMessage(userID int64, nodes []map[string]i
 		return -1, "", fmt.Errorf("bot not valid")
 	}
 	return h.Bot.SendPrivateForwardMessage(userID, nodes, options)
+}
+
+func (h *HackedBot) SetGroupLeave(groupCode int64, isDismiss bool) error {
+	if !h.valid() {
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SetGroupLeave(groupCode, isDismiss)
 }
 
 func (h *HackedBot) TESTSetUin(uin int64) {

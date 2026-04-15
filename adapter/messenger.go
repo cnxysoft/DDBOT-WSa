@@ -413,6 +413,16 @@ func (m *Messenger) FindGroupByUin(uin int64) *GroupInfo {
 	return nil
 }
 
+// FindGroupByUinLocked assumes the caller holds the lock
+func (m *Messenger) FindGroupByUinLocked(uin int64) *GroupInfo {
+	for _, g := range m.GroupList {
+		if g.Uin == uin {
+			return g
+		}
+	}
+	return nil
+}
+
 func (m *Messenger) FindFriend(uin int64) *FriendInfo {
 	if uin == m.Uin {
 		return &FriendInfo{
@@ -530,52 +540,66 @@ func (m *Messenger) GetStrangerInfo(uin int64) (map[string]interface{}, error) {
 	return m.Adapter.GetStrangerInfo(uin)
 }
 
-// AddGroupMember adds a member to the group cache after receiving a group_increase event
+// AddGroupMember adds a member to the group cache after receiving a group_increase event.
+// It calls GetGroupMemberInfo to fetch complete member info before saving.
 func (m *Messenger) AddGroupMember(groupID, userID int64) error {
-	members, err := m.Adapter.GetGroupMemberList(groupID)
+	// Look up group BEFORE acquiring lock to avoid deadlock
+	group := m.FindGroupByUin(groupID)
+	if group == nil {
+		return fmt.Errorf("group %d not found", groupID)
+	}
+
+	// Get complete member info from API
+	memberInfo, err := m.Adapter.GetGroupMemberInfo(groupID, userID)
 	if err != nil {
 		return err
 	}
-	for _, mb := range members {
-		if mb.UserID == userID {
-			perm := Member
-			switch mb.Role {
+
+	m.groupMu.Lock()
+	defer m.groupMu.Unlock()
+
+	// Check if member already exists
+	for _, existing := range group.Members {
+		if existing.Uin == userID {
+			// Member already exists, update it with fresh info
+			existing.Nickname = memberInfo.Nickname
+			existing.CardName = memberInfo.Card
+			switch memberInfo.Role {
 			case "owner":
-				perm = Owner
+				existing.Permission = Owner
 			case "admin":
-				perm = Administrator
+				existing.Permission = Administrator
+			default:
+				existing.Permission = Member
 			}
-			// Look up group BEFORE acquiring lock to avoid deadlock
-			group := m.FindGroupByUin(groupID)
-			if group == nil {
-				return fmt.Errorf("group %d not found", groupID)
-			}
-			newMember := &GroupMemberInfo{
-				Group:           group,
-				Uin:             mb.UserID,
-				Nickname:        mb.Nickname,
-				CardName:        mb.Card,
-				JoinTime:        mb.JoinTime,
-				LastSpeakTime:   mb.LastSentTime,
-				SpecialTitle:    mb.Title,
-				ShutUpTimestamp: mb.ShutUpTimestamp,
-				Permission:      perm,
-			}
-			m.groupMu.Lock()
-			defer m.groupMu.Unlock()
-			// Check if member already exists
-			for _, existing := range group.Members {
-				if existing.Uin == userID {
-					*existing = *newMember
-					return nil
-				}
-			}
-			group.Members = append(group.Members, newMember)
-			messengerLogger.Debugf("AddGroupMember cache updated: group=%d member=%d", groupID, userID)
 			return nil
 		}
 	}
-	return fmt.Errorf("member %d not found in group %d", userID, groupID)
+
+	// Add new member with full info from API
+	perm := Member
+	switch memberInfo.Role {
+	case "owner":
+		perm = Owner
+	case "admin":
+		perm = Administrator
+	}
+
+	newMember := &GroupMemberInfo{
+		Group:           group,
+		Uin:             memberInfo.UserID,
+		Nickname:        memberInfo.Nickname,
+		CardName:        memberInfo.Card,
+		JoinTime:        memberInfo.JoinTime,
+		LastSentTime:    memberInfo.LastSentTime,
+		LastSpeakTime:   memberInfo.LastSentTime,
+		SpecialTitle:    memberInfo.Title,
+		ShutUpTimestamp: memberInfo.ShutUpTimestamp,
+		Permission:      perm,
+	}
+	group.Members = append(group.Members, newMember)
+	messengerLogger.Debugf("AddGroupMember cache updated: group=%d member=%d", groupID, userID)
+	return nil
 }
 
 // RemoveGroupMember removes a member from the group cache after receiving a group_decrease event
@@ -664,6 +688,7 @@ func (m *Messenger) GetGroupInfo(groupCode int64) (*GroupInfo, error) {
 		MaxMemberCount:  info.MaxMemberCount,
 		GroupCreateTime: info.GroupCreateTime,
 		GroupLevel:      info.GroupLevel,
+		OwnerUin:        info.OwnerUin,
 		Client:          m,
 	}, nil
 }
@@ -679,16 +704,18 @@ func (m *Messenger) RefreshList() error {
 	}
 	messengerLogger.Infof("已加载 %d 个群组", len(m.GroupList))
 
+	var totalMembers int
 	for _, group := range m.GroupList {
 		members, err := m.GetGroupMembersByID(group.Code)
 		if err != nil {
 			messengerLogger.WithError(err).Errorf("unable to load group members for %d", group.Code)
 			continue
 		}
+		totalMembers += len(group.Members)
 		messengerLogger.Debugf("群[%d]加载成员[%d]个", group.Code, len(members))
 	}
 
-	messengerLogger.Infof("已加载 %d 个群成员", len(m.GroupList))
+	messengerLogger.Infof("已加载 %d 个群成员", totalMembers)
 
 	return nil
 }
@@ -707,32 +734,111 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			Time:        event.Duration,
 		})
 	case "group_increase":
-		if err := m.AddGroupMember(event.GroupID, event.UserID); err != nil {
-			messengerLogger.WithError(err).Warnf("AddGroupMember failed for %d/%d", event.GroupID, event.UserID)
+		// Check if it's the bot joining the group
+		if event.UserID == event.SelfID {
+			// Bot joined the group - get full group info and member list
+			groupInfo, err := m.GetGroupInfo(event.GroupID)
+			if err != nil {
+				messengerLogger.WithError(err).Warnf("GetGroupInfo failed for %d", event.GroupID)
+				groupInfo = &GroupInfo{Uin: event.GroupID, Code: event.GroupID}
+			}
+			// Add group to GroupList first (needed for GetGroupMembersByID to set Members)
+			m.groupMu.Lock()
+			existingGroup := m.FindGroupByUinLocked(event.GroupID)
+			if existingGroup == nil {
+				m.GroupList = append(m.GroupList, groupInfo)
+			} else {
+				// Update existing group info
+				existingGroup.Name = groupInfo.Name
+				existingGroup.MemberCount = groupInfo.MemberCount
+				groupInfo = existingGroup
+			}
+			m.groupMu.Unlock()
+			// Fetch and cache all group members
+			members, err := m.GetGroupMembersByID(event.GroupID)
+			if err != nil {
+				messengerLogger.WithError(err).Warnf("GetGroupMembersByID failed for %d", event.GroupID)
+			} else {
+				messengerLogger.Debugf("Fetched %d members for group %d", len(members), event.GroupID)
+			}
+			// Build client.GroupInfo for dispatch
+			clientGroupInfo := &client.GroupInfo{
+				Uin:         groupInfo.Uin,
+				Code:        groupInfo.Code,
+				Name:        groupInfo.Name,
+				MemberCount: uint16(groupInfo.MemberCount),
+				OwnerUin:    groupInfo.OwnerUin,
+			}
+			// Also set Members for the client.GroupInfo
+			if members != nil {
+				clientGroupInfo.Members = make([]*client.GroupMemberInfo, len(members))
+				for i, mb := range members {
+					clientGroupInfo.Members[i] = &client.GroupMemberInfo{
+						Group:    clientGroupInfo,
+						Uin:      mb.Uin,
+						Nickname: mb.Nickname,
+					}
+				}
+			}
+			m.eventDispatcher.DispatchGroupJoin(clientGroupInfo)
+		} else {
+			// Regular member joined
+			if err := m.AddGroupMember(event.GroupID, event.UserID); err != nil {
+				messengerLogger.WithError(err).Warnf("AddGroupMember failed for %d/%d", event.GroupID, event.UserID)
+			}
+			m.eventDispatcher.DispatchGroupMemberJoin(&client.MemberJoinGroupEvent{
+				Group: &client.GroupInfo{
+					Uin:  event.GroupID,
+					Code: event.GroupID,
+				},
+				Member: &client.GroupMemberInfo{
+					Uin: event.UserID,
+				},
+			})
 		}
-		m.eventDispatcher.DispatchGroupMemberJoin(&client.MemberJoinGroupEvent{
-			Group: &client.GroupInfo{
-				Uin:  event.GroupID,
-				Code: event.GroupID,
-			},
-			Member: &client.GroupMemberInfo{
-				Uin: event.UserID,
-			},
-		})
 	case "group_decrease":
-		m.RemoveGroupMember(event.GroupID, event.UserID)
-		m.eventDispatcher.DispatchGroupMemberLeave(&client.MemberLeaveGroupEvent{
-			Group: &client.GroupInfo{
-				Uin:  event.GroupID,
-				Code: event.GroupID,
-			},
-			Member: &client.GroupMemberInfo{
-				Uin: event.UserID,
-			},
-			Operator: &client.GroupMemberInfo{
-				Uin: event.OperatorID,
-			},
-		})
+		// Check if it's the bot being kicked/leaving the group
+		if event.SubType == "kick_me" || event.OperatorID == m.Uin {
+			// Bot was kicked or left the group - save group info before removing
+			group := m.FindGroupByUin(event.GroupID)
+			if group != nil {
+				// Save group info for the event
+				groupCopy := &client.GroupInfo{
+					Uin:            group.Uin,
+					Code:           group.Code,
+					Name:           group.Name,
+					MemberCount:    uint16(group.MemberCount),
+					MaxMemberCount: uint16(group.MaxMemberCount),
+				}
+				m.groupMu.Lock()
+				for i, g := range m.GroupList {
+					if g.Code == event.GroupID {
+						m.GroupList = append(m.GroupList[:i], m.GroupList[i+1:]...)
+						break
+					}
+				}
+				m.groupMu.Unlock()
+				m.eventDispatcher.DispatchGroupLeave(&client.GroupLeaveEvent{
+					Group:    groupCopy,
+					Operator: &client.GroupMemberInfo{Uin: event.OperatorID},
+				})
+			}
+		} else {
+			// Regular member left
+			m.RemoveGroupMember(event.GroupID, event.UserID)
+			m.eventDispatcher.DispatchGroupMemberLeave(&client.MemberLeaveGroupEvent{
+				Group: &client.GroupInfo{
+					Uin:  event.GroupID,
+					Code: event.GroupID,
+				},
+				Member: &client.GroupMemberInfo{
+					Uin: event.UserID,
+				},
+				Operator: &client.GroupMemberInfo{
+					Uin: event.OperatorID,
+				},
+			})
+		}
 	case "group_admin":
 		var newPerm MemberPermission
 		if event.SubType == "set" {
@@ -771,17 +877,17 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			})
 		}
 	case "group_card":
-		if err := m.RefreshMemberInfo(event.GroupID, event.UserID); err != nil {
-			messengerLogger.WithError(err).Warnf("RefreshMemberInfo failed for %d/%d", event.GroupID, event.UserID)
-		}
+		m.UpdateGroupMember(event.GroupID, event.UserID, func(member *GroupMemberInfo) {
+			member.CardName = event.CardNew
+		})
 		m.eventDispatcher.DispatchMemberCardUpdated(&client.MemberCardUpdatedEvent{
 			Group:   &client.GroupInfo{Uin: event.GroupID, Code: event.GroupID},
 			Member:  &client.GroupMemberInfo{Uin: event.UserID},
-			OldCard: "",
+			OldCard: event.CardOld,
 		})
 	case "friend_add":
 		nickname := "陌生人"
-		if info, err := m.Adapter.GetStrangerInfo(event.UserID); err == nil {
+		if info, err := m.GetStrangerInfo(event.UserID); err == nil {
 			if name, ok := info["nickname"].(string); ok {
 				nickname = name
 			}
@@ -947,7 +1053,7 @@ func (m *Messenger) handlePrivateMessage(event *PrivateMessageEvent) {
 	isFriend := m.FindFriend(event.UserID) != nil
 	nickname := ""
 	if !isFriend {
-		if info, err := m.Adapter.GetStrangerInfo(event.UserID); err == nil {
+		if info, err := m.GetStrangerInfo(event.UserID); err == nil {
 			if name, ok := info["nickname"].(string); ok {
 				nickname = name
 			}

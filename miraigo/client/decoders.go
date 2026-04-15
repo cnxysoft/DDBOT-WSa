@@ -561,7 +561,6 @@ func decodeGroupListResponse(c *QQClient, pkt *network.Packet) (any, error) {
 			OwnerUin:       g.GroupOwnerUin,
 			MemberCount:    uint16(g.MemberNum),
 			MaxMemberCount: uint16(g.MaxGroupMemberNum),
-			Client:         c,
 		})
 	}
 	if len(vecCookie) > 0 {

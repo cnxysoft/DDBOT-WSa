@@ -55,6 +55,12 @@ func (m *mockAdapter) SendGroupMessage(groupID int64, message interface{}) (int3
 func (m *mockAdapter) SendPrivateMessage(userID int64, message interface{}) (int32, error) {
 	return 1, nil
 }
+func (m *mockAdapter) SendGroupForwardMessage(groupID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
+	return 1, "", nil
+}
+func (m *mockAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
+	return 1, "", nil
+}
 func (m *mockAdapter) GetGroupList() ([]*GroupInfo, error)       { return m.groupList, nil }
 func (m *mockAdapter) GetGroupMemberList(groupID int64) ([]*GroupMemberInfo, error) {
 	return m.groupMemberList[groupID], nil
@@ -65,6 +71,12 @@ func (m *mockAdapter) GetStrangerInfo(userID int64) (map[string]interface{}, err
 }
 func (m *mockAdapter) GetGroupInfo(groupID int64) (*GroupInfo, error) { return nil, nil }
 func (m *mockAdapter) GetGroupMemberInfo(groupID, userID int64) (*GroupMemberInfo, error) {
+	members := m.groupMemberList[groupID]
+	for _, mb := range members {
+		if mb.Uin == userID {
+			return mb, nil
+		}
+	}
 	return nil, nil
 }
 func (m *mockAdapter) OnGroupMessage(handler func(*GroupMessageEvent))    {}
