@@ -262,6 +262,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Generate Build Summary
         run: |
