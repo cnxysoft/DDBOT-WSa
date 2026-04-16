@@ -324,15 +324,43 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Download Artifacts" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download all artifacts from the [Actions artifacts page](https://github.com/$REPO/actions/runs/$RUN_ID/artifacts)." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Individual Platform Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fetch artifact list with download URLs
+          ARTIFACTS_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts")
+
+          echo "| Platform | Architecture | Type | Filename | Download |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------------|------|----------|----------|" >> $GITHUB_STEP_SUMMARY
 
           for p in "${platforms[@]}"; do
             IFS=':' read -r goos goarch display_name arch_display <<< "$p"
             artifact_name="${goos}_${goarch}"
-            echo "- **$display_name $arch_display**" >> $GITHUB_STEP_SUMMARY
+
+            # CLI binary
+            if [ "$goos" == "windows" ]; then
+              cli_name="DDBOT-cli.exe"
+              cgo_name="DDBOT-cgo.exe"
+            else
+              cli_name="DDBOT-cli"
+              cgo_name="DDBOT-cgo"
+            fi
+
+            # Get artifact ID for this platform
+            artifact_id=$(echo "$ARTIFACTS_JSON" | jq -r ".artifacts[] | select(.name == \"$artifact_name\") | .id")
+            if [ -n "$artifact_id" ] && [ "$artifact_id" != "null" ]; then
+              download_url="[Download](https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id)"
+            else
+              download_url="-"
+            fi
+
+            echo "| $display_name | $arch_display | CLI | \`$cli_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
+
+            # Skip CGO for windows/arm as it's not built
+            if [ "$goos" == "windows" ] && [ "$goarch" == "arm" ]; then
+              continue
+            fi
+            echo "| $display_name | $arch_display | CGO | \`$cgo_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY

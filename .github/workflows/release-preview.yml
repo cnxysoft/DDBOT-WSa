@@ -41,11 +41,42 @@ jobs:
           echo "ARTIFACTS_JSON=$ARTIFACTS_JSON" >> $GITHUB_ENV
 
       - name: Download all artifacts
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
         run: |
-          # Use gh run download to get all artifacts
-          gh run download ${{ github.event.workflow_run.id }} --dir ./artifacts || {
-            echo "gh run download failed, trying alternative..."
-          }
+          mkdir -p artifacts
+
+          # Fetch artifacts list with download URLs
+          echo "Fetching artifact list..."
+          ARTIFACTS_LIST=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts")
+
+          echo "=== Artifacts found ==="
+          echo "$ARTIFACTS_LIST" | jq -r '.artifacts[] | "\(.id)\t\(.name)\t\(.created_at)"'
+
+          # Download each artifact using the archive_download_url
+          echo "$ARTIFACTS_LIST" | jq -r '.artifacts[] | @base64' | while read -r line; do
+            if [ -n "$line" ]; then
+              id=$(echo "$line" | base64 -d | jq -r '.id')
+              name=$(echo "$line" | base64 -d | jq -r '.name')
+              archive_url=$(echo "$line" | base64 -d | jq -r '.archive_download_url')
+
+              echo "Downloading artifact: $name (ID: $id)..."
+              mkdir -p "artifacts/$name"
+
+              # Download and extract directly
+              gh api "$archive_url" -H "Authorization: Bearer $GH_TOKEN" -L -o "artifacts/$name.zip"
+              if [ -f "artifacts/$name.zip" ]; then
+                unzip -o "artifacts/$name.zip" -d "artifacts/$name/"
+                rm -f "artifacts/$name.zip"
+                echo "  Successfully extracted $name"
+              else
+                echo "  Failed to download $name"
+              fi
+            fi
+          done
 
           echo ""
           echo "=== Artifacts downloaded ==="
@@ -177,7 +208,8 @@ jobs:
               echo "Warning: No artifact ID found for $artifact_name"
               artifact_url="$RUN_URL/artifacts"
             else
-              artifact_url="https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id"
+              # Direct download URL format (adds /download suffix for direct artifact download)
+              artifact_url="https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id/download"
             fi
 
             # Format display names
