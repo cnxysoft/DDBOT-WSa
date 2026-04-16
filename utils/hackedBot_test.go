@@ -19,7 +19,7 @@ func TestGetBot(t *testing.T) {
 	assert.False(t, bot.IsOnline())
 	assert.Empty(t, bot.GetFriendList())
 	assert.Empty(t, bot.GetGroupList())
-	bot.SolveFriendRequest(nil, false)
+	bot.SolveFriendRequest("", false)
 	bot.SolveGroupJoinRequest(nil, false, false, "")
 
 	bot.TESTAddGroup(123)

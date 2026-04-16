@@ -1025,6 +1025,14 @@ func (a *SatoriAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error {
 	return fmt.Errorf("satori adapter: SetGroupLeave not implemented")
 }
 
+func (a *SatoriAdapter) SetGroupAddRequest(flag string, approve bool, reason string) error {
+	return fmt.Errorf("satori adapter: SetGroupAddRequest not implemented")
+}
+
+func (a *SatoriAdapter) SetFriendAddRequest(flag string, approve bool) error {
+	return fmt.Errorf("satori adapter: SetFriendAddRequest not implemented")
+}
+
 func (a *SatoriAdapter) SetGroupAdmin(groupCode, memberUin int64, enable bool) error {
 	guildID := a.rawID(groupCode)
 	userID := a.rawID(memberUin)

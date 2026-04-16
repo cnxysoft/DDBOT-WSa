@@ -40,10 +40,11 @@ func (h *HackedBot) FindGroup(code int64) *adapter.GroupInfo {
 	return h.Bot.FindGroup(code)
 }
 
-func (h *HackedBot) SolveFriendRequest(req interface{}, accept bool) {
+func (h *HackedBot) SolveFriendRequest(flag string, accept bool) error {
 	if !h.valid() {
-		return
+		return fmt.Errorf("bot not valid")
 	}
+	return h.Bot.SetFriendAddRequest(flag, accept)
 }
 
 func (h *HackedBot) SolveGroupJoinRequest(i interface{}, accept bool, block bool, reason string) {
@@ -158,6 +159,21 @@ func (h *HackedBot) SetGroupLeave(groupCode int64, isDismiss bool) error {
 		return fmt.Errorf("bot not valid")
 	}
 	return h.Bot.SetGroupLeave(groupCode, isDismiss)
+}
+
+func (h *HackedBot) SetGroupAddRequest(flag string, approve bool, reason string) error {
+	if !h.valid() {
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SetGroupAddRequest(flag, approve, reason)
+}
+
+// SolveGroupInvitedRequest 处理加群邀请 (通过SendApi调用set_group_add_request)
+func (h *HackedBot) SolveGroupInvitedRequest(flag string, approve bool, reason string) error {
+	if !h.valid() {
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.SetGroupAddRequest(flag, approve, reason)
 }
 
 func (h *HackedBot) TESTSetUin(uin int64) {

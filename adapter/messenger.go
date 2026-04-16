@@ -1195,12 +1195,11 @@ func (m *Messenger) FriendPoke(target int64) error {
 	return m.Adapter.FriendPoke(target)
 }
 
-func (m *Messenger) SetGroupAddRequest(flag string, subType string, approve bool, reason string) error {
+func (m *Messenger) SetGroupAddRequest(flag string, approve bool, reason string) error {
 	_, err := m.SendApi("set_group_add_request", map[string]interface{}{
-		"flag":     flag,
-		"sub_type": subType,
-		"approve":  approve,
-		"reason":   reason,
+		"flag":    flag,
+		"approve": approve,
+		"reason":  reason,
 	})
 	return err
 }

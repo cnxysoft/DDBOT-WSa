@@ -259,7 +259,7 @@ func (a *OneBotAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[str
 
 func (a *OneBotAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
 	params := map[string]interface{}{
-		"user_id": userID,
+		"user_id":  userID,
 		"messages": nodes,
 	}
 
@@ -846,6 +846,23 @@ func (a *OneBotAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error {
 	_, err := a.SendApi("set_group_leave", map[string]interface{}{
 		"group_id":   groupCode,
 		"is_dismiss": isDismiss,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetGroupAddRequest(flag string, approve bool, reason string) error {
+	_, err := a.SendApi("set_group_add_request", map[string]interface{}{
+		"flag":    flag,
+		"approve": approve,
+		"reason":  reason,
+	})
+	return err
+}
+
+func (a *OneBotAdapter) SetFriendAddRequest(flag string, approve bool) error {
+	_, err := a.SendApi("set_friend_add_request", map[string]interface{}{
+		"flag":    flag,
+		"approve": approve,
 	})
 	return err
 }

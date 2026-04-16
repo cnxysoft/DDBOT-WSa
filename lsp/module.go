@@ -330,7 +330,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if l.PermissionStateManager.CheckBlockList(request.InvitorUin) {
 			log.Debug("收到加群邀请，该用户在block列表中，将拒绝加群邀请")
 			l.PermissionStateManager.AddBlockList(request.GroupCode, 0)
-			request.Reject(false, "")
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, false, "")
 			return
 		}
 
@@ -351,14 +351,14 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if fi == nil {
 			log.Error("收到加群邀请，无法找到好友信息，将拒绝加群邀请")
 			l.PermissionStateManager.AddBlockList(request.GroupCode, 0)
-			request.Reject(false, "未找到阁下的好友信息，请添加好友进行操作")
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, false, "未找到阁下的好友信息，请添加好友进行操作")
 			return
 		}
 
 		if l.PermissionStateManager.CheckAdmin(request.InvitorUin) {
 			log.Info("收到管理员的加群邀请，将同意加群邀请")
 			l.PermissionStateManager.DeleteBlockList(request.GroupCode)
-			request.Accept()
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, true, "")
 			return
 		}
 
@@ -366,16 +366,16 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		case PrivateMode:
 			log.Info("收到加群邀请，当前BOT处于私有模式，将拒绝加群邀请")
 			l.PermissionStateManager.AddBlockList(request.GroupCode, 0)
-			request.Reject(false, "当前BOT处于私有模式")
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, false, "当前BOT处于私有模式")
 		case ProtectMode:
 			if err := l.LspStateManager.SaveGroupInvitedRequest(request); err != nil {
 				log.Errorf("收到加群邀请，但记录申请失败，将拒绝该申请，请将该问题反馈给开发者 - error %v", err)
-				request.Reject(false, "内部错误")
+				localutils.GetBot().SolveGroupInvitedRequest(request.Flag, false, "内部错误")
 			} else {
 				log.Info("收到加群邀请，当前BOT处于审核模式，将保留加群邀请")
 			}
 		case PublicMode:
-			request.Accept()
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, true, "")
 			l.PermissionStateManager.DeleteBlockList(request.GroupCode)
 			log.Info("收到加群邀请，当前BOT处于公开模式，将接受加群邀请")
 			m, _ := template.LoadAndExec("trigger.private.group_invited.tmpl", map[string]interface{}{
@@ -396,7 +396,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		default:
 			// impossible
 			log.Errorf("收到加群邀请，当前BOT处于未知模式，将拒绝加群邀请，请将该问题反馈给开发者")
-			request.Reject(false, "内部错误")
+			localutils.GetBot().SolveGroupInvitedRequest(request.Flag, false, "内部错误")
 		}
 	})
 
@@ -408,7 +408,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		})
 		if l.PermissionStateManager.CheckBlockList(request.RequesterUin) {
 			log.Info("收到好友申请，该用户在block列表中，将拒绝好友申请")
-			request.Reject()
+			localutils.GetBot().SolveFriendRequest(request.Flag, false)
 			return
 		}
 		req, err := l.LspStateManager.ListNewFriendRequest()
@@ -428,24 +428,24 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		case PrivateMode:
 			botMode = string(PrivateMode)
 			log.Info("收到好友申请，当前BOT处于私有模式，将拒绝好友申请")
-			request.Reject()
+			localutils.GetBot().SolveFriendRequest(request.Flag, false)
 		case ProtectMode:
 			botMode = string(ProtectMode)
 			if err := l.LspStateManager.SaveNewFriendRequest(request); err != nil {
 				log.Errorf("收到好友申请，但记录申请失败，将拒绝该申请，请将该问题反馈给开发者 - error %v", err)
-				request.Reject()
+				localutils.GetBot().SolveFriendRequest(request.Flag, false)
 			} else {
 				log.Info("收到好友申请，当前BOT处于审核模式，将保留好友申请")
 			}
 		case PublicMode:
 			botMode = string(PublicMode)
 			log.Info("收到好友申请，当前BOT处于公开模式，将通过好友申请")
-			request.Accept()
+			localutils.GetBot().SolveFriendRequest(request.Flag, true)
 		default:
 			botMode = "unknown"
 			// impossible
 			log.Errorf("收到好友申请，当前BOT处于未知模式，将拒绝好友申请，请将该问题反馈给开发者")
-			request.Reject()
+			localutils.GetBot().SolveFriendRequest(request.Flag, false)
 		}
 		data := map[string]interface{}{
 			"request_id":  request.RequestId,

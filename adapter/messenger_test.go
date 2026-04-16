@@ -24,27 +24,31 @@ func newMockAdapter() *mockAdapter {
 	}
 }
 
-func (m *mockAdapter) Start() error                       { return nil }
-func (m *mockAdapter) Stop() error                       { return nil }
-func (m *mockAdapter) GetSelfID() int64                   { return 1143469507 }
-func (m *mockAdapter) GetAdapterName() string             { return "mock" }
-func (m *mockAdapter) IsConnected() bool                 { return true }
+func (m *mockAdapter) Start() error                                     { return nil }
+func (m *mockAdapter) Stop() error                                      { return nil }
+func (m *mockAdapter) GetSelfID() int64                                 { return 1143469507 }
+func (m *mockAdapter) GetAdapterName() string                           { return "mock" }
+func (m *mockAdapter) IsConnected() bool                                { return true }
 func (m *mockAdapter) GetFileUrl(groupCode int64, fileId string) string { return "" }
 func (m *mockAdapter) DownloadFile(url, base64, name string, headers []string) (string, error) {
 	return "", nil
 }
-func (m *mockAdapter) GetMsg(msgId int32) (*GetMsgResult, error) { return nil, nil }
-func (m *mockAdapter) GetMsgOrg(msgId int32) (interface{}, error) { return nil, nil }
-func (m *mockAdapter) RecallMsg(msgId int32) error { return nil }
-func (m *mockAdapter) GroupPoke(groupCode, target int64) error { return nil }
-func (m *mockAdapter) FriendPoke(target int64) error { return nil }
+func (m *mockAdapter) GetMsg(msgId int32) (*GetMsgResult, error)                    { return nil, nil }
+func (m *mockAdapter) GetMsgOrg(msgId int32) (interface{}, error)                   { return nil, nil }
+func (m *mockAdapter) RecallMsg(msgId int32) error                                  { return nil }
+func (m *mockAdapter) GroupPoke(groupCode, target int64) error                      { return nil }
+func (m *mockAdapter) FriendPoke(target int64) error                                { return nil }
 func (m *mockAdapter) SetGroupBan(groupCode, memberUin int64, duration int64) error { return nil }
-func (m *mockAdapter) SetGroupWholeBan(groupCode int64, enable bool) error { return nil }
-func (m *mockAdapter) KickGroupMember(groupCode, memberUin int64, rejectAddRequest bool) error { return nil }
-func (m *mockAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error { return nil }
-func (m *mockAdapter) SetGroupAdmin(groupCode, memberUin int64, enable bool) error { return nil }
-func (m *mockAdapter) EditGroupCard(groupCode, memberUin int64, card string) error { return nil }
-func (m *mockAdapter) EditGroupTitle(groupCode, memberUin int64, title string) error { return nil }
+func (m *mockAdapter) SetGroupWholeBan(groupCode int64, enable bool) error          { return nil }
+func (m *mockAdapter) KickGroupMember(groupCode, memberUin int64, rejectAddRequest bool) error {
+	return nil
+}
+func (m *mockAdapter) SetGroupLeave(groupCode int64, isDismiss bool) error               { return nil }
+func (m *mockAdapter) SetGroupAdmin(groupCode, memberUin int64, enable bool) error       { return nil }
+func (m *mockAdapter) EditGroupCard(groupCode, memberUin int64, card string) error       { return nil }
+func (m *mockAdapter) EditGroupTitle(groupCode, memberUin int64, title string) error     { return nil }
+func (m *mockAdapter) SetGroupAddRequest(flag string, approve bool, reason string) error { return nil }
+func (m *mockAdapter) SetFriendAddRequest(flag string, approve bool) error               { return nil }
 
 func (m *mockAdapter) SendApi(action string, params map[string]interface{}) (interface{}, error) {
 	return nil, nil
@@ -61,7 +65,7 @@ func (m *mockAdapter) SendGroupForwardMessage(groupID int64, nodes []map[string]
 func (m *mockAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
 	return 1, "", nil
 }
-func (m *mockAdapter) GetGroupList() ([]*GroupInfo, error)       { return m.groupList, nil }
+func (m *mockAdapter) GetGroupList() ([]*GroupInfo, error) { return m.groupList, nil }
 func (m *mockAdapter) GetGroupMemberList(groupID int64) ([]*GroupMemberInfo, error) {
 	return m.groupMemberList[groupID], nil
 }
@@ -79,11 +83,11 @@ func (m *mockAdapter) GetGroupMemberInfo(groupID, userID int64) (*GroupMemberInf
 	}
 	return nil, nil
 }
-func (m *mockAdapter) OnGroupMessage(handler func(*GroupMessageEvent))    {}
+func (m *mockAdapter) OnGroupMessage(handler func(*GroupMessageEvent))     {}
 func (m *mockAdapter) OnPrivateMessage(handler func(*PrivateMessageEvent)) {}
-func (m *mockAdapter) OnMetaEvent(handler func(*MetaEvent))               {}
-func (m *mockAdapter) OnNoticeEvent(handler func(*NoticeEvent))           {}
-func (m *mockAdapter) OnRequestEvent(handler func(*RequestEvent))         {}
+func (m *mockAdapter) OnMetaEvent(handler func(*MetaEvent))                {}
+func (m *mockAdapter) OnNoticeEvent(handler func(*NoticeEvent))            {}
+func (m *mockAdapter) OnRequestEvent(handler func(*RequestEvent))          {}
 
 // mockDispatcher implements BotEventDispatcher for testing.
 type mockDispatcher struct {
@@ -95,8 +99,8 @@ func newMockDispatcher() *mockDispatcher {
 	return &mockDispatcher{}
 }
 
-func (d *mockDispatcher) DispatchGroupMessage(msg *message.GroupMessage)                                {}
-func (d *mockDispatcher) DispatchPrivateMessage(msg *message.PrivateMessage)                              {}
+func (d *mockDispatcher) DispatchGroupMessage(msg *message.GroupMessage)     {}
+func (d *mockDispatcher) DispatchPrivateMessage(msg *message.PrivateMessage) {}
 func (d *mockDispatcher) DispatchGroupRecall(event *client.GroupMessageRecalledEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -123,8 +127,8 @@ func (d *mockDispatcher) DispatchGroupMemberLeave(event *client.MemberLeaveGroup
 	defer d.mu.Unlock()
 	d.events = append(d.events, "group_decrease")
 }
-func (d *mockDispatcher) DispatchGroupJoin(event *client.GroupInfo)                          {}
-func (d *mockDispatcher) DispatchGroupLeave(event *client.GroupLeaveEvent)                   {}
+func (d *mockDispatcher) DispatchGroupJoin(event *client.GroupInfo)        {}
+func (d *mockDispatcher) DispatchGroupLeave(event *client.GroupLeaveEvent) {}
 func (d *mockDispatcher) DispatchGroupMemberPermissionChanged(event *client.MemberPermissionChangedEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -150,7 +154,7 @@ func (d *mockDispatcher) DispatchGroupNotify(event client.INotifyEvent) {
 	defer d.mu.Unlock()
 	d.events = append(d.events, "notify_poke")
 }
-func (d *mockDispatcher) DispatchFriendNotify(event client.INotifyEvent) {}
+func (d *mockDispatcher) DispatchFriendNotify(event client.INotifyEvent)               {}
 func (d *mockDispatcher) DispatchGroupNameUpdated(event *client.GroupNameUpdatedEvent) {}
 func (d *mockDispatcher) DispatchGroupEssenceChanged(event *client.GroupDigestEvent) {
 	d.mu.Lock()
@@ -162,15 +166,15 @@ func (d *mockDispatcher) DispatchGroupDisband(event *client.GroupDisbandEvent) {
 	defer d.mu.Unlock()
 	d.events = append(d.events, "group_dismiss")
 }
-func (d *mockDispatcher) DispatchNewFriendRequest(event *client.NewFriendRequest)  {}
+func (d *mockDispatcher) DispatchNewFriendRequest(event *client.NewFriendRequest) {}
 func (d *mockDispatcher) DispatchNewFriend(event *client.NewFriendEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.events = append(d.events, "friend_add")
 }
 func (d *mockDispatcher) DispatchUserJoinGroupRequest(event *client.UserJoinGroupRequest) {}
-func (d *mockDispatcher) DispatchGroupInvitedRequest(event *client.GroupInvitedRequest)  {}
-func (d *mockDispatcher) DispatchBotOnline(event *client.BotOnlineEvent)                 {}
+func (d *mockDispatcher) DispatchGroupInvitedRequest(event *client.GroupInvitedRequest)   {}
+func (d *mockDispatcher) DispatchBotOnline(event *client.BotOnlineEvent)                  {}
 func (d *mockDispatcher) DispatchBotOffline(event *client.BotOfflineEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -570,14 +574,14 @@ func TestMessengerHandleNoticeEvent_GroupMsgEmojiLike(t *testing.T) {
 	go func() {
 		defer close(done)
 		m.handleNoticeEvent(&NoticeEvent{
-			NoticeType:  "group_msg_emoji_like",
-			SubType:     "add",
-			GroupID:     545402644,
-			UserID:      1001,
-			MessageID:   12345,
-			EmojiId:     "笑脸",
-			EmojiCount:  1,
-			Time:        time.Now().Unix(),
+			NoticeType: "group_msg_emoji_like",
+			SubType:    "add",
+			GroupID:    545402644,
+			UserID:     1001,
+			MessageID:  12345,
+			EmojiId:    "笑脸",
+			EmojiCount: 1,
+			Time:       time.Now().Unix(),
 		})
 	}()
 
@@ -826,4 +830,119 @@ func TestMessenger_UpdateGroupMember_NoDeadlock(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("UpdateGroupMember and RemoveGroupMember deadlocked")
 	}
+}
+
+// mockRequestDispatcher embeds mockDispatcher and overrides only the request
+// dispatch methods so we can capture and verify the events.
+type mockRequestDispatcher struct {
+	*mockDispatcher
+	newFriendRequest *client.NewFriendRequest
+	groupInvited     *client.GroupInvitedRequest
+	userJoinGroup    *client.UserJoinGroupRequest
+}
+
+func newMockRequestDispatcher() *mockRequestDispatcher {
+	return &mockRequestDispatcher{mockDispatcher: newMockDispatcher()}
+}
+
+func (d *mockRequestDispatcher) DispatchNewFriendRequest(event *client.NewFriendRequest) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.newFriendRequest = event
+}
+func (d *mockRequestDispatcher) DispatchGroupInvitedRequest(event *client.GroupInvitedRequest) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.groupInvited = event
+}
+func (d *mockRequestDispatcher) DispatchUserJoinGroupRequest(event *client.UserJoinGroupRequest) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.userJoinGroup = event
+}
+
+func (d *mockRequestDispatcher) getFriendRequest() *client.NewFriendRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.newFriendRequest
+}
+func (d *mockRequestDispatcher) getGroupInvited() *client.GroupInvitedRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.groupInvited
+}
+func (d *mockRequestDispatcher) getUserJoinGroup() *client.UserJoinGroupRequest {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.userJoinGroup
+}
+
+// TestMessengerHandleRequestEvent_NewFriendRequest verifies flag is correctly
+// stored in the dispatched NewFriendRequest event.
+func TestMessengerHandleRequestEvent_NewFriendRequest(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+	dispatcher := newMockRequestDispatcher()
+	m.SetBotEventDispatcher(dispatcher)
+
+	m.handleRequestEvent(&RequestEvent{
+		RequestType: "friend",
+		Time:        1234567890,
+		SelfID:      1143469507,
+		UserID:      123456,
+		Comment:     "hello",
+		Flag:        "test_friend_flag_abc123",
+		SubType:     "",
+	})
+
+	req := dispatcher.getFriendRequest()
+	assert.NotNil(t, req, "NewFriendRequest should be dispatched")
+	assert.Equal(t, "test_friend_flag_abc123", req.Flag, "flag should match event.Flag")
+	assert.Equal(t, int64(123456), req.RequesterUin, "RequesterUin should match UserID")
+	assert.Equal(t, "hello", req.Message, "Message should match Comment")
+}
+
+// TestMessengerHandleRequestEvent_GroupInvited verifies flag is correctly
+// stored in the dispatched GroupInvitedRequest event.
+func TestMessengerHandleRequestEvent_GroupInvited(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+	dispatcher := newMockRequestDispatcher()
+	m.SetBotEventDispatcher(dispatcher)
+
+	m.handleRequestEvent(&RequestEvent{
+		RequestType: "group",
+		Time:        1234567890,
+		SelfID:      1143469507,
+		GroupID:     545402644,
+		UserID:      123456,
+		Comment:     "",
+		Flag:        "test_group_invite_flag_xyz789",
+		SubType:     "invite",
+	})
+
+	req := dispatcher.getGroupInvited()
+	assert.NotNil(t, req, "GroupInvitedRequest should be dispatched")
+	assert.Equal(t, "test_group_invite_flag_xyz789", req.Flag, "flag should match event.Flag")
+}
+
+// TestMessengerHandleRequestEvent_UserJoinGroup verifies flag is correctly
+// stored in the dispatched UserJoinGroupRequest event.
+func TestMessengerHandleRequestEvent_UserJoinGroup(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+	dispatcher := newMockRequestDispatcher()
+	m.SetBotEventDispatcher(dispatcher)
+
+	m.handleRequestEvent(&RequestEvent{
+		RequestType: "group",
+		Time:        1234567890,
+		SelfID:      1143469507,
+		GroupID:     545402644,
+		UserID:      123456,
+		Comment:     "please let me in",
+		Flag:        "test_join_group_flag_uvw456",
+		SubType:     "add",
+	})
+
+	req := dispatcher.getUserJoinGroup()
+	assert.NotNil(t, req, "UserJoinGroupRequest should be dispatched")
+	assert.Equal(t, "test_join_group_flag_uvw456", req.Flag, "flag should match event.Flag")
 }

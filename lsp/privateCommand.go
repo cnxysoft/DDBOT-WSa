@@ -1151,7 +1151,7 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 			log.Info("确认拒绝全部好友申请")
 			for _, req := range requests {
 				log.Debugf("正在拒绝%v(%v)的好友申请", req.RequesterNick, req.RequesterUin)
-				c.bot.SolveFriendRequest(req, false)
+				c.bot.SolveFriendRequest(req.Flag, false)
 				if err := c.l.LspStateManager.DeleteNewFriendRequest(req.RequestId); err != nil {
 					log.Errorf("DeleteNewFriendRequest error %v", err)
 				}
@@ -1165,7 +1165,7 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 			// 接受全部！
 			for _, req := range requests {
 				log.Debugf("正在接受%v(%v)的好友申请", req.RequesterNick, req.RequesterUin)
-				c.bot.SolveFriendRequest(req, true)
+				c.bot.SolveFriendRequest(req.Flag, true)
 				if err := c.l.LspStateManager.DeleteNewFriendRequest(req.RequestId); err != nil {
 					log.Errorf("DeleteNewFriendRequest error %v", err)
 				}
@@ -1200,11 +1200,11 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 		})
 
 		if friendRequestCmd.Reject {
-			c.bot.SolveFriendRequest(request, false)
+			c.bot.SolveFriendRequest(request.Flag, false)
 			log.Info("拒绝好友申请")
 			c.textReply(fmt.Sprintf("成功 - 已拒绝 %v(%v) 的好友申请", request.RequesterNick, request.RequesterUin))
 		} else {
-			c.bot.SolveFriendRequest(request, true)
+			c.bot.SolveFriendRequest(request.Flag, true)
 			log.Info("接受好友申请")
 			c.textReply(fmt.Sprintf("成功 - 已接受 %v(%v) 的好友申请", request.RequesterNick, request.RequesterUin))
 		}

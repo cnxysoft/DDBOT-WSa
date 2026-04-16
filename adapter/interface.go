@@ -440,6 +440,15 @@ type BotCaller interface {
 	FriendPoke(target int64) error
 	EditGroupCard(groupCode, memberUin int64, card string) error
 	SetGroupLeave(groupCode int64, isDismiss bool) error
+	// SetGroupAddRequest 处理加群请求
+	// flag: 从事件中获取
+	// approve: 是否同意
+	// reason: 拒绝原因（同意时忽略）
+	SetGroupAddRequest(flag string, approve bool, reason string) error
+	// SetFriendAddRequest 处理好友请求
+	// flag: 从事件中获取
+	// approve: 是否同意
+	SetFriendAddRequest(flag string, approve bool) error
 	// SendGroupForwardMessage 发送群合并转发消息
 	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{id: "msgId"}}}
 	// options 顶层参数: prompt, source, summary, news (可选)
