@@ -1,0 +1,226 @@
+name: "Release Preview"
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [next-dev]
+
+permissions:
+  contents: write
+
+jobs:
+  release-preview:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get artifact list with IDs
+        id: get-artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          # Fetch artifact list from the triggering workflow run
+          echo "Fetching artifacts from run $RUN_ID..."
+
+          # Get the artifacts JSON
+          ARTIFACTS_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts")
+
+          echo "=== Raw artifacts JSON (first 3000 chars) ==="
+          echo "$ARTIFACTS_JSON" | head -c 3000
+          echo ""
+
+          # Parse and display artifact info
+          echo "=== Parsed artifacts ==="
+          echo "$ARTIFACTS_JSON" | jq -r '.artifacts[] | "\(.id)\t\(.name)\t\(.created_at)"'
+
+          # Save to env for later steps
+          echo "ARTIFACTS_JSON=$ARTIFACTS_JSON" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        run: |
+          # Use gh run download to get all artifacts
+          gh run download ${{ github.event.workflow_run.id }} --dir ./artifacts || {
+            echo "gh run download failed, trying alternative..."
+          }
+
+          echo ""
+          echo "=== Artifacts downloaded ==="
+          ls -la artifacts/ 2>/dev/null || echo "No artifacts directory"
+          find artifacts/ -type f 2>/dev/null | head -30
+
+      - name: Prepare Release Assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          # Process downloaded artifacts
+          for artifact_dir in artifacts/*/; do
+            if [ ! -d "$artifact_dir" ]; then
+              continue
+            fi
+
+            name=$(basename "$artifact_dir")
+            os="${name%_*}"
+            arch="${name#*_}"
+
+            echo "Processing $name (os=$os, arch=$arch)..."
+
+            # Find all DDBOT binaries in this artifact directory
+            for binary in "$artifact_dir"DDBOT-*; do
+              if [ -f "$binary" ]; then
+                fname=$(basename "$binary")
+                echo "  Found: $fname"
+
+                # Determine zip name based on OS
+                case "$os" in
+                  windows)
+                    if [[ "$fname" == *-cgo.exe ]]; then
+                      zip_name="DDBOT-${os}-${arch}-cgo.exe.zip"
+                    elif [[ "$fname" == *-cli.exe ]]; then
+                      zip_name="DDBOT-${os}-${arch}-cli.exe.zip"
+                    else
+                      continue
+                    fi
+                    ;;
+                  darwin|linux)
+                    if [[ "$fname" == *-cgo ]]; then
+                      zip_name="DDBOT-${os}-${arch}-cgo.zip"
+                    elif [[ "$fname" == *-cli ]]; then
+                      zip_name="DDBOT-${os}-${arch}-cli.zip"
+                    else
+                      continue
+                    fi
+                    ;;
+                  *)
+                    continue
+                    ;;
+                esac
+
+                echo "  Creating: $zip_name"
+                zip -qr "release-assets/$zip_name" "$binary"
+              fi
+            done
+          done
+
+          echo ""
+          echo "=== Release assets created ==="
+          ls -la release-assets/
+
+      - name: Generate Release Notes
+        env:
+          COMMIT_ID: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S")
+
+          # Parse artifact IDs from the JSON we fetched earlier
+          echo "=== Parsing artifact IDs ==="
+          echo "$ARTIFACTS_JSON" | jq -r '.artifacts[] | @base64' > /tmp/artifact_base64.txt
+
+          # Create a mapping of artifact names to IDs
+          declare -A ARTIFACT_IDS
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              id=$(echo "$line" | base64 -d | jq -r '.id')
+              name=$(echo "$line" | base64 -d | jq -r '.name')
+              ARTIFACT_IDS[$name]=$id
+              echo "Mapped: $name -> $id"
+            fi
+          done < /tmp/artifact_base64.txt
+
+          cat << HEADER > RELEASE_NOTES.md
+          # DDBOT-WSa Preview (next-dev)
+
+          ## Build Info
+          - **Commit**: [$COMMIT_ID](https://github.com/$REPO/commit/$COMMIT_ID)
+          - **CI Run**: [View Run]($RUN_URL)
+          - **Built**: $BUILD_DATE UTC
+
+          ## Download Links
+
+          Each platform artifact can be downloaded from the links below or from the [Actions artifacts page]($RUN_URL/artifacts).
+
+          | Platform | Architecture | Type | Download |
+          |----------|-------------|------|----------|
+          HEADER
+
+          # Generate download links for each release asset
+          for zip in release-assets/*.zip; do
+            fname=$(basename "$zip")
+            # Parse: DDBOT-{os}-{arch}-{type}.zip or DDBOT-{os}-{arch}-{type}.exe.zip
+
+            # Get artifact name (corresponds to the artifact directory name)
+            rest="${fname%.zip}"
+            if [[ "$rest" == *.exe ]]; then
+              rest="${rest%.exe}"
+            fi
+
+            # Extract os and arch from filename
+            IFS='-' read -ra parts <<< "$rest"
+            os="${parts[1]:-}"
+            arch="${parts[2]:-}"
+            type="${parts[3]:-}"
+
+            # Find matching artifact ID by constructing the artifact name
+            # Artifact name is: {os}_{arch} (e.g., linux_amd64)
+            artifact_name="${os}_${arch}"
+
+            # Get the artifact ID
+            artifact_id="${ARTIFACT_IDS[$artifact_name]:-}"
+            if [ -z "$artifact_id" ]; then
+              echo "Warning: No artifact ID found for $artifact_name"
+              artifact_url="$RUN_URL/artifacts"
+            else
+              artifact_url="https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id"
+            fi
+
+            # Format display names
+            case "$os" in
+              linux) os_name="Linux" ;;
+              windows) os_name="Windows" ;;
+              darwin) os_name="macOS" ;;
+              *) os_name="$os" ;;
+            esac
+
+            case "$arch" in
+              amd64) arch_name="x86_64" ;;
+              386) arch_name="i386" ;;
+              arm) arch_name="ARM" ;;
+              arm64) arch_name="ARM64" ;;
+              *) arch_name="$arch" ;;
+            esac
+
+            case "$type" in
+              cgo) type_name="CGO" ;;
+              cli) type_name="CLI" ;;
+              *) type_name="$type" ;;
+            esac
+
+            echo "| $os_name | $arch_name | $type_name | [Download]($artifact_url) |" >> RELEASE_NOTES.md
+          done
+
+          echo "" >> RELEASE_NOTES.md
+          echo "---" >> RELEASE_NOTES.md
+          echo "*This is an automated preview build from the \`next-dev\` branch. Updated on every CI success.*" >> RELEASE_NOTES.md
+
+          echo "=== Generated Release Notes ==="
+          cat RELEASE_NOTES.md
+
+      - name: Create Preview Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: preview-next-dev
+          name: Preview (next-dev)
+          body_path: RELEASE_NOTES.md
+          files: release-assets/*
+          draft: false
+          prerelease: true
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          generate_release_notes: false
+          update_existing: true
