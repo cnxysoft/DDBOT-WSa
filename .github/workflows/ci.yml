@@ -256,3 +256,112 @@ jobs:
           path: |
             ./DDBOT-cli*
             ./DDBOT-cgo*
+
+  # Generate build report with download links
+  report:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Generate Build Summary
+        run: |
+          echo "# DDBOT-WSa Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check build job status
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ **Build**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Build**: Failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: DDBOT's Twitter subscription feature depends on FFmpeg. The CGO version bundles FFmpeg statically and runs without external dependencies. The CLI version does not include FFmpeg and requires it to be installed in the system PATH." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Define all platforms
+          platforms=(
+            "linux:amd64:Linux:x86_64"
+            "linux:386:Linux:i386"
+            "linux:arm:Linux:ARM"
+            "linux:arm64:Linux:ARM64"
+            "windows:386:Windows:i386"
+            "windows:amd64:Windows:x86_64"
+            "windows:arm64:Windows:ARM64"
+            "darwin:amd64:macOS:x86_64"
+            "darwin:arm64:macOS:ARM64"
+          )
+
+          RUN_ID=${{ github.run_id }}
+          REPO=${{ github.repository }}
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Download Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fetch artifact list with download URLs
+          ARTIFACTS_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts")
+
+          echo "| Platform | Architecture | Type | Filename | Download |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------------|------|----------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for p in "${platforms[@]}"; do
+            IFS=':' read -r goos goarch display_name arch_display <<< "$p"
+            artifact_name="${goos}_${goarch}"
+
+            # CLI binary
+            if [ "$goos" == "windows" ]; then
+              cli_name="DDBOT-cli.exe"
+              cgo_name="DDBOT-cgo.exe"
+            else
+              cli_name="DDBOT-cli"
+              cgo_name="DDBOT-cgo"
+            fi
+
+            # Get artifact ID for this platform
+            artifact_id=$(echo "$ARTIFACTS_JSON" | jq -r ".artifacts[] | select(.name == \"$artifact_name\") | .id")
+            if [ -n "$artifact_id" ] && [ "$artifact_id" != "null" ]; then
+              download_url="[Download](https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id)"
+            else
+              download_url="-"
+            fi
+
+            echo "| $display_name | $arch_display | CLI | \`$cli_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
+
+            # Skip CGO for windows/arm as it's not built
+            if [ "$goos" == "windows" ] && [ "$goarch" == "arm" ]; then
+              continue
+            fi
+            echo "| $display_name | $arch_display | CGO | \`$cgo_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate JSON Report Data
+        if: needs.build.result == 'success'
+        run: |
+          # Output machine-readable report data for downstream use
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
+          echo "REPO=${{ github.repository }}" >> $GITHUB_ENV
+          echo "COMMIT_SHA=${{ github.sha }}" >> $GITHUB_ENV
+          echo "BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Upload Report Data
+        if: needs.build.result == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: $GITHUB_ENV
+          retention-days: 90
