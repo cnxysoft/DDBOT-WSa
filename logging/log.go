@@ -15,7 +15,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
 
 	"github.com/Sora233/MiraiGo-Template/bot"
@@ -86,12 +85,8 @@ func (m *logging) Init() {
 		// 使用 levelWriter 根据日志级别分流到 stdout/stderr，同时写入文件
 		lvWriter := &levelWriter{stdout: os.Stdout, stderr: os.Stderr}
 		qqLogger.SetOutput(io.MultiWriter(writer, lvWriter))
-		qqLogger.AddHook(lfshook.NewHook(writer, &logrus.TextFormatter{
-			FullTimestamp:    true,
-			PadLevelText:     true,
-			QuoteEmptyFields: true,
-			ForceQuote:       true,
-		}))
+		// 不再使用 lfshook，因为 SetOutput 的 MultiWriter 已经包含了文件写入
+		// lfshook 会导致同一日志被写入文件两次（MultiWriter 一份 + lfshook 一份）
 	}
 	qqLogger.SetLevel(logrus.DebugLevel)
 	logger = qqLogger.WithField("module", moduleId)
