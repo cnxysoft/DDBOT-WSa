@@ -28,7 +28,7 @@ const (
 
 var (
 	genvisitorRegex = regexp.MustCompile(`\((.*)\)`)
-	snapCastURL     = "http://localhost:8080/render"
+	snapCastURL     = "https://sc.znin.net/render"
 )
 
 // SnapCastResult SnapCast JS 模式返回结果
