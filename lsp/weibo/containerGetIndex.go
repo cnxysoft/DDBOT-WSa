@@ -1,6 +1,7 @@
 package weibo
 
 import (
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -32,7 +33,6 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 
 func apiContainerGetIndexProfileLogin(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
 	opts := buildRequestOptions(CreateReferer(uid))
-	opts = append(opts, CookieOption()...)
 	opts = append(opts, SetXsrfToken(opts))
 
 	profileResp := new(ApiContainerGetIndexProfileResponse)
@@ -45,7 +45,7 @@ func apiContainerGetIndexProfileLogin(uid int64) (*ApiContainerGetIndexProfileRe
 
 func apiContainerGetIndexProfileGuest(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
 	opts := buildRequestOptions(CreateGuestReferer(uid))
-	opts = append(opts, CookieOption()...)
+	GetUserPage(uid, opts...)
 
 	guestResp := new(apiContainerGetIndexGuestProfileResponse)
 	err := requests.Get(PathContainerGetIndex_Guest, CreateGuestProfileParam(uid), &guestResp, opts...)
@@ -132,18 +132,17 @@ func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsRespon
 func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
 	// API 模式：使用从 API 获取的移动端 Cookie
 	// Guest 模式：使用自动生成的访客 Cookie
+	var opts []requests.Option
 	var cookieOpts []requests.Option
 	if cfg.IsWeiboAPIMode() {
 		cookieOpts = CookieOption()
 		if len(cookieOpts) == 0 {
 			logger.Warnf("uid=%d: API 模式 CookieOption 为空", uid)
 		}
-	} else {
-		cookieOpts = CookieOption()
+		opts = append(opts, cookieOpts...)
 	}
-
-	opts := buildRequestOptions(CreateGuestReferer(uid))
-	opts = append(opts, cookieOpts...)
+	opts = append(opts, buildRequestOptions(CreateGuestReferer(uid))...)
+	GetUserPage(uid, opts...)
 
 	guestResp := new(apiContainerGetIndexGuestCardsResponse)
 	err := requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
@@ -153,16 +152,17 @@ func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsRespon
 
 	resp := guestResp.ToCardsResponse()
 
-	// 如果是 Guest 模式且返回 -100 错误，尝试刷新 Cookie 并重试一次
+	// 如果是 Guest 模式且返回 -100 错误，说明需要人机滑块验证
 	if !cfg.IsWeiboAPIMode() && resp.GetOk() == -100 {
 		logger.Warnf("uid=%d: 检测到 -100 错误（Cookie 失效），尝试刷新", uid)
 		if TryRefreshGuestCookie() {
 			// 刷新成功后重试一次
+			// 随机延迟 1-3s，避免固定间隔被检测
+			time.Sleep(time.Duration(1000+rand.Intn(2000)) * time.Millisecond)
 			cookieOpts = CookieOption()
 			opts = buildRequestOptions(CreateGuestReferer(uid))
 			opts = append(opts, cookieOpts...)
-
-			guestResp = new(apiContainerGetIndexGuestCardsResponse)
+			guestResp := new(apiContainerGetIndexGuestCardsResponse)
 			err = requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
 			if err != nil {
 				return nil, err
@@ -170,14 +170,14 @@ func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsRespon
 			resp = guestResp.ToCardsResponse()
 		}
 	}
-
 	return resp, nil
 }
 
 func buildRequestOptions(referer string) []requests.Option {
 	return []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferNone),
-		requests.AddUAOption(),
+		requests.WithCookieJar(JAR),
+		requests.AddUAOption(GetVisitorUA()),
 		requests.TimeoutOption(time.Second * 10),
 		requests.HeaderOption("referer", referer),
 	}
@@ -256,12 +256,16 @@ func CreateParam(uid int64) gout.H {
 func CreateGuestProfileParam(uid int64) gout.H {
 	return gout.H{
 		"containerid": "100505" + strconv.FormatInt(uid, 10),
+		"type":        "uid",
+		"value":       strconv.FormatInt(uid, 10),
 	}
 }
 
 func CreateGuestCardsParam(uid int64) gout.H {
 	return gout.H{
 		"containerid": "107603" + strconv.FormatInt(uid, 10),
+		"type":        "uid",
+		"value":       strconv.FormatInt(uid, 10),
 	}
 }
 
@@ -280,4 +284,8 @@ func CreateGuestReferer(uid int64) string {
 
 func isGuestMode() bool {
 	return strings.EqualFold(cfg.GetWeiboMode(), "guest")
+}
+
+func GetUserPage(id int64, Opts ...requests.Option) error {
+	return requests.Get(CreateGuestReferer(id), nil, nil, Opts...)
 }

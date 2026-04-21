@@ -45,6 +45,7 @@ type option struct {
 	AutoHeaderReferer   bool
 	NotIgnoreEmpty      bool
 	Transport           *http.Transport
+	HTTP2               bool
 }
 
 func (o *option) getGout() *gout.Client {
@@ -57,12 +58,18 @@ func (o *option) getGout() *gout.Client {
 	if o.InsecureSkipVerify {
 		goutOpts = append(goutOpts, gout.WithInsecureSkipVerify())
 	}
-	if o.CookieJar != nil {
+	if o.HTTP2 {
+		tr := &http.Transport{
+			ForceAttemptHTTP2: true,
+		}
+		goutOpts = append(goutOpts, gout.WithClient(&http.Client{
+			Transport: tr,
+		}))
+	} else if o.CookieJar != nil {
 		goutOpts = append(goutOpts, gout.WithClient(&http.Client{
 			Jar: o.CookieJar,
 		}))
-	}
-	if o.Transport != nil {
+	} else if o.Transport != nil {
 		goutOpts = append(goutOpts, gout.WithClient(&http.Client{
 			Transport: o.Transport,
 		}))
@@ -167,6 +174,12 @@ func DebugOption() Option {
 	}
 }
 
+func HTTP2Option() Option {
+	return func(o *option) {
+		o.HTTP2 = true
+	}
+}
+
 func RequestAutoHostOption() Option {
 	return func(o *option) {
 		o.AutoHeaderHost = true
@@ -220,19 +233,19 @@ func GetResponseCookieOption(cookies *[]*http.Cookie) Option {
 func ExtractCookieOption(opts []Option, cookieName string) string {
 	// 创建一个临时的option实例
 	tempOpt := &option{}
-	
+
 	// 应用所有选项到临时实例
 	for _, opt := range opts {
 		opt(tempOpt)
 	}
-	
+
 	// 查找指定名称的cookie
 	for _, cookie := range tempOpt.Cookies {
 		if cookie.Name == cookieName {
 			return cookie.Value
 		}
 	}
-	
+
 	return ""
 }
 

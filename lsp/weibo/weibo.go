@@ -1,6 +1,8 @@
 package weibo
 
 import (
+	"net/http/cookiejar"
+
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	jsoniter "github.com/json-iterator/go"
 	"go.uber.org/atomic"
@@ -14,6 +16,8 @@ const (
 
 var (
 	visitorCookiesOpt atomic.Value
+	visitorUA         atomic.String
+	JAR               *cookiejar.Jar
 )
 
 func CookieOption() []requests.Option {
@@ -21,4 +25,11 @@ func CookieOption() []requests.Option {
 		return c.([]requests.Option)
 	}
 	return nil
+}
+
+func GetVisitorUA() string {
+	if ua := visitorUA.Load(); ua != "" {
+		return ua
+	}
+	return requests.DefaultUA()
 }

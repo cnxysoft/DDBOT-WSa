@@ -290,7 +290,6 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 			// 如果模板加载失败，回退到默认消息
 			c.fallbackMSG()
 		}
-		return
 	})
 	return c.msgCache
 }
