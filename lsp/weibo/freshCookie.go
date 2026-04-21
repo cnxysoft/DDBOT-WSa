@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
@@ -28,8 +29,15 @@ const (
 
 var (
 	genvisitorRegex = regexp.MustCompile(`\((.*)\)`)
-	snapCastURL     = "https://sc.znin.net/render"
 )
+
+// getSnapCastURL 获取 SnapCast 服务地址
+func getSnapCastURL() string {
+	if url := cfg.GetSnapCastURL(); url != "" {
+		return url
+	}
+	return "https://sc.znin.net/render"
+}
 
 // SnapCastResult SnapCast JS 模式返回结果
 type SnapCastResult struct {
@@ -57,7 +65,7 @@ func getSnapCastRid(ua string) (*SnapCastRidInfo, error) {
 		return nil, fmt.Errorf("marshal payload failed: %w", err)
 	}
 
-	resp, err := http.Post(snapCastURL, "application/json", strings.NewReader(string(body)))
+	resp, err := http.Post(getSnapCastURL(), "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("post to snapcast failed: %w", err)
 	}

@@ -230,6 +230,11 @@ func GetWeiboAutoRefresh() bool {
 	return config.GlobalConfig.GetBool("weibo.autorefresh")
 }
 
+// GetSnapCastURL 获取 SnapCast 服务地址，用于生成微博 rid
+func GetSnapCastURL() string {
+	return strings.TrimSpace(config.GlobalConfig.GetString("weibo.snapcastURL"))
+}
+
 func GetHeyboxToken() string {
 	return strings.TrimSpace(config.GlobalConfig.GetString("heybox.x_xhh_tokenid"))
 }

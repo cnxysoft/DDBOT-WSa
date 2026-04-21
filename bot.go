@@ -280,6 +280,11 @@ weibo:
   # API 返回的所有 Cookie 中只会提取 SUB 和 XSRF-TOKEN 使用
   cookieRefreshAPI: "http://127.0.0.1:5000/api/Weibo/GetWeiboCookie"  # Cookie 刷新 API 地址
 
+  # SnapCast 服务地址，用于访客模式生成 rid
+  # 如果留空则使用默认地址 https://sc.znin.net/render
+  # 可配置为自建的 SnapCast 服务地址
+  snapcastURL: ""
+
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
 
