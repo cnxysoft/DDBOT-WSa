@@ -44,12 +44,13 @@ type SnapCastRidInfo struct {
 }
 
 // getSnapCastRid 通过 SnapCast 浏览器渲染获取 rid 和 UA
-func getSnapCastRid() (*SnapCastRidInfo, error) {
+func getSnapCastRid(ua string) (*SnapCastRidInfo, error) {
 	payload := map[string]any{
-		"site":   "weibo",
-		"type":   "rid",
-		"output": "json",
-		"data":   map[string]any{},
+		"site":       "weibo",
+		"type":       "rid",
+		"output":     "json",
+		"user_agent": ua,
+		"data":       map[string]any{},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -196,17 +197,20 @@ func refreshLoginXsrfToken(jar *cookiejar.Jar, ua string) error {
 func FreshCookieGuest() ([]*http.Cookie, error) {
 	JAR, _ = cookiejar.New(nil)
 
+	ua := requests.RandomUA(requests.Chrome)
+	visitorUA.Store(ua)
+
 	// 通过 SnapCast 获取 rid 和 UA
-	info, err := getSnapCastRid()
+	info, err := getSnapCastRid(ua)
 	if err != nil {
 		logger.Errorf("getSnapCastRid error %v", err)
 		return nil, err
+	} else if info.UA != ua {
+		logger.Warnf("getSnapCastRid Warning: UserAgent invalid, return UA: %v", info.UA)
+		ua = info.UA
+		visitorUA.Store(ua)
 	}
 	logger.Infof("获取 rid 成功: %s, UA: %s", info.Rid, info.UA[:20])
-
-	// 使用 SnapCast 返回的 UA
-	ua := info.UA
-	visitorUA.Store(ua)
 
 	err = refreshGuestPub(JAR, ua)
 	if err != nil {
