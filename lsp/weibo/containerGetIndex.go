@@ -1,6 +1,7 @@
 package weibo
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 		ed := time.Now()
 		logger.WithField("FuncName", utils.FuncName()).Tracef("cost %v", ed.Sub(st))
 	}()
+	if cfg.IsWeiboAPIMode() {
+		return apiContainerGetIndexProfileAPI(uid)
+	}
 	if isGuestMode() {
 		return apiContainerGetIndexProfileGuest(uid)
 	}
@@ -55,14 +59,32 @@ func apiContainerGetIndexProfileGuest(uid int64) (*ApiContainerGetIndexProfileRe
 	return guestResp.ToProfileResponse(), nil
 }
 
+// apiContainerGetIndexProfileAPI 通过外部 API 获取用户资料
+func apiContainerGetIndexProfileAPI(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
+	baseURL := cfg.GetWeiboAPIModeBaseURL()
+	if baseURL == "" {
+		return nil, fmt.Errorf("未配置微博 API 模式基础地址")
+	}
+	apiURL := fmt.Sprintf("%s/api/Weibo/GetMobileProfile?uid=%d", baseURL, uid)
+
+	profileResp := new(ApiContainerGetIndexProfileResponse)
+	err := requests.Get(apiURL, nil, &profileResp)
+	if err != nil {
+		return nil, err
+	}
+	return profileResp, nil
+}
+
 func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
 	st := time.Now()
 	defer func() {
 		ed := time.Now()
 		logger.WithField("FuncName", utils.FuncName()).Tracef("cost %v", ed.Sub(st))
 	}()
-	// API 模式或 Guest 模式：使用移动端 API（因为 API 返回的是移动端 Cookie）
-	if isGuestMode() || cfg.IsWeiboAPIMode() {
+	if cfg.IsWeiboAPIMode() {
+		return apiContainerGetIndexCardsAPI(uid)
+	}
+	if isGuestMode() {
 		return apiContainerGetIndexCardsGuest(uid)
 	}
 	// Login 模式：使用桌面端 API
@@ -113,10 +135,9 @@ func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsRespon
 			logger.Warnf("uid=%d: 无法解析为 JSON，可能返回了 HTML", uid)
 		}
 
-		// 如果是 API 模式且请求失败，提示用户可能需要配置 SUB
-		if cfg.IsWeiboAPIMode() && GetSettingCookie() == "" {
-			logger.Warnf("uid=%d: API 模式请求失败，建议您在 application.yaml 中配置有效的 SUB Cookie", uid)
-			logger.Warnf("uid=%d: 获取方法：登录 weibo.com → F12 → Application → Cookies → 复制 SUB 字段", uid)
+		// 如果是 API 模式且请求失败，提示用户检查 baseURL 配置
+		if cfg.IsWeiboAPIMode() {
+			logger.Warnf("uid=%d: API 模式请求失败，请检查 apiModeBaseURL 配置是否正确", uid)
 		}
 		return nil, err
 	}
@@ -129,18 +150,25 @@ func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsRespon
 	return profileResp, nil
 }
 
-func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
-	// API 模式：使用从 API 获取的移动端 Cookie
-	// Guest 模式：使用自动生成的访客 Cookie
-	var cookieOpts []requests.Option
-	if cfg.IsWeiboAPIMode() {
-		cookieOpts = CookieOption()
-		if len(cookieOpts) == 0 {
-			logger.Warnf("uid=%d: API 模式 CookieOption 为空", uid)
-		}
-	} else {
-		cookieOpts = CookieOption()
+// apiContainerGetIndexCardsAPI 通过外部 API 获取用户微博卡片列表
+func apiContainerGetIndexCardsAPI(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
+	baseURL := cfg.GetWeiboAPIModeBaseURL()
+	if baseURL == "" {
+		return nil, fmt.Errorf("未配置微博 API 模式基础地址")
 	}
+	apiURL := fmt.Sprintf("%s/api/Weibo/GetMobileCards?uid=%d", baseURL, uid)
+
+	cardsResp := new(ApiContainerGetIndexCardsResponse)
+	err := requests.Get(apiURL, nil, &cardsResp)
+	if err != nil {
+		return nil, err
+	}
+	return cardsResp, nil
+}
+
+func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
+	// Guest 模式：使用自动生成的访客 Cookie
+	cookieOpts := CookieOption()
 
 	opts := buildRequestOptions(CreateGuestReferer(uid))
 	opts = append(opts, cookieOpts...)

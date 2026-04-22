@@ -275,10 +275,10 @@ weibo:
                           #      4) 需要配合 cookieRefreshAPI 使用
                           # 注意：不会修改配置文件中的 weibo.sub，每次重启重新获取
   
-  # API 模式配置（mode: api 或 mode: login + autorefresh 时使用）
-  # 从外部 API 自动获取 Cookie，无需手动配置 sub 或扫码登录
-  # API 返回的所有 Cookie 中只会提取 SUB 和 XSRF-TOKEN 使用
-  cookieRefreshAPI: "http://127.0.0.1:5000/api/Weibo/GetWeiboCookie"  # Cookie 刷新 API 地址
+  # API 模式配置（mode: api 时使用）
+  # API 模式直接从外部 API 获取微博数据，无需 Cookie
+  # API 返回的数据格式需与微博移动端 API 兼容
+  apiModeBaseURL: "http://127.0.0.1:5000"  # API 模式基础地址，完整 URL 为 {baseURL}/api/Weibo/GetMobileCards?uid=uid
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送

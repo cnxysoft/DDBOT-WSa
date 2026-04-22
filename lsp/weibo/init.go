@@ -16,10 +16,15 @@ func init() {
 }
 
 func freshCookieOpt(sub string) {
+	// API 模式不需要刷新 Cookie，直接从外部 API 获取数据
+	if cfg.IsWeiboAPIMode() {
+		return
+	}
+
 	var cookies []*http.Cookie
 	var err error
 
-	// 如果传入了有效的 sub，直接使用（API 模式和 autorefresh 都会传入）
+	// 如果传入了有效的 sub，直接使用（autorefresh 会传入）
 	if sub != "" {
 		// 只需要获取 XSRF-TOKEN，SUB 已经由调用方提供
 		localutils.Retry(3, time.Second, func() bool {
@@ -32,14 +37,6 @@ func freshCookieOpt(sub string) {
 		})
 		if err != nil {
 			logger.Errorf("FreshCookie error %v", err)
-			return
-		}
-	} else if cfg.IsWeiboAPIMode() {
-		// API 模式且未传入 sub：从 API 获取（兼容旧逻辑）
-		cookies, err = FreshCookieFromAPI()
-		if err != nil {
-			logger.Errorf("FreshCookieFromAPI error %v", err)
-			logger.Warn("API 模式获取 Cookie 失败，微博功能可能无法正常使用")
 			return
 		}
 	} else {
@@ -105,7 +102,11 @@ func freshCookieOpt(sub string) {
 	}
 
 	visitorCookiesOpt.Store(opt)
-	logger.Infof("微博 Guest Cookie 已加载，共 %d 个", len(opt))
+	if isGuestMode() {
+		logger.Infof("微博 Guest Cookie 已加载，共 %d 个", len(opt))
+	} else {
+		logger.Infof("微博 Login Cookie 已加载，共 %d 个", len(opt))
+	}
 }
 
 func GetSettingCookie() string {

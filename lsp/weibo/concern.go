@@ -47,31 +47,14 @@ func (c *Concern) Start() error {
 	isAPI := cfg.IsWeiboAPIMode()
 	sub := ""
 
-	// API 模式：从 API 获取 Cookie 并存入内存
+	// API 模式：直接使用外部 API 获取数据，无需 Cookie
 	if isAPI {
-		logger.Info("微博运行模式：API 模式，将从外部 API 自动获取 Cookie")
-		apiURL := cfg.GetWeiboCookieRefreshAPI()
-		if apiURL != "" {
-			logger.Info("正在从 API 获取初始 SUB...")
-			cookies, err := FreshCookieFromAPI()
-			if err != nil {
-				logger.Errorf("从 API 获取初始 SUB 失败：%v", err)
-				logger.Warn("API 模式获取 Cookie 失败，将关闭微博推送功能。")
-				return nil
-			}
-			apiSub := ExtractSUBFromCookies(cookies)
-			if apiSub != "" {
-				sub = apiSub
-				logger.Infof("从 API 成功获取初始 SUB（仅内存使用）：%s...", sub[:min(20, len(sub))])
-			} else {
-				logger.Warn("API 未返回有效的 SUB Cookie")
-				logger.Warn("将关闭微博推送功能。")
-				return nil
-			}
-		} else {
-			logger.Warn("API 模式但未配置 cookieRefreshAPI，将关闭微博推送功能。")
+		apiURL := cfg.GetWeiboAPIModeBaseURL()
+		if apiURL == "" {
+			logger.Warn("API 模式但未配置 apiModeBaseURL，将关闭微博推送功能。")
 			return nil
 		}
+		logger.Info("微博运行模式：API 模式，将使用外部 API 获取数据")
 	} else if !isGuest {
 		// Login 模式：检查 cookie、autorefresh 或扫码登录
 		sub = GetSettingCookie()
@@ -119,11 +102,17 @@ func (c *Concern) Start() error {
 		}
 	}
 
-	freshCookieOpt(sub)
-
-	// API 模式下启动自动监控
+	// API 模式：验证 API 连接是否正常
 	if isAPI {
-		StartCookieRefreshMonitor(sub)
+		testUid := int64(5462373877)
+		profileResp, err := ApiContainerGetIndexProfile(testUid)
+		if err != nil {
+			logger.Errorf("微博 API 模式验证失败 - %v，微博功能可能无法正常使用", err)
+		} else if profileResp.GetOk() != 1 {
+			logger.Errorf("微博 API 模式验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
+		} else {
+			logger.Info("微博启动成功，使用 API 模式")
+		}
 	}
 
 	// Login 模式下启动 SUB 自动刷新
@@ -161,16 +150,16 @@ func (c *Concern) Start() error {
 				logger.Info("微博启动成功，Cookie 验证通过")
 			}
 		}()
-	} else if isAPI {
-		// API 模式：只记录启动成功，不进行验证
-		logger.Info("微博启动成功，使用 API 模式")
 	}
 
-	go func() {
-		for range time.Tick(time.Hour) {
-			freshCookieOpt(sub)
-		}
-	}()
+	// Login/Guest 模式每小时刷新 Cookie（API 模式不需要）
+	if !isAPI {
+		go func() {
+			for range time.Tick(time.Hour) {
+				freshCookieOpt(sub)
+			}
+		}()
+	}
 	// 使用 EmitQueue 进行轮询，间隔由 weibo.interval 配置控制
 	c.StateManager.UseEmitQueueWithSiteInterval("weibo")
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
