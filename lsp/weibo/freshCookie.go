@@ -16,6 +16,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/guonaihong/gout"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/atomic"
 )
 
 const (
@@ -28,7 +29,8 @@ const (
 )
 
 var (
-	genvisitorRegex = regexp.MustCompile(`\((.*)\)`)
+	genvisitorRegex        = regexp.MustCompile(`\((.*)\)`)
+	freshCookiePauseUntil atomic.Int64 // 暂停截止时间戳（Unix），0表示未暂停
 )
 
 // getSnapCastURL 获取 SnapCast 服务地址
@@ -325,8 +327,16 @@ func FreshCookie() ([]*http.Cookie, error) {
 
 // TryRefreshGuestCookie 尝试刷新 Guest Cookie
 // 刷新后丢弃旧的 Cookie，用新的替代
+// 如果在暂停期内（-100 频率限制），则跳过刷新
 func TryRefreshGuestCookie() bool {
-	logger.Info("检测到 -100 错误，开始刷新 Guest Cookie")
+	// 检查是否在暂停期内（-100 频率限制触发）
+	now := time.Now().Unix()
+	if freshCookiePauseUntil.Load() > now {
+		logger.Warnf("刷新 Guest Cookie 已暂停（频率限制），等待恢复...")
+		return false
+	}
+
+	logger.Info("检测到 -100/432 错误，开始刷新 Guest Cookie")
 	cookies, err := FreshCookieGuest()
 	if err != nil {
 		logger.Errorf("刷新 Guest Cookie 失败: %v", err)
@@ -342,4 +352,15 @@ func TryRefreshGuestCookie() bool {
 
 	logger.Infof("Guest Cookie 刷新成功，已更新到内存")
 	return true
+}
+
+// PauseRefreshOnRateLimit 当触发 -100（频率限制）时暂停刷新
+// pauseDuration 暂停时长，默认 10 分钟
+func PauseRefreshOnRateLimit(pauseDuration time.Duration) {
+	if pauseDuration == 0 {
+		pauseDuration = time.Minute * 10
+	}
+	pauseUntil := time.Now().Add(pauseDuration).Unix()
+	freshCookiePauseUntil.Store(pauseUntil)
+	logger.Infof("刷新 Guest Cookie 已暂停，将在 %v 后恢复", pauseDuration)
 }

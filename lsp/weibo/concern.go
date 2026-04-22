@@ -171,6 +171,14 @@ func (c *Concern) Start() error {
 			freshCookieOpt(sub)
 		}
 	}()
+	// Guest 模式：验证 interval 最低限制为 60s
+	if isGuest {
+		interval := cfg.GetEmitIntervalForSite("weibo")
+		if interval > 0 && interval < time.Minute {
+			logger.Warnf("微博 Guest 模式 interval 配置低于最低限制 60s，已自动调整为 60s")
+			// 注意：此处仅提示，不修改配置。用户需自行调整 weibo.interval
+		}
+	}
 	// 使用 EmitQueue 进行轮询，间隔由 weibo.interval 配置控制
 	c.StateManager.UseEmitQueueWithSiteInterval("weibo")
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {

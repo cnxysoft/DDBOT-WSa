@@ -152,22 +152,31 @@ func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsRespon
 
 	resp := guestResp.ToCardsResponse()
 
-	// 如果是 Guest 模式且返回 -100 错误，说明需要人机滑块验证
-	if !cfg.IsWeiboAPIMode() && resp.GetOk() == -100 {
-		logger.Warnf("uid=%d: 检测到 -100 错误（Cookie 失效），尝试刷新", uid)
-		if TryRefreshGuestCookie() {
-			// 刷新成功后重试一次
-			// 随机延迟 1-3s，避免固定间隔被检测
-			time.Sleep(time.Duration(1000+rand.Intn(2000)) * time.Millisecond)
-			cookieOpts = CookieOption()
-			opts = buildRequestOptions(CreateGuestReferer(uid))
-			opts = append(opts, cookieOpts...)
-			guestResp := new(apiContainerGetIndexGuestCardsResponse)
-			err = requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
-			if err != nil {
-				return nil, err
+	// Guest 模式：处理错误码
+	if !cfg.IsWeiboAPIMode() {
+		if resp.GetOk() == -100 {
+			// -100: 频率限制触发，暂停刷新 10 分钟
+			logger.Warnf("uid=%d: 检测到 -100 错误（频率限制），暂停刷新 Cookie 10 分钟", uid)
+			PauseRefreshOnRateLimit(time.Minute * 10)
+			return resp, nil
+		}
+		if resp.GetOk() == 432 {
+			// 432: 需要人机验证，正常刷新 Cookie
+			logger.Warnf("uid=%d: 检测到 432 错误（人机验证），尝试刷新", uid)
+			if TryRefreshGuestCookie() {
+				// 刷新成功后重试一次
+				// 随机延迟 1-3s，避免固定间隔被检测
+				time.Sleep(time.Duration(1000+rand.Intn(2000)) * time.Millisecond)
+				cookieOpts = CookieOption()
+				opts = buildRequestOptions(CreateGuestReferer(uid))
+				opts = append(opts, cookieOpts...)
+				guestResp := new(apiContainerGetIndexGuestCardsResponse)
+				err = requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
+				if err != nil {
+					return nil, err
+				}
+				resp = guestResp.ToCardsResponse()
 			}
-			resp = guestResp.ToCardsResponse()
 		}
 	}
 	return resp, nil
