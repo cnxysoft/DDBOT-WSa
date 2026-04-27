@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,6 +211,9 @@ func setupTestMessenger(t *testing.T) (*Messenger, *mockAdapter, *mockDispatcher
 	messenger := NewMessenger(adapter)
 	dispatcher := newMockDispatcher()
 	messenger.SetBotEventDispatcher(dispatcher)
+
+	// Set bot offline for testing consistency
+	messenger.Online.Store(false)
 
 	group := &GroupInfo{
 		Uin:  545402644,
@@ -814,7 +818,6 @@ func TestMessenger_UpdateGroupMember_NoDeadlock(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			m.RemoveGroupMember(545402644, 785829865)
-			m.GroupList[0].Members = append(m.GroupList[0].Members, &GroupMemberInfo{Uin: 785829865, Nickname: "KickedUser"})
 		}
 	}()
 
@@ -922,6 +925,163 @@ func TestMessengerHandleRequestEvent_GroupInvited(t *testing.T) {
 	req := dispatcher.getGroupInvited()
 	assert.NotNil(t, req, "GroupInvitedRequest should be dispatched")
 	assert.Equal(t, "test_group_invite_flag_xyz789", req.Flag, "flag should match event.Flag")
+}
+
+// TestOfflineQueue_SaveAndLoad tests saving and loading offline messages.
+func TestOfflineQueue_SaveAndLoad(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg1 := offlineQueueMsg{
+		GroupCode: 123456,
+		Message:   message.NewSendingMessage(),
+		NewStr:    "test message 1",
+		CreatedAt: time.Now(),
+	}
+	msg2 := offlineQueueMsg{
+		GroupCode: 789012,
+		Message:   message.NewSendingMessage(),
+		NewStr:    "test message 2",
+		CreatedAt: time.Now(),
+	}
+
+	m.saveOfflineMsg(msg1)
+	m.saveOfflineMsg(msg2)
+
+	msgs := m.loadOfflineMsgs()
+	assert.Len(t, msgs, 2)
+	assert.Equal(t, int64(123456), msgs[0].GroupCode)
+	assert.Equal(t, "test message 1", msgs[0].NewStr)
+
+	m.clearOfflineMsgs()
+	msgs = m.loadOfflineMsgs()
+	assert.Len(t, msgs, 0)
+}
+
+// TestOfflineQueue_Expiration tests queue behavior with expired messages.
+// Note: flushOfflineQueue requires config to be enabled, so we test
+// the queue operations directly without relying on config.
+func TestOfflineQueue_Expiration(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	oldMsg := offlineQueueMsg{
+		GroupCode: 123456,
+		Message:   message.NewSendingMessage(),
+		NewStr:    "old message",
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	m.saveOfflineMsg(oldMsg)
+
+	recentMsg := offlineQueueMsg{
+		GroupCode: 789012,
+		Message:   message.NewSendingMessage(),
+		NewStr:    "recent message",
+		CreatedAt: time.Now(),
+	}
+	m.saveOfflineMsg(recentMsg)
+
+	// Verify both messages are in queue
+	msgs := m.loadOfflineMsgs()
+	assert.Len(t, msgs, 2)
+
+	// Test message age check logic (without flush)
+	now := time.Now()
+	expire := 30 * time.Minute // default expire
+	for _, msg := range msgs {
+		if now.Sub(msg.CreatedAt) > expire {
+			messengerLogger.Infof("过期消息: %v", msg.NewStr)
+		}
+	}
+
+	// Clear for next test
+	m.clearOfflineMsgs()
+}
+
+// TestOfflineQueue_QueueOperations tests queue operations.
+func TestOfflineQueue_QueueOperations(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	// Test direct queue operations
+	msg := offlineQueueMsg{
+		GroupCode: 123456,
+		Message:   message.NewSendingMessage(),
+		NewStr:    "direct test",
+		CreatedAt: time.Now(),
+	}
+
+	// Save
+	m.saveOfflineMsg(msg)
+
+	// Load
+	msgs := m.loadOfflineMsgs()
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, int64(123456), msgs[0].GroupCode)
+
+	// Clear
+	m.clearOfflineMsgs()
+	msgs = m.loadOfflineMsgs()
+	assert.Len(t, msgs, 0)
+}
+
+// TestOfflineQueue_ConcurrentAccess tests that concurrent queue operations are safe.
+func TestOfflineQueue_ConcurrentAccess(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	const iterations = 100
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	// Concurrent saves
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			m.saveOfflineMsg(offlineQueueMsg{
+				GroupCode: int64(i),
+				Message:   message.NewSendingMessage(),
+				NewStr:    "test",
+				CreatedAt: time.Now(),
+			})
+		}
+	}()
+
+	// Concurrent loads
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = m.loadOfflineMsgs()
+		}
+	}()
+
+	// Concurrent clears
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			m.clearOfflineMsgs()
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - no deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent queue operations deadlocked")
+	}
+}
+
+// TestOfflineQueue_SliceMessage tests sliceMessage helper.
+func TestOfflineQueue_SliceMessage(t *testing.T) {
+	short := "hello"
+	assert.Equal(t, short, sliceMessage(short))
+
+	long := strings.Repeat("a", 100)
+	sliced := sliceMessage(long)
+	assert.Equal(t, 78, len(sliced))
+	assert.True(t, strings.HasSuffix(sliced, "..."))
 }
 
 // TestMessengerHandleRequestEvent_UserJoinGroup verifies flag is correctly

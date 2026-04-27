@@ -1257,7 +1257,7 @@ func (a *SatoriAdapter) dispatchRecall(event eventBody) {
 	if event.Guild == nil {
 		noticeType = "friend_recall"
 	}
-	logger.Debugf("Satori dispatchRecall: type=%s guild=%s user=%s operator=%s", noticeType, event.Guild, event.User, event.Operator)
+	logger.Debugf("Satori dispatchRecall: type=%s guild=%s user=%s operator=%s", noticeType, event.Guild.ID, event.User.ID, event.Operator.ID)
 	a.dispatchNoticeEvent(&adapter.NoticeEvent{
 		NoticeType: noticeType,
 		Time:       event.Timestamp,
@@ -1308,7 +1308,7 @@ func (a *SatoriAdapter) dispatchRequest(event eventBody) {
 	} else if event.Type == "guild-request" {
 		subType = "invite"
 	}
-	logger.Debugf("Satori dispatchRequest: type=%s subtype=%s user=%s group=%s", requestType, subType, event.User, event.Guild)
+	logger.Debugf("Satori dispatchRequest: type=%s subtype=%s user=%s group=%s", requestType, subType, event.User.ID, event.Guild.ID)
 	a.dispatchRequestEvent(&adapter.RequestEvent{
 		RequestType: requestType,
 		Time:        event.Timestamp,

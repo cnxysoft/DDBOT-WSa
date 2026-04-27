@@ -11,6 +11,7 @@ import (
 	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	"github.com/sirupsen/logrus"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"go.uber.org/atomic"
 )
 
@@ -59,6 +60,14 @@ type SendResp struct {
 	Error  error
 }
 
+// offlineQueueMsg 离线消息结构
+type offlineQueueMsg struct {
+	GroupCode int64
+	Message   *message.SendingMessage
+	NewStr    string
+	CreatedAt time.Time
+}
+
 type Messenger struct {
 	Adapter Adapter
 
@@ -80,6 +89,10 @@ type Messenger struct {
 	privateMsgCount  atomic.Int64
 	groupSendCount   atomic.Int64
 	privateSendCount atomic.Int64
+
+	// 离线消息队列
+	offlineQueue    []offlineQueueMsg
+	offlineQueueMu  sync.Mutex
 }
 
 func NewMessenger(adapter Adapter) *Messenger {
@@ -148,6 +161,9 @@ func (m *Messenger) registerEventHandlers() {
 				m.Online.Store(status)
 				if !wasOnline && status {
 					messengerLogger.Info("Bot online")
+					if getOfflineQueueEnable() {
+						go m.flushOfflineQueue()
+					}
 				} else if wasOnline && !status {
 					messengerLogger.Warn("Bot offline")
 				}
@@ -183,6 +199,18 @@ func (m *Messenger) GetSelfID() int64 {
 }
 
 func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessage, newstr string) SendResp {
+	// 检查离线队列条件
+	if getOfflineQueueEnable() && !m.Online.Load() {
+		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", sliceMessage(newstr))
+		m.saveOfflineMsg(offlineQueueMsg{
+			GroupCode: groupCode,
+			Message:   msg,
+			NewStr:    newstr,
+			CreatedAt: time.Now(),
+		})
+		return SendResp{RetMSG: &message.GroupMessage{Id: -1}, Error: nil}
+	}
+
 	messages := m.buildMessageSegments(msg)
 
 	// 获取群名称
@@ -1294,4 +1322,79 @@ func (m *Messenger) GetFileUrl(groupCode int64, fileId string) string {
 		return ""
 	}
 	return m.Adapter.GetFileUrl(groupCode, fileId)
+}
+
+// offlineQueue 相关方法
+
+func getOfflineQueueEnable() bool {
+	return config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+}
+
+func getOfflineQueueExpire() time.Duration {
+	timeStr := config.GlobalConfig.GetString("bot.offlineQueue.expire")
+	if timeStr == "" {
+		return 30 * time.Minute
+	}
+	t, err := time.ParseDuration(timeStr)
+	if err != nil || t <= 0 {
+		messengerLogger.Warnf("无效的离线队列过期配置: %s，使用默认值30m", timeStr)
+		return 30 * time.Minute
+	}
+	return t
+}
+
+func (m *Messenger) saveOfflineMsg(msg offlineQueueMsg) {
+	m.offlineQueueMu.Lock()
+	defer m.offlineQueueMu.Unlock()
+	if len(m.offlineQueue) > 0 && cap(m.offlineQueue) >= 100 {
+		messengerLogger.Warnf("离线队列已满(%d)，丢弃最旧消息", cap(m.offlineQueue))
+		m.offlineQueue = m.offlineQueue[1:]
+	}
+	m.offlineQueue = append(m.offlineQueue, msg)
+}
+
+func (m *Messenger) loadOfflineMsgs() []offlineQueueMsg {
+	m.offlineQueueMu.Lock()
+	defer m.offlineQueueMu.Unlock()
+	result := make([]offlineQueueMsg, len(m.offlineQueue))
+	copy(result, m.offlineQueue)
+	return result
+}
+
+func (m *Messenger) clearOfflineMsgs() {
+	m.offlineQueueMu.Lock()
+	defer m.offlineQueueMu.Unlock()
+	m.offlineQueue = make([]offlineQueueMsg, 0, 100)
+}
+
+func (m *Messenger) flushOfflineQueue() {
+	if !getOfflineQueueEnable() {
+		return
+	}
+	msgs := m.loadOfflineMsgs()
+	expire := getOfflineQueueExpire()
+	now := time.Now()
+	messengerLogger.Infof("BOT已上线，开始重发缓存的 %d 条离线消息", len(msgs))
+
+	for _, msg := range msgs {
+		if now.Sub(msg.CreatedAt) <= expire {
+			messages := m.buildMessageSegments(msg.Message)
+			msgID, err := m.Adapter.SendGroupMessage(msg.GroupCode, messages)
+			if err != nil {
+				messengerLogger.Errorf("重发离线消息失败: %v", err)
+			} else {
+				messengerLogger.Debugf("离线消息重发成功: group=%d, msgID=%d", msg.GroupCode, msgID)
+			}
+		} else {
+			messengerLogger.Infof("丢弃过期离线消息: %v", msg.NewStr)
+		}
+	}
+	m.clearOfflineMsgs()
+}
+
+func sliceMessage(str string) string {
+	if len(str) > 75 {
+		return str[:75] + "..."
+	}
+	return str
 }
