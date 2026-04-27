@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +15,11 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/google/uuid"
 	"github.com/spf13/cast"
+)
+
+var (
+	biliCollectionCountRe = regexp.MustCompile(`"module_collection"\s*:\s*\{[^}]*"count"\s*:\s*"(\d+)篇"`)
+	biliCollectionIdRe   = regexp.MustCompile(`"collection_id"\s*:\s*(\d+)`)
 )
 
 const (
@@ -27,8 +33,11 @@ const (
 )
 
 type PostElement struct {
-	Ele  string
-	Type string
+	Ele   string
+	Type  string
+	Url   string
+	Desc  string
+	Image string
 }
 
 func preProcess(oParams []map[string]interface{}) (map[string]interface{}, []requests.Option) {
@@ -316,17 +325,30 @@ func parseBiliPostContent(data []byte) []PostElement {
 		return nil
 	}
 	var content []PostElement
+
+	// Extract collection info from __INITIAL_STATE__ and prepend it
+	collectionCount := extractBiliCollectionCount(data)
+	collectionUrl := extractBiliCollectionUrl(data)
+	if collectionCount != "" {
+		content = append(content, PostElement{
+			Ele:  collectionCount,
+			Type: "collection",
+			Url:  collectionUrl,
+		})
+	}
+
 	doc.Find(".opus-module-content").Each(func(i int, s *goquery.Selection) {
 		s.Children().Each(func(_ int, e *goquery.Selection) {
 			var ele PostElement
 			switch goquery.NodeName(e) {
-			case "p":
+			case "h1", "h2", "p", "blockquote":
 				text := strings.TrimSpace(e.Text())
 				if text != "" {
 					ele.Ele = text
 					ele.Type = "text"
 				}
-				content = append(content, ele)
+			case "hr":
+				return
 			case "div":
 				if e.HasClass("opus-para-pic") {
 					img := e.Find("img")
@@ -337,12 +359,66 @@ func parseBiliPostContent(data []byte) []PostElement {
 							ele.Ele = fullUrl
 						}
 					}
+					caption := e.Find(".opus-pic-view__caption")
+					if captionText := strings.TrimSpace(caption.Text()); captionText != "" {
+						ele.Desc = captionText
+					}
+				} else if e.HasClass("opus-para-link-card") {
+					isDynamic := e.Find(".opus-tag.tag-dynamic").Length() > 0
+					if isDynamic {
+						ele.Type = "dynamic-card"
+					} else {
+						ele.Type = "link-card"
+					}
+					link := e.Find("a")
+					if href, exists := link.Attr("href"); exists {
+						ele.Ele = href
+					}
+					title := e.Find(".opus-title")
+					if linkText := strings.TrimSpace(title.Text()); linkText != "" {
+						ele.Desc = linkText
+					}
+					cover := e.Find(".opus-cover img")
+					if src, exists := cover.Attr("src"); exists {
+						imgUrl := replaceAvifWithPng(src)
+						if imgUrl != "" {
+							ele.Image = imgUrl
+						}
+					}
 				}
+			}
+			if ele.Type != "" {
 				content = append(content, ele)
 			}
 		})
 	})
 	return content
+}
+
+func extractBiliCollectionCount(data []byte) string {
+	matches := biliCollectionCountRe.FindSubmatch(data)
+	if len(matches) < 2 {
+		return ""
+	}
+	return string(matches[1])
+}
+
+func extractBiliCollectionUrl(data []byte) string {
+	matches := biliCollectionIdRe.FindSubmatch(data)
+	if len(matches) < 2 {
+		return ""
+	}
+	return "https://www.bilibili.com/read/readlist/rl" + string(matches[1])
+}
+
+func replaceAvifWithPng(src string) string {
+	if strings.HasPrefix(src, "//") {
+		src = "https:" + src
+	}
+	if !strings.HasSuffix(src, ".png") {
+		src += ".png"
+	}
+	return src
 }
 
 func toAbsoluteURL(rel string) string {

@@ -851,6 +851,48 @@ abort也支持图片参数
 
 *以下为DDBOT-WSa新增*
 
+- 解析B站专栏内容 `{{ parseBiliPost "url" }}`
+
+解析B站专栏/opus页面HTML，返回 `[]PostElement` 数组，适用于 Type=64（专栏）动态的完整内容解析。
+
+**PostElement 结构：**
+
+| 字段 | 类型 | 说明 |
+|-----|------|-----|
+| Ele | string | text时为文本内容；image时为图片URL；collection时为篇数；dynamic-card/link-card时为跳转URL |
+| Type | string | text / image / collection / dynamic-card / link-card |
+| Url | string | collection时为文集URL；dynamic-card/link-card时为跳转URL |
+| Desc | string | image时为图注；dynamic-card/link-card时为动态标题 |
+| Image | string | dynamic-card/link-card时为封面图URL |
+
+**元素类型说明：**
+
+- `text`：h1/h2/p/blockquote 等文本，Ele 为文本内容
+- `image`：图片，Ele=图片URL，Desc=可选图注
+- `collection`：收录于文集，Ele=篇数（如 `"1"`），Url=文集链接
+- `dynamic-card`：嵌入的B站动态，通过 `.opus-tag.tag-dynamic` 判断，Ele=跳转URL，Desc=动态标题，Image=封面图URL
+- `link-card`：其他类型卡片（扩展用），结构同 dynamic-card
+
+```
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if eq $v.Type "text" -}}
+        {{ printf "%v\n" $v.Ele -}}
+    {{ else if eq $v.Type "image" -}}
+        {{ pic $v.Ele -}}
+        {{ if ne $v.Desc "" -}}
+            {{ printf "%v\n" $v.Desc -}}
+        {{ end -}}
+    {{ else if eq $v.Type "collection" -}}
+        {{ printf "收录于文集，共%v篇\n链接：%v\n" $v.Ele $v.Url -}}
+    {{ else if eq $v.Type "dynamic-card" -}}
+        {{ if ne $v.Image "" -}}
+            {{ pic $v.Image -}}
+        {{ end -}}
+        {{ printf "%v\n%v\n" $v.Ele $v.Desc -}}
+    {{ end -}}
+{{ end -}}
+```
+
 - 获取Unix时间戳 `{{ getUnixTime 1640995200 "2006-01-02 15:04:05" }}`
 
 将Unix时间戳转换为指定格式的时间字符串

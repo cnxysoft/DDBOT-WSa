@@ -134,6 +134,16 @@
                 {{ printf "%v\n" $v.Ele -}}
             {{ else if eq $v.Type "image" -}}
                 {{ pic $v.Ele -}}
+                {{ if ne $v.Desc "" -}}
+                    {{ printf "%v\n" $v.Desc -}}
+                {{ end -}}
+            {{ else if eq $v.Type "collection" -}}
+                {{ printf "收录于文集，共%v篇\n链接：%v\n" $v.Ele $v.Url -}}
+            {{ else if eq $v.Type "dynamic-card" -}}
+                {{ if ne $v.Image "" -}}
+                    {{ pic $v.Image -}}
+                {{ end -}}
+                {{ printf "%v\n%v\n" $v.Ele $v.Desc -}}
             {{ end -}}
         {{ end -}}
     {{ else -}}
