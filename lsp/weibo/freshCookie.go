@@ -220,7 +220,11 @@ func FreshCookieGuest() ([]*http.Cookie, error) {
 		ua = info.UA
 		visitorUA.Store(ua)
 	}
-	logger.Infof("获取 rid 成功: %s, UA: %s", info.Rid, info.UA[:20])
+	uaPreview := info.UA
+	if len(uaPreview) > 20 {
+		uaPreview = uaPreview[:20]
+	}
+	logger.Infof("获取 rid 成功: %s, UA: %s", info.Rid, uaPreview)
 
 	err = refreshGuestPub(JAR, ua)
 	if err != nil {
