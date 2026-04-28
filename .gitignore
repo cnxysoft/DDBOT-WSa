@@ -29,6 +29,9 @@ package*.json
 /AGENTS.md
 /CLAUDE.md
 
+# Claude Code configuration
+.claude/
+
 # Runtime data - DO NOT COMMIT
 /res/
 /lsp/bilibili/res/bilibili_area_list.json
