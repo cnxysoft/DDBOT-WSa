@@ -932,16 +932,18 @@ func TestOfflineQueue_SaveAndLoad(t *testing.T) {
 	m, _, _ := setupTestMessenger(t)
 
 	msg1 := offlineQueueMsg{
-		GroupCode: 123456,
-		Message:   message.NewSendingMessage(),
-		NewStr:    "test message 1",
-		CreatedAt: time.Now(),
+		TargetId:   123456,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "test message 1",
+		CreatedAt:  time.Now(),
 	}
 	msg2 := offlineQueueMsg{
-		GroupCode: 789012,
-		Message:   message.NewSendingMessage(),
-		NewStr:    "test message 2",
-		CreatedAt: time.Now(),
+		TargetId:   789012,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "test message 2",
+		CreatedAt:  time.Now(),
 	}
 
 	m.saveOfflineMsg(msg1)
@@ -949,8 +951,49 @@ func TestOfflineQueue_SaveAndLoad(t *testing.T) {
 
 	msgs := m.loadOfflineMsgs()
 	assert.Len(t, msgs, 2)
-	assert.Equal(t, int64(123456), msgs[0].GroupCode)
+	assert.Equal(t, int64(123456), msgs[0].TargetId)
+	assert.Equal(t, "group", msgs[0].TargetType)
 	assert.Equal(t, "test message 1", msgs[0].NewStr)
+
+	m.clearOfflineMsgs()
+	msgs = m.loadOfflineMsgs()
+	assert.Len(t, msgs, 0)
+}
+
+// TestOfflineQueue_PrivateMessage tests private message offline queue.
+func TestOfflineQueue_PrivateMessage(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	groupMsg := offlineQueueMsg{
+		TargetId:   111111,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "group test message",
+		CreatedAt:  time.Now(),
+	}
+	privateMsg := offlineQueueMsg{
+		TargetId:   222222,
+		TargetType: "private",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "private test message",
+		CreatedAt:  time.Now(),
+	}
+
+	m.saveOfflineMsg(groupMsg)
+	m.saveOfflineMsg(privateMsg)
+
+	msgs := m.loadOfflineMsgs()
+	assert.Len(t, msgs, 2)
+
+	// Verify group message
+	assert.Equal(t, int64(111111), msgs[0].TargetId)
+	assert.Equal(t, "group", msgs[0].TargetType)
+	assert.Equal(t, "group test message", msgs[0].NewStr)
+
+	// Verify private message
+	assert.Equal(t, int64(222222), msgs[1].TargetId)
+	assert.Equal(t, "private", msgs[1].TargetType)
+	assert.Equal(t, "private test message", msgs[1].NewStr)
 
 	m.clearOfflineMsgs()
 	msgs = m.loadOfflineMsgs()
@@ -964,18 +1007,20 @@ func TestOfflineQueue_Expiration(t *testing.T) {
 	m, _, _ := setupTestMessenger(t)
 
 	oldMsg := offlineQueueMsg{
-		GroupCode: 123456,
-		Message:   message.NewSendingMessage(),
-		NewStr:    "old message",
-		CreatedAt: time.Now().Add(-2 * time.Hour),
+		TargetId:   123456,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "old message",
+		CreatedAt:  time.Now().Add(-2 * time.Hour),
 	}
 	m.saveOfflineMsg(oldMsg)
 
 	recentMsg := offlineQueueMsg{
-		GroupCode: 789012,
-		Message:   message.NewSendingMessage(),
-		NewStr:    "recent message",
-		CreatedAt: time.Now(),
+		TargetId:   789012,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "recent message",
+		CreatedAt:  time.Now(),
 	}
 	m.saveOfflineMsg(recentMsg)
 
@@ -1002,10 +1047,11 @@ func TestOfflineQueue_QueueOperations(t *testing.T) {
 
 	// Test direct queue operations
 	msg := offlineQueueMsg{
-		GroupCode: 123456,
-		Message:   message.NewSendingMessage(),
-		NewStr:    "direct test",
-		CreatedAt: time.Now(),
+		TargetId:   123456,
+		TargetType: "group",
+		Message:    message.NewSendingMessage(),
+		NewStr:     "direct test",
+		CreatedAt:  time.Now(),
 	}
 
 	// Save
@@ -1014,7 +1060,8 @@ func TestOfflineQueue_QueueOperations(t *testing.T) {
 	// Load
 	msgs := m.loadOfflineMsgs()
 	assert.Len(t, msgs, 1)
-	assert.Equal(t, int64(123456), msgs[0].GroupCode)
+	assert.Equal(t, int64(123456), msgs[0].TargetId)
+	assert.Equal(t, "group", msgs[0].TargetType)
 
 	// Clear
 	m.clearOfflineMsgs()
@@ -1035,10 +1082,11 @@ func TestOfflineQueue_ConcurrentAccess(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
 			m.saveOfflineMsg(offlineQueueMsg{
-				GroupCode: int64(i),
-				Message:   message.NewSendingMessage(),
-				NewStr:    "test",
-				CreatedAt: time.Now(),
+				TargetId:   int64(i),
+				TargetType: "group",
+				Message:    message.NewSendingMessage(),
+				NewStr:     "test",
+				CreatedAt:  time.Now(),
 			})
 		}
 	}()

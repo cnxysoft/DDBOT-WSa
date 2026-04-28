@@ -3,15 +3,14 @@ package adapter
 import (
 	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	"github.com/sirupsen/logrus"
-	"github.com/Sora233/MiraiGo-Template/config"
 	"go.uber.org/atomic"
 )
 
@@ -61,11 +60,13 @@ type SendResp struct {
 }
 
 // offlineQueueMsg 离线消息结构
+// TargetType: "group" 表示群消息, "private" 表示私聊消息
 type offlineQueueMsg struct {
-	GroupCode int64
-	Message   *message.SendingMessage
-	NewStr    string
-	CreatedAt time.Time
+	TargetId   int64
+	TargetType string
+	Message    *message.SendingMessage
+	NewStr     string
+	CreatedAt  time.Time
 }
 
 type Messenger struct {
@@ -91,8 +92,8 @@ type Messenger struct {
 	privateSendCount atomic.Int64
 
 	// 离线消息队列
-	offlineQueue    []offlineQueueMsg
-	offlineQueueMu  sync.Mutex
+	offlineQueue   []offlineQueueMsg
+	offlineQueueMu sync.Mutex
 }
 
 func NewMessenger(adapter Adapter) *Messenger {
@@ -203,10 +204,11 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessag
 	if getOfflineQueueEnable() && !m.Online.Load() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", sliceMessage(newstr))
 		m.saveOfflineMsg(offlineQueueMsg{
-			GroupCode: groupCode,
-			Message:   msg,
-			NewStr:    newstr,
-			CreatedAt: time.Now(),
+			TargetId:   groupCode,
+			TargetType: "group",
+			Message:    msg,
+			NewStr:     newstr,
+			CreatedAt:  time.Now(),
 		})
 		return SendResp{RetMSG: &message.GroupMessage{Id: -1}, Error: nil}
 	}
@@ -248,6 +250,19 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessag
 }
 
 func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage, newstr string) *message.PrivateMessage {
+	// 检查离线队列条件
+	if getOfflineQueueEnable() && !m.Online.Load() {
+		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存私聊消息: %s", sliceMessage(newstr))
+		m.saveOfflineMsg(offlineQueueMsg{
+			TargetId:   target,
+			TargetType: "private",
+			Message:    msg,
+			NewStr:     newstr,
+			CreatedAt:  time.Now(),
+		})
+		return &message.PrivateMessage{Id: -1}
+	}
+
 	messages := m.buildMessageSegments(msg)
 
 	// 获取好友昵称
@@ -1200,15 +1215,6 @@ func getString(v interface{}) string {
 	}
 }
 
-func parseTextElement(contentMap map[string]interface{}) string {
-	if data, ok := contentMap["data"].(map[string]interface{}); ok {
-		if text, ok := data["text"].(string); ok {
-			return strings.ReplaceAll(text, "\\/", "/")
-		}
-	}
-	return ""
-}
-
 func (m *Messenger) GroupPoke(groupCode, target int64) error {
 	if m.Adapter == nil {
 		return fmt.Errorf("adapter not initialized")
@@ -1379,14 +1385,26 @@ func (m *Messenger) flushOfflineQueue() {
 	for _, msg := range msgs {
 		if now.Sub(msg.CreatedAt) <= expire {
 			messages := m.buildMessageSegments(msg.Message)
-			msgID, err := m.Adapter.SendGroupMessage(msg.GroupCode, messages)
-			if err != nil {
-				messengerLogger.Errorf("重发离线消息失败: %v", err)
-			} else {
-				messengerLogger.Debugf("离线消息重发成功: group=%d, msgID=%d", msg.GroupCode, msgID)
+			switch msg.TargetType {
+			case "group":
+				msgID, err := m.Adapter.SendGroupMessage(msg.TargetId, messages)
+				if err != nil {
+					messengerLogger.Errorf("重发离线群消息失败: %v", err)
+				} else {
+					messengerLogger.Debugf("离线群消息重发成功: group=%d, msgID=%d", msg.TargetId, msgID)
+				}
+			case "private":
+				msgID, err := m.Adapter.SendPrivateMessage(msg.TargetId, messages)
+				if err != nil {
+					messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
+				} else {
+					messengerLogger.Debugf("离线私聊消息重发成功: user=%d, msgID=%d", msg.TargetId, msgID)
+				}
+			default:
+				messengerLogger.Warnf("未知的离线消息类型: %s", msg.TargetType)
 			}
 		} else {
-			messengerLogger.Infof("丢弃过期离线消息: %v", msg.NewStr)
+			messengerLogger.Infof("丢弃过期离线消息: %s", msg.NewStr)
 		}
 	}
 	m.clearOfflineMsgs()

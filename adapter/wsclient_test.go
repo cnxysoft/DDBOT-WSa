@@ -1,5 +1,7 @@
 package adapter
 
+//nolint:errcheck // Test code intentionally ignores some error returns
+
 import (
 	"encoding/json"
 	"fmt"
@@ -132,7 +134,7 @@ func TestWSClient_Stop_Concurrent(t *testing.T) {
 	// This will cause panic due to double-close of stopChan
 	// which is a bug in the production code
 	c := newTestWSClient("onebot-v11", WSModeReverse, "ws://localhost:8080")
-	c.Start()
+	_ = c.Start()
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
@@ -140,7 +142,7 @@ func TestWSClient_Stop_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.Stop()
+			_ = c.Stop()
 		}()
 	}
 	wg.Wait()
@@ -330,7 +332,7 @@ func TestWSClient_StartServer(t *testing.T) {
 	assert.False(t, c.IsConnected())   // No client connected yet
 
 	// Cleanup
-	c.Stop()
+	_ = c.Stop()
 }
 
 // Test ws-server mode with token authentication
@@ -346,7 +348,7 @@ func TestWSClient_StartServer_WithToken(t *testing.T) {
 		http.Header{"Authorization": []string{"Bearer wrong-token"}})
 	assert.Error(t, err)
 
-	c.Stop()
+	_ = c.Stop()
 }
 
 // Test ws-server connection upgrade and message handling
@@ -366,7 +368,7 @@ func TestWSClient_ServerConnection(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	assert.True(t, c.IsConnected())
 
-	c.Stop()
+	_ = c.Stop()
 }
 
 // Test connectLoop behavior
@@ -375,9 +377,9 @@ func TestWSClient_ConnectLoop_MaxReconnect(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeReverse, "ws://localhost:19999",
 		WithWSMaxReconnect(2))
 
-	c.Start()
+	_ = c.Start()
 	time.Sleep(500 * time.Millisecond)
-	c.Stop()
+	_ = c.Stop()
 }
 
 // Test writeRaw concurrent access
@@ -392,7 +394,7 @@ func TestWSClient_WriteRaw_Concurrent(t *testing.T) {
 
 		// Set a read deadline to prevent blocking forever
 		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		conn.ReadMessage()
+		_, _, _ = conn.ReadMessage()
 	}))
 	defer server.Close()
 
@@ -409,7 +411,7 @@ func TestWSClient_WriteRaw_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				c.writeRaw(conn, websocket.TextMessage, []byte("test"))
+				_ = c.writeRaw(conn, websocket.TextMessage, []byte("test"))
 			}
 		}()
 	}
@@ -591,7 +593,7 @@ func TestWSClient_HandleConnection_ZeroHeartbeat(t *testing.T) {
 func TestWSClient_ReconnectBackoff(t *testing.T) {
 	tests := []struct {
 		reconnectCnt int
-		expected    time.Duration
+		expected     time.Duration
 	}{
 		{1, 2 * time.Second},
 		{2, 4 * time.Second},
@@ -1055,7 +1057,7 @@ func TestWSClient_MessageHandler_Concurrent(t *testing.T) {
 		go c.handleMessage([]byte(`{"test":true}`))
 	}
 
-	wg.Wait() // Wait for at least one to complete
+	wg.Wait()                          // Wait for at least one to complete
 	time.Sleep(100 * time.Millisecond) // Let all complete
 
 	// Counter should show how many were processed
@@ -1527,11 +1529,11 @@ func TestResponseChCleanup(t *testing.T) {
 // 重点验证：ws连接是否出现"突然静默，无消息接收日志，无任何异常日志，心跳正常跑"的问题
 func TestComprehensiveHighFrequency(t *testing.T) {
 	const (
-		sendCount       = 500    // 发送数量
-		recvCount       = 5000   // 接收数量
-		sendRate        = 50     // 发送速率 50条/秒
-		recvRate        = 200    // 接收速率 200条/秒
-		anomalyInterval = 1000   // 异常间隔（每N条消息后）
+		sendCount       = 500  // 发送数量
+		recvCount       = 5000 // 接收数量
+		sendRate        = 50   // 发送速率 50条/秒
+		recvRate        = 200  // 接收速率 200条/秒
+		anomalyInterval = 1000 // 异常间隔（每N条消息后）
 	)
 
 	// 各种消息类型
@@ -1545,6 +1547,7 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 		defer conn.Close()
 
 		var writeMu sync.Mutex
+		var silentMu sync.Mutex
 		var anomalyCount int32
 		var silentStart time.Time
 		var isSilent bool
@@ -1554,7 +1557,11 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
-				if isSilent && time.Since(silentStart) > 3*time.Second {
+				silentMu.Lock()
+				silent := isSilent
+				start := silentStart
+				silentMu.Unlock()
+				if silent && time.Since(start) > 3*time.Second {
 					wsLogger.Warnf("Server: DETECTED SILENCE - no messages sent for 3 seconds!")
 				}
 			}
@@ -1616,11 +1623,13 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 				}
 
 				// 检测静默开始
+				silentMu.Lock()
 				if !isSilent {
 					isSilent = true
 					silentStart = time.Now()
 				}
 				isSilent = false
+				silentMu.Unlock()
 
 				// 随机异常：每隔 anomalyInterval 条消息，发送非法数据
 				anomaly := atomic.AddInt32(&anomalyCount, 1)
@@ -1646,7 +1655,7 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 						"message": map[string]interface{}{
 							"type": "text",
 							"data": map[string]interface{}{
-								"text": fmt.Sprintf("@bot #status"),
+								"text": "@bot #status",
 							},
 						},
 					}
@@ -1689,6 +1698,7 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 		recvSamples      []int
 		silenceDetected  bool
 		silenceMu        sync.Mutex
+		sampleMu         sync.Mutex
 
 		// 指令响应相关
 		cmdTriggerCount int32
@@ -1765,21 +1775,18 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 	go func() {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				currentRecv := atomic.LoadInt32(&recvCounter)
-				if currentRecv == lastRecvCount && currentRecv > 0 {
-					// 5秒内没有新消息
-					silenceMu.Lock()
-					if !silenceDetected {
-						silenceDetected = true
-						wsLogger.Warnf("Client: SILENCE DETECTED - no new messages for 1 second, recvCount=%d", currentRecv)
-					}
-					silenceMu.Unlock()
+		for range ticker.C {
+			currentRecv := atomic.LoadInt32(&recvCounter)
+			if currentRecv == lastRecvCount && currentRecv > 0 {
+				// 5秒内没有新消息
+				silenceMu.Lock()
+				if !silenceDetected {
+					silenceDetected = true
+					wsLogger.Warnf("Client: SILENCE DETECTED - no new messages for 1 second, recvCount=%d", currentRecv)
 				}
-				lastRecvCount = currentRecv
+				silenceMu.Unlock()
 			}
+			lastRecvCount = currentRecv
 		}
 	}()
 
@@ -1787,15 +1794,14 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				goroutineSamples = append(goroutineSamples, runtime.NumGoroutine())
-				recvSamples = append(recvSamples, int(atomic.LoadInt32(&recvCounter)))
-				wsLogger.Infof("Sampling: goroutines=%d, recv=%d, activeReadLoops=%d, activeHeartbeat=%d, activeHandleConns=%d",
-					runtime.NumGoroutine(), atomic.LoadInt32(&recvCounter),
-					c.activeReadLoops.Load(), c.activeHeartbeatLoops.Load(), c.activeHandleConns.Load())
-			}
+		for range ticker.C {
+			sampleMu.Lock()
+			goroutineSamples = append(goroutineSamples, runtime.NumGoroutine())
+			recvSamples = append(recvSamples, int(atomic.LoadInt32(&recvCounter)))
+			sampleMu.Unlock()
+			wsLogger.Infof("Sampling: goroutines=%d, recv=%d, activeReadLoops=%d, activeHeartbeat=%d, activeHandleConns=%d",
+				runtime.NumGoroutine(), atomic.LoadInt32(&recvCounter),
+				c.activeReadLoops.Load(), c.activeHeartbeatLoops.Load(), c.activeHandleConns.Load())
 		}
 	}()
 
@@ -1823,9 +1829,7 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		select {
-		case <-sendTicker.C:
-		}
+		<-sendTicker.C
 	}
 
 	// 等待发送完成
@@ -1846,8 +1850,14 @@ func TestComprehensiveHighFrequency(t *testing.T) {
 	t.Logf("activeReadLoops: %d, activeHeartbeatLoops: %d, activeHandleConns: %d",
 		finalActiveReadLoops, finalActiveHeartbeat, finalActiveHandleConns)
 	t.Logf("Received messages: %d (anomaly dropped: %d)", finalRecvCount, anomalyRecvCount)
-	t.Logf("Goroutine samples: %v", goroutineSamples)
-	t.Logf("Receive samples: %v", recvSamples)
+	sampleMu.Lock()
+	goroutineSamplesCopy := make([]int, len(goroutineSamples))
+	copy(goroutineSamplesCopy, goroutineSamples)
+	recvSamplesCopy := make([]int, len(recvSamples))
+	copy(recvSamplesCopy, recvSamples)
+	sampleMu.Unlock()
+	t.Logf("Goroutine samples: %v", goroutineSamplesCopy)
+	t.Logf("Receive samples: %v", recvSamplesCopy)
 	t.Logf("Command stats: triggered=%d, responseOk=%d, responseFail=%d",
 		atomic.LoadInt32(&cmdTriggerCount),
 		atomic.LoadInt32(&cmdResponseOk),
@@ -1896,10 +1906,10 @@ func newMessage(msgType string, idx int) map[string]interface{} {
 		base["message"] = map[string]interface{}{
 			"type": "image",
 			"data": map[string]interface{}{
-				"file":  fmt.Sprintf("image_%d.jpg", idx),
-				"url":   fmt.Sprintf("https://example.com/images/%d.jpg", idx),
-				"size":  1024 * 100,
-				"width": 1920,
+				"file":   fmt.Sprintf("image_%d.jpg", idx),
+				"url":    fmt.Sprintf("https://example.com/images/%d.jpg", idx),
+				"size":   1024 * 100,
+				"width":  1920,
 				"height": 1080,
 			},
 		}
@@ -1907,30 +1917,30 @@ func newMessage(msgType string, idx int) map[string]interface{} {
 		base["message"] = map[string]interface{}{
 			"type": "video",
 			"data": map[string]interface{}{
-				"file":    fmt.Sprintf("video_%d.mp4", idx),
-				"url":     fmt.Sprintf("https://example.com/videos/%d.mp4", idx),
+				"file":     fmt.Sprintf("video_%d.mp4", idx),
+				"url":      fmt.Sprintf("https://example.com/videos/%d.mp4", idx),
 				"duration": 120,
-				"size":    1024 * 1024 * 50,
+				"size":     1024 * 1024 * 50,
 			},
 		}
 	case "record":
 		base["message"] = map[string]interface{}{
 			"type": "record",
 			"data": map[string]interface{}{
-				"file":    fmt.Sprintf("audio_%d.mp3", idx),
-				"url":     fmt.Sprintf("https://example.com/audio/%d.mp3", idx),
+				"file":     fmt.Sprintf("audio_%d.mp3", idx),
+				"url":      fmt.Sprintf("https://example.com/audio/%d.mp3", idx),
 				"duration": 30,
-				"size":   1024 * 500,
+				"size":     1024 * 500,
 			},
 		}
 	case "file":
 		base["message"] = map[string]interface{}{
 			"type": "file",
 			"data": map[string]interface{}{
-				"file":    fmt.Sprintf("document_%d.pdf", idx),
-				"url":     fmt.Sprintf("https://example.com/files/%d.pdf", idx),
-				"name":    fmt.Sprintf("document_%d.pdf", idx),
-				"size":    1024 * 1024 * 10,
+				"file": fmt.Sprintf("document_%d.pdf", idx),
+				"url":  fmt.Sprintf("https://example.com/files/%d.pdf", idx),
+				"name": fmt.Sprintf("document_%d.pdf", idx),
+				"size": 1024 * 1024 * 10,
 			},
 		}
 	default:
@@ -1945,7 +1955,7 @@ func newMessage(msgType string, idx int) map[string]interface{} {
 func TestReverseMode_ServerNoPongResponse(t *testing.T) {
 	const (
 		heartbeatInterval = 1 * time.Second
-		testTimeout      = 10 * time.Second // 测试总时长
+		testTimeout       = 10 * time.Second // 测试总时长
 	)
 
 	var messageCount int32
@@ -2050,9 +2060,6 @@ func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	t.Logf("Initial heartbeat loops: %d", wsClient.activeHeartbeatLoops.Load())
 
-	wsClient.mu.RLock()
-	wsClient.mu.RUnlock()
-
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
 	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
@@ -2117,9 +2124,9 @@ func TestConnectionStress_RapidReconnect(t *testing.T) {
 // 公式: 10s + (dataLen / 1024 / 256 * 1000)ms，最大 30min
 func TestCalcWriteWait(t *testing.T) {
 	tests := []struct {
-		name        string
-		dataLen     int
-		expectWait  time.Duration
+		name       string
+		dataLen    int
+		expectWait time.Duration
 	}{
 		{"空消息", 0, WriteWait},
 		{"1KB (接近基础超时)", 1024, 10*time.Second + 3*time.Millisecond},
