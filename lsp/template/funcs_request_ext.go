@@ -326,6 +326,18 @@ func parseBiliPostContent(data []byte) []PostElement {
 	}
 	var content []PostElement
 
+	// Extract cover image from header, prepend to content
+	cover := doc.Find(".opus-module-top__album__cover img")
+	if src, exists := cover.Attr("src"); exists {
+		fullUrl := replaceAvifWithPng(src)
+		if fullUrl != "" {
+			content = append(content, PostElement{
+				Ele:  fullUrl,
+				Type: "image",
+			})
+		}
+	}
+
 	// Extract collection info from __INITIAL_STATE__ and prepend it
 	collectionCount := extractBiliCollectionCount(data)
 	collectionUrl := extractBiliCollectionUrl(data)
@@ -415,6 +427,8 @@ func replaceAvifWithPng(src string) string {
 	if strings.HasPrefix(src, "//") {
 		src = "https:" + src
 	}
+	src = strings.ReplaceAll(src, ".avif", ".png")
+	src = strings.ReplaceAll(src, ".webp", ".png")
 	if !strings.HasSuffix(src, ".png") {
 		src += ".png"
 	}
