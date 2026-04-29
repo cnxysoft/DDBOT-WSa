@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -1153,4 +1154,541 @@ func TestMessengerHandleRequestEvent_UserJoinGroup(t *testing.T) {
 	req := dispatcher.getUserJoinGroup()
 	assert.NotNil(t, req, "UserJoinGroupRequest should be dispatched")
 	assert.Equal(t, "test_join_group_flag_uvw456", req.Flag, "flag should match event.Flag")
+}
+
+// TestBuildMessageChunks_PlainText tests that long text messages are split correctly.
+func TestBuildMessageChunks_PlainText(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	// Create a text message longer than MaxTextLength
+	longText := strings.Repeat("a", 5000)
+	msg := message.NewSendingMessage()
+	msg.Append(&message.TextElement{Content: longText})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Should be split - 5000 chars should result in at least 2 chunks (4500 + 500)
+	assert.GreaterOrEqual(t, len(chunks), 2, "long text should be split into multiple chunks")
+
+	// Verify each chunk's text length is within limits (allow some variance for estimation)
+	for i, chunk := range chunks {
+		textLen := calculateTextLength(chunk)
+		assert.LessOrEqual(t, textLen, MaxTextLength+10, "chunk %d text length should be within limit", i)
+	}
+}
+
+// TestBuildMessageChunks_MultipleTextSegments tests text splitting across multiple segments.
+func TestBuildMessageChunks_MultipleTextSegments(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	// Create multiple text segments that together exceed MaxTextLength
+	msg := message.NewSendingMessage()
+	// Add 3 segments of 2000 chars each = 6000 chars total
+	for i := 0; i < 3; i++ {
+		msg.Append(&message.TextElement{Content: strings.Repeat("b", 2000)})
+	}
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Should be split
+	assert.GreaterOrEqual(t, len(chunks), 2, "multiple text segments should be split")
+
+	// Verify total content is preserved
+	var totalTextLen int
+	for _, chunk := range chunks {
+		totalTextLen += calculateTextLength(chunk)
+	}
+	assert.Equal(t, 6000, totalTextLen, "total text length should be preserved after splitting")
+}
+
+// TestBuildMessageChunks_Images tests that messages with many images are split correctly.
+func TestBuildMessageChunks_Images(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	// Add 25 images (more than MaxImageCount of 20)
+	for i := 0; i < 25; i++ {
+		msg.Append(&message.GroupImageElement{
+			Name: fmt.Sprintf("image_%d.jpg", i),
+			Url:  fmt.Sprintf("https://example.com/image_%d.jpg", i),
+		})
+	}
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Should be split into at least 2 chunks (20 + 5)
+	assert.GreaterOrEqual(t, len(chunks), 2, "many images should be split into multiple chunks")
+
+	// Verify image counts per chunk
+	for i, chunk := range chunks {
+		imgCount := countImages(chunk)
+		assert.LessOrEqual(t, imgCount, MaxImageCount, "chunk %d image count should not exceed MaxImageCount", i)
+	}
+}
+
+// TestBuildMessageChunks_MixedContent tests mixed content (text + images + at).
+func TestBuildMessageChunks_MixedContent(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	// Add: text (1000 chars) + at + 10 images + text (1000 chars)
+	msg.Append(&message.TextElement{Content: strings.Repeat("x", 1000)})
+	msg.Append(&message.AtElement{Target: 1001})
+	for i := 0; i < 10; i++ {
+		msg.Append(&message.GroupImageElement{
+			Name: fmt.Sprintf("img_%d.jpg", i),
+			Url:  fmt.Sprintf("https://example.com/img_%d.jpg", i),
+		})
+	}
+	msg.Append(&message.TextElement{Content: strings.Repeat("y", 1000)})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Should not need splitting since we're well under limits
+	assert.Equal(t, 1, len(chunks), "small mixed content should not be split")
+
+	// Verify content is preserved
+	assert.Equal(t, 10, countImages(chunks[0]))
+	// 10 images + 3 text segments + 1 at = 14 elements, but images are separate
+	assert.Equal(t, 13, len(chunks[0])) // at + 3 text + 10 images = 13 elements
+}
+
+// TestBuildMessageChunks_Video tests that video is sent as a separate message.
+func TestBuildMessageChunks_Video(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.TextElement{Content: "hello"})
+	msg.Append(&message.VideoElement{
+		Name: "video.mp4",
+		File: "/path/to/video.mp4",
+	})
+	msg.Append(&message.TextElement{Content: "world"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Video should be a separate chunk
+	// Expected: [text hello], [video], [text world]
+	assert.GreaterOrEqual(t, len(chunks), 2, "video should cause splitting")
+
+	// Find the video chunk
+	var videoChunk []MessageSegment
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "video" {
+				videoChunk = chunk
+				break
+			}
+		}
+	}
+	assert.NotNil(t, videoChunk, "video should be in its own chunk")
+	assert.Equal(t, 1, len(videoChunk), "video chunk should contain only video")
+}
+
+// TestBuildMessageChunks_File tests that file is sent as a separate message.
+func TestBuildMessageChunks_File(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.TextElement{Content: "before"})
+	msg.Append(&message.GroupFileElement{
+		Name: "document.pdf",
+		Url:  "https://example.com/document.pdf",
+	})
+	msg.Append(&message.TextElement{Content: "after"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// File should be a separate chunk
+	assert.GreaterOrEqual(t, len(chunks), 2, "file should cause splitting")
+
+	// Find the file chunk
+	var fileChunk []MessageSegment
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "file" {
+				fileChunk = chunk
+				break
+			}
+		}
+	}
+	assert.NotNil(t, fileChunk, "file should be in its own chunk")
+	assert.Equal(t, 1, len(fileChunk), "file chunk should contain only file")
+}
+
+// TestBuildMessageChunks_Forward tests that forward is sent as a separate message.
+func TestBuildMessageChunks_Forward(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.TextElement{Content: "check this"})
+	msg.Append(&message.ForwardElement{ResId: "forward123"})
+	msg.Append(&message.TextElement{Content: "done"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Forward should be a separate chunk
+	assert.GreaterOrEqual(t, len(chunks), 2, "forward should cause splitting")
+
+	// Find the forward chunk
+	var forwardChunk []MessageSegment
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "forward" {
+				forwardChunk = chunk
+				break
+			}
+		}
+	}
+	assert.NotNil(t, forwardChunk, "forward should be in its own chunk")
+	assert.Equal(t, 1, len(forwardChunk), "forward chunk should contain only forward")
+}
+
+// TestBuildMessageChunks_Voice tests that voice is sent as a separate message.
+func TestBuildMessageChunks_Voice(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.TextElement{Content: "listen"})
+	msg.Append(&message.VoiceElement{
+		Name: "audio.amr",
+		Url:  "https://example.com/audio.amr",
+	})
+	msg.Append(&message.TextElement{Content: "end"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Voice should be a separate chunk
+	assert.GreaterOrEqual(t, len(chunks), 2, "voice should cause splitting")
+
+	// Find the voice chunk
+	var voiceChunk []MessageSegment
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "record" {
+				voiceChunk = chunk
+				break
+			}
+		}
+	}
+	assert.NotNil(t, voiceChunk, "voice should be in its own chunk")
+	assert.Equal(t, 1, len(voiceChunk), "voice chunk should contain only voice")
+}
+
+// TestBuildMessageChunks_ReplyAlone tests that reply can combine with other mix elements.
+func TestBuildMessageChunks_ReplyAlone(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.ReplyElement{ReplySeq: 12345})
+	msg.Append(&message.TextElement{Content: "this is a reply"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Reply + text should be in one chunk
+	assert.Equal(t, 1, len(chunks), "reply with text should be in one chunk")
+	assert.Equal(t, 2, len(chunks[0]), "chunk should contain reply and text")
+}
+
+// TestBuildMessageChunks_AtWithText tests at element combines with text.
+func TestBuildMessageChunks_AtWithText(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	msg.Append(&message.AtElement{Target: 1001})
+	msg.Append(&message.TextElement{Content: "hello world"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// At + text should be in one chunk
+	assert.Equal(t, 1, len(chunks), "at with text should be in one chunk")
+	assert.Equal(t, 2, len(chunks[0]))
+}
+
+// TestBuildMessageChunks_ComplexMixed tests complex message with all element types.
+func TestBuildMessageChunks_ComplexMixed(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := message.NewSendingMessage()
+	// Add some mix elements - text before video
+	msg.Append(&message.TextElement{Content: "start "})
+	msg.Append(&message.AtElement{Target: 1001})
+	msg.Append(&message.TextElement{Content: " check this "})
+	msg.Append(&message.ReplyElement{ReplySeq: 123})
+	msg.Append(&message.TextElement{Content: " here's a pic "})
+	// Add 5 images
+	for i := 0; i < 5; i++ {
+		msg.Append(&message.GroupImageElement{
+			Name: fmt.Sprintf("pic_%d.jpg", i),
+			Url:  fmt.Sprintf("https://example.com/pic_%d.jpg", i),
+		})
+	}
+	// Video should be at the end as a single element
+	msg.Append(&message.VideoElement{
+		Name: "video.mp4",
+		File: "/path/to/video.mp4",
+	})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// Should have multiple chunks - the video should force a split
+	// Check if any chunk contains video
+	foundVideo := false
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "video" {
+				foundVideo = true
+				break
+			}
+		}
+	}
+	assert.True(t, foundVideo, "should have a chunk containing video, got %d chunks", len(chunks))
+}
+
+// TestParseChunkToElements tests that chunks are correctly converted back to message elements.
+func TestParseChunkToElements(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	// Create original message
+	origMsg := message.NewSendingMessage()
+	origMsg.Append(&message.TextElement{Content: "hello"})
+	origMsg.Append(&message.AtElement{Target: 1001})
+	origMsg.Append(&message.TextElement{Content: " world"})
+
+	// Build chunks
+	chunks := m.buildMessageChunks(origMsg)
+	assert.Equal(t, 1, len(chunks))
+
+	// Convert back to elements
+	elements := parseChunkToElements(chunks[0])
+	assert.Equal(t, 3, len(elements))
+
+	// Verify elements
+	_, ok := elements[0].(*message.TextElement)
+	assert.True(t, ok)
+	_, ok = elements[1].(*message.AtElement)
+	assert.True(t, ok)
+	_, ok = elements[2].(*message.TextElement)
+	assert.True(t, ok)
+}
+
+// TestCalculateTextLength tests text length calculation.
+func TestCalculateTextLength(t *testing.T) {
+	tests := []struct {
+		name     string
+		segments []MessageSegment
+		expected int
+	}{
+		{
+			name:     "empty",
+			segments: []MessageSegment{},
+			expected: 0,
+		},
+		{
+			name: "text only",
+			segments: []MessageSegment{
+				{Type: "text", Data: map[string]interface{}{"text": "hello"}},
+			},
+			expected: 5,
+		},
+		{
+			name: "text and at",
+			segments: []MessageSegment{
+				{Type: "text", Data: map[string]interface{}{"text": "hello"}},
+				{Type: "at", Data: map[string]interface{}{"qq": "1001"}},
+			},
+			expected: 15, // 5 + 10 (at estimate)
+		},
+		{
+			name: "with reply",
+			segments: []MessageSegment{
+				{Type: "reply", Data: map[string]interface{}{"id": "123"}},
+				{Type: "text", Data: map[string]interface{}{"text": "reply text"}},
+			},
+			expected: 20, // 10 + 10
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculateTextLength(tt.segments)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCountImages tests image counting.
+func TestCountImages(t *testing.T) {
+	tests := []struct {
+		name     string
+		segments []MessageSegment
+		expected int
+	}{
+		{
+			name:     "empty",
+			segments: []MessageSegment{},
+			expected: 0,
+		},
+		{
+			name: "no images",
+			segments: []MessageSegment{
+				{Type: "text", Data: map[string]interface{}{"text": "hello"}},
+				{Type: "at", Data: map[string]interface{}{"qq": "1001"}},
+			},
+			expected: 0,
+		},
+		{
+			name: "with images",
+			segments: []MessageSegment{
+				{Type: "text", Data: map[string]interface{}{"text": "check"}},
+				{Type: "image", Data: map[string]interface{}{"file": "pic1.jpg"}},
+				{Type: "image", Data: map[string]interface{}{"file": "pic2.jpg"}},
+				{Type: "image", Data: map[string]interface{}{"file": "pic3.jpg"}},
+			},
+			expected: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := countImages(tt.segments)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestIsSingleElement tests single element detection.
+func TestIsSingleElement(t *testing.T) {
+	tests := []struct {
+		segmentType string
+		expected   bool
+	}{
+		{"text", false},
+		{"at", false},
+		{"face", false},
+		{"image", false},
+		{"reply", false},
+		{"video", true},
+		{"file", true},
+		{"record", true},
+		{"forward", true},
+		{"json", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.segmentType, func(t *testing.T) {
+			seg := MessageSegment{Type: tt.segmentType}
+			result := isSingleElement(seg)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestSplitTextSmart tests intelligent text splitting.
+func TestSplitTextSmart(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int // number of parts
+	}{
+		{
+			name:     "short text",
+			input:    "hello world",
+			expected: 1,
+		},
+		{
+			name:     "multiple lines under limit",
+			input:    "line1\nline2\nline3",
+			expected: 1, // total 15 chars < 4500
+		},
+		{
+			name:     "line splitting",
+			input:    "line1\n" + strings.Repeat("a", 5000) + "\nline3",
+			expected: 3, // line1 (5) + 5000 a's split into 2 chunks + line3 (5)
+		},
+		{
+			name:     "punctuation splitting",
+			input:    strings.Repeat("a", 3000) + "。" + strings.Repeat("b", 3000) + "。" + strings.Repeat("c", 3000),
+			expected: 3, // 3000a+。 + 2999b+。 + 3000c
+		},
+		{
+			name:     "hard cut when no punctuation",
+			input:    strings.Repeat("x", 10000),
+			expected: 3, // 4500 + 4500 + 1000
+		},
+		{
+			name:     "mixed line and punctuation",
+			input:    "line1\n" + strings.Repeat("a", 3000) + "。" + strings.Repeat("b", 3000) + "。" + strings.Repeat("c", 3000),
+			expected: 3, // \n at 5 is closer than 。at 3006, so prefer \n
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := splitTextSmart(tt.input)
+			assert.Len(t, result, tt.expected, "split should produce expected number of parts")
+			// Verify each part is under limit
+			for i, part := range result {
+				assert.LessOrEqual(t, len(part), MaxTextLength, "part %d should be under limit", i)
+			}
+			// Verify total text content is preserved
+			// Each part should contain the same characters as the original lines
+			var totalLen int
+			for _, part := range result {
+				totalLen += len(part)
+			}
+			// The total should be close to original (accounting for added newlines when splitting long lines)
+			// Just verify it's not grossly different
+			assert.Greater(t, totalLen, len(tt.input)-10, "total text length should be preserved")
+		})
+	}
+}
+
+// TestSplitLongLine tests long line splitting with punctuation.
+func TestSplitLongLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{
+			name:     "under limit",
+			input:    "short line",
+			expected: 1,
+		},
+		{
+			name:     "punctuation split",
+			input:    strings.Repeat("a", 3000) + "。" + strings.Repeat("b", 3000),
+			expected: 2,
+		},
+		{
+			name:     "multiple punctuation",
+			input:    strings.Repeat("a", 2000) + "。" + strings.Repeat("b", 2000) + "！" + strings.Repeat("c", 2000),
+			expected: 2, // split at last punctuation within limit (position 4001), remaining 2001 chars < limit
+		},
+		{
+			name:     "no punctuation hard cut",
+			input:    strings.Repeat("x", 10000),
+			expected: 3,
+		},
+		{
+			name:     "chinese punctuation",
+			input:    strings.Repeat("a", 2000) + "，" + strings.Repeat("b", 2000) + "，" + strings.Repeat("c", 2000),
+			expected: 2, // split at last punctuation within limit (position 4001), remaining 2001 chars < limit
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := splitLongLine(tt.input)
+			assert.Len(t, result, tt.expected, "split should produce expected number of parts")
+			// Verify each part is under limit
+			for i, part := range result {
+				assert.LessOrEqual(t, len(part), MaxTextLength, "part %d length=%d should be under limit", i, len(part))
+			}
+			// Verify concatenation reconstructs original
+			reconstructed := strings.Join(result, "")
+			assert.Equal(t, tt.input, reconstructed, "should reconstruct original text")
+		})
+	}
 }

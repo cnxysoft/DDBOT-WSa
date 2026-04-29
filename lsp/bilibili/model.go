@@ -618,12 +618,12 @@ type DynamicDetail struct {
 		Desc1   string `json:"desc1"`
 		Desc2   string `json:"desc2"`
 		Desc3   string `json:"desc3"`
-		SType   int    `json:"stype"`   // 1=视频预约, 2=直播预约
+		SType   int    `json:"stype"` // 1=视频预约, 2=直播预约
 		JumpUrl string `json:"jump_url"`
-		State   int    `json:"state"`   // 0=进行中, 1=直播中/已发布, 2=已结束
+		State   int    `json:"state"` // 0=进行中, 1=直播中/已发布, 2=已结束
 	} `json:"reserve,omitempty"`
 	Vote *VoteInfo `json:"vote,omitempty"`
-	PGC struct {
+	PGC  struct {
 		Type     string `json:"type"`
 		Title    string `json:"title"`
 		CoverUrl string `json:"cover_url"`
@@ -669,10 +669,10 @@ type DynamicDetail struct {
 
 // DescViewPictures desc.rich_text_nodes 中 VIEW_PICTURE 节点的图片信息
 type DescViewPictures struct {
-	JumpUrl string     `json:"jump_url"`
-	Rid     string     `json:"rid"`
-	Text    string     `json:"text"`
-	Pics    []PicInfo  `json:"pics"`
+	JumpUrl string    `json:"jump_url"`
+	Rid     string    `json:"rid"`
+	Text    string    `json:"text"`
+	Pics    []PicInfo `json:"pics"`
 }
 
 // PicInfo VIEW_PICTURE 节点中的单张图片信息
@@ -695,14 +695,14 @@ type Emoji struct {
 
 // VoteInfo 投票信息
 type VoteInfo struct {
-	VoteId    int64       `json:"vote_id"`
-	Title     string      `json:"title"`
-	Desc      string      `json:"desc"`
-	JoinNum   int         `json:"join_num"`
-	ChoiceCnt int         `json:"choice_cnt"`
-	EndTime   int64       `json:"end_time"`
-	Status    int         `json:"status"`
-	Button    VoteButton  `json:"button"`
+	VoteId    int64      `json:"vote_id"`
+	Title     string     `json:"title"`
+	Desc      string     `json:"desc"`
+	JoinNum   int        `json:"join_num"`
+	ChoiceCnt int        `json:"choice_cnt"`
+	EndTime   int64      `json:"end_time"`
+	Status    int        `json:"status"`
+	Button    VoteButton `json:"button"`
 }
 
 // VoteButton 投票按钮
@@ -1195,7 +1195,6 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 		if err != nil {
 			logger.Errorf("bilibili: NewsInfo LoadAndExec error %v", err)
 		}
-		return
 	})
 	return c.msgCache
 }

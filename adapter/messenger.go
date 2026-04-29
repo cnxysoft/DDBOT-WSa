@@ -3,6 +3,7 @@ package adapter
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,12 @@ type BotEventDispatcher interface {
 }
 
 var messengerLogger = logrus.WithField("module", "messenger")
+
+const (
+	// 消息分片限制
+	MaxTextLength = 4500 // 文本最大长度
+	MaxImageCount = 20   // 图片最大数量
+)
 
 type SendResp struct {
 	RetMSG *message.GroupMessage
@@ -213,8 +220,6 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessag
 		return SendResp{RetMSG: &message.GroupMessage{Id: -1}, Error: nil}
 	}
 
-	messages := m.buildMessageSegments(msg)
-
 	// 获取群名称
 	groupName := "未知群聊"
 	if group := m.FindGroup(groupCode); group != nil {
@@ -226,27 +231,44 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *message.SendingMessag
 		qqlog.Logger.Infof("发送 群消息 给 %s(%d): %s", groupName, groupCode, newstr)
 	}
 
-	msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
-	m.groupSendCount.Add(1)
-	if err != nil {
-		messengerLogger.Errorf("Send group message failed: %v", err)
-		return SendResp{
-			RetMSG: &message.GroupMessage{Id: -1},
-			Error:  err,
+	// 构建消息分片
+	chunks := m.buildMessageChunks(msg)
+
+	var lastResult SendResp
+	for i, chunk := range chunks {
+		// 构建新的 SendingMessage
+		chunkMsg := &message.SendingMessage{Elements: parseChunkToElements(chunk)}
+		messages := m.buildMessageSegments(chunkMsg)
+
+		// 分片之间添加延迟，避免发送过快
+		if i > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
+		m.groupSendCount.Add(1)
+		if err != nil {
+			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+			lastResult = SendResp{
+				RetMSG: &message.GroupMessage{Id: -1},
+				Error:  err,
+			}
+		} else {
+			lastResult = SendResp{
+				RetMSG: &message.GroupMessage{
+					Id:        msgID,
+					GroupCode: groupCode,
+					Sender: &message.Sender{
+						Uin: m.Uin,
+					},
+					Elements: chunkMsg.Elements,
+				},
+				Error: nil,
+			}
 		}
 	}
 
-	return SendResp{
-		RetMSG: &message.GroupMessage{
-			Id:        msgID,
-			GroupCode: groupCode,
-			Sender: &message.Sender{
-				Uin: m.Uin,
-			},
-			Elements: msg.Elements,
-		},
-		Error: nil,
-	}
+	return lastResult
 }
 
 func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage, newstr string) *message.PrivateMessage {
@@ -263,8 +285,6 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage
 		return &message.PrivateMessage{Id: -1}
 	}
 
-	messages := m.buildMessageSegments(msg)
-
 	// 获取好友昵称
 	nickname := "未知用户"
 	if friend := m.FindFriend(target); friend != nil {
@@ -276,15 +296,31 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *message.SendingMessage
 		qqlog.Logger.Infof("发送 私聊消息 给 %s(%d): %s", nickname, target, newstr)
 	}
 
-	msgID, err := m.Adapter.SendPrivateMessage(target, messages)
-	m.privateSendCount.Add(1)
-	if err != nil {
-		messengerLogger.Errorf("Send private message failed: %v", err)
-		return &message.PrivateMessage{Id: -1}
+	// 构建消息分片
+	chunks := m.buildMessageChunks(msg)
+
+	var lastMsgID int32 = -1
+	for i, chunk := range chunks {
+		// 构建新的 SendingMessage
+		chunkMsg := &message.SendingMessage{Elements: parseChunkToElements(chunk)}
+		messages := m.buildMessageSegments(chunkMsg)
+
+		// 分片之间添加延迟，避免发送过快
+		if i > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		msgID, err := m.Adapter.SendPrivateMessage(target, messages)
+		m.privateSendCount.Add(1)
+		if err != nil {
+			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+		} else {
+			lastMsgID = msgID
+		}
 	}
 
 	return &message.PrivateMessage{
-		Id:     msgID,
+		Id:     lastMsgID,
 		Target: target,
 		Self:   m.Uin,
 		Sender: &message.Sender{
@@ -430,6 +466,350 @@ func (m *Messenger) buildMessageSegments(msg *message.SendingMessage) []MessageS
 	}
 
 	return segments
+}
+
+// isSingleElement 判断是否为独立发送类型（必须单独发送，不能与其他元素混合）
+func isSingleElement(segment MessageSegment) bool {
+	switch segment.Type {
+	case "video", "file", "record", "forward":
+		return true
+	}
+	return false
+}
+
+// 元素类型估计长度常量（用于分片计算）
+const (
+	// estimateAtLength at元素估计长度（实际为display字符串长度）
+	estimateAtLength = 10
+	// estimateReplyLength reply元素估计长度
+	estimateReplyLength = 10
+	// estimateFaceLength face元素估计长度
+	estimateFaceLength = 5
+)
+
+// calculateTextLength 计算分片中文本的估计长度（at/reply 算作文本）
+func calculateTextLength(segments []MessageSegment) int {
+	length := 0
+	for _, seg := range segments {
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				length += len(text)
+			}
+		case "at":
+			length += estimateAtLength
+		case "reply":
+			length += estimateReplyLength
+		case "face":
+			length += estimateFaceLength
+		}
+	}
+	return length
+}
+
+// countImages 计算分片中图片的数量
+func countImages(segments []MessageSegment) int {
+	count := 0
+	for _, seg := range segments {
+		if seg.Type == "image" {
+			count++
+		}
+	}
+	return count
+}
+
+// splitTextSmart 智能拆分长文本
+// 从文本开头开始查找合适的切割点：优先\n，其次标点，最后直接切
+func splitTextSmart(text string) []string {
+	// 如果本身就小于限制，直接返回
+	if len(text) <= MaxTextLength {
+		return []string{text}
+	}
+
+	var result []string
+
+	// 标点符号列表（中日英）
+	punctList := []string{
+		"。", "！", "？", "，", "、", "；", "：", "——", "…",
+		".", "!", "?", ",", ";", ":", "-", "…",
+	}
+
+	offset := 0
+	for offset < len(text) {
+		remaining := text[offset:]
+		if len(remaining) <= MaxTextLength {
+			// 最后一段，直接加入
+			result = append(result, remaining)
+			break
+		}
+
+		// 在 MaxTextLength 范围内查找切割点
+		searchEnd := MaxTextLength
+		if searchEnd > len(remaining) {
+			searchEnd = len(remaining)
+		}
+
+		// 正着找\n（找最后一个不超限的）
+		newlinePos := -1
+		for i := 0; i < searchEnd; i++ {
+			if remaining[i] == '\n' {
+				newlinePos = i
+			}
+		}
+
+		// 找标点（找最后一个不超限的）
+		punctPos := -1
+		for _, punct := range punctList {
+			idx := strings.Index(remaining[:searchEnd], punct)
+			if idx >= 0 {
+				pos := idx + len(punct)
+				if pos <= MaxTextLength && pos > punctPos {
+					punctPos = pos
+				}
+			}
+		}
+
+		// 决定切割位置
+		cutPos := -1
+		if punctPos > 0 && newlinePos > 0 {
+			// 两者都有，选择更接近4500的
+			if MaxTextLength-punctPos <= MaxTextLength-newlinePos {
+				cutPos = punctPos
+			} else {
+				cutPos = newlinePos
+			}
+		} else if newlinePos > 0 {
+			cutPos = newlinePos
+		} else if punctPos > 0 {
+			cutPos = punctPos
+		}
+
+		// 执行切割
+		if cutPos > 0 {
+			result = append(result, remaining[:cutPos])
+			offset += cutPos + 1
+		} else {
+			// 找不到合适位置，直接在4500处切断
+			result = append(result, remaining[:MaxTextLength])
+			offset += MaxTextLength
+		}
+	}
+
+	return result
+}
+
+// splitLongLine 拆分过长的单行
+// 优先按标点符号拆分，其次在任意位置切断
+func splitLongLine(line string) []string {
+	var result []string
+
+	// 标点符号列表（中日英）
+	punctuation := []string{
+		"。", "！", "？", "，", "、", "；", "：", "——", "…",
+		".", "!", "?", ",", ";", ":", "-", "…",
+	}
+
+	// 2. 尝试按标点符号拆分
+	remaining := line
+	for len(remaining) > MaxTextLength {
+		found := false
+		bestPos := -1
+
+		// 找到所有标点位置，选择最后一个不超过限制的
+		for _, punct := range punctuation {
+			idx := strings.LastIndex(remaining[:MaxTextLength], punct)
+			if idx > 0 {
+				pos := idx + len(punct)
+				if pos <= MaxTextLength && pos > bestPos {
+					bestPos = pos
+				}
+			}
+		}
+
+		if bestPos > 0 {
+			result = append(result, remaining[:bestPos])
+			remaining = remaining[bestPos:]
+			found = true
+		}
+
+		if !found {
+			break
+		}
+	}
+
+	// 3. 如果还有剩余，直接按长度切断
+	if len(remaining) > 0 {
+		for len(remaining) > MaxTextLength {
+			result = append(result, remaining[:MaxTextLength])
+			remaining = remaining[MaxTextLength:]
+		}
+		if remaining != "" {
+			result = append(result, remaining)
+		}
+	}
+
+	return result
+}
+
+// buildMessageChunks 将消息拆分为多个分片，每个分片符合发送限制
+// 限制规则：
+// 1. 文本长度不超过 MaxTextLength (4500)
+// 2. 图片不超过 MaxImageCount (20)
+// 3. 独立类型(video/file/record/forward)必须单独发送
+func (m *Messenger) buildMessageChunks(msg *message.SendingMessage) [][]MessageSegment {
+	segments := m.buildMessageSegments(msg)
+
+	// 预分配 slices，避免重复分配内存
+	// 大多数情况下消息不会超过10个分片
+	chunks := make([][]MessageSegment, 0, 10)
+	var currentChunk []MessageSegment
+	currentTextLen := 0
+	currentImageCount := 0
+
+	flushChunk := func() {
+		if len(currentChunk) > 0 {
+			chunks = append(chunks, currentChunk)
+			currentChunk = currentChunk[:0] // reuse underlying array
+			currentTextLen = 0
+			currentImageCount = 0
+		}
+	}
+
+	for _, seg := range segments {
+		if isSingleElement(seg) {
+			// 独立类型：先提交当前 chunk，然后单独成一条消息
+			flushChunk()
+			chunks = append(chunks, []MessageSegment{seg})
+			continue
+		}
+
+		// 可组合类型：检查是否超过限制
+		segTextLen := 0
+		segImageCount := 0
+
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				segTextLen = len(text)
+			}
+		case "at", "reply", "face":
+			segTextLen = estimateAtLength // 使用常量代替 magic number
+		case "image":
+			segImageCount = 1
+		}
+
+		// 如果单个文本元素就超过限制，使用智能拆分
+		if seg.Type == "text" {
+			if text, ok := seg.Data["text"].(string); ok && len(text) > MaxTextLength {
+				flushChunk()
+				// 智能拆分文本（按行、标点、最后才切断）
+				textParts := splitTextSmart(text)
+				for _, part := range textParts {
+					chunks = append(chunks, []MessageSegment{{
+						Type: "text",
+						Data: map[string]interface{}{"text": part},
+					}})
+				}
+				continue
+			}
+		}
+
+		// 检查是否超过限制
+		exceedsText := currentTextLen+segTextLen > MaxTextLength
+		exceedsImage := currentImageCount+segImageCount > MaxImageCount
+
+		if exceedsText || exceedsImage {
+			flushChunk()
+		}
+
+		currentChunk = append(currentChunk, seg)
+		currentTextLen += segTextLen
+		currentImageCount += segImageCount
+	}
+
+	flushChunk()
+	return chunks
+}
+
+// parseChunkToElements 将 MessageSegment 分片转换回 message.IMessageElement 数组
+func parseChunkToElements(chunk []MessageSegment) []message.IMessageElement {
+	var elements []message.IMessageElement
+
+	for _, seg := range chunk {
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				elements = append(elements, &message.TextElement{Content: text})
+			}
+		case "at":
+			var target int64
+			if qq, ok := seg.Data["qq"].(float64); ok {
+				target = int64(qq)
+			} else if qq, ok := seg.Data["qq"].(string); ok {
+				if qq == "all" {
+					target = 0
+				} else if n, err := strconv.ParseInt(qq, 10, 64); err == nil {
+					target = n
+				} else {
+					messengerLogger.Warnf("parse at target failed: %v, treating as @everyone", err)
+					target = 0
+				}
+			}
+			elements = append(elements, &message.AtElement{Target: target})
+		case "face":
+			var faceId int64
+			if id, ok := seg.Data["id"].(float64); ok {
+				faceId = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				if parsedId, err := strconv.ParseInt(id, 10, 64); err == nil {
+					faceId = parsedId
+				} else {
+					messengerLogger.Warnf("parse face id failed: %v, using 0", err)
+				}
+			}
+			elements = append(elements, &message.FaceElement{Index: int32(faceId)})
+		case "image":
+			elements = append(elements, &message.ImageElement{
+				File: getString(seg.Data["file"]),
+				Name: getString(seg.Data["name"]),
+			})
+		case "record":
+			elements = append(elements, &message.RecordElement{
+				File: getString(seg.Data["file"]),
+				Name: getString(seg.Data["name"]),
+			})
+		case "reply":
+			var replySeq int64
+			id := getString(seg.Data["id"])
+			if parsedId, err := strconv.ParseInt(id, 10, 64); err == nil {
+				replySeq = parsedId
+			} else {
+				messengerLogger.Warnf("parse reply seq failed: %v, using 0", err)
+			}
+			elements = append(elements, &message.ReplyElement{ReplySeq: int32(replySeq)})
+		case "json":
+			if data, ok := seg.Data["data"].(string); ok {
+				elements = append(elements, &message.LightAppElement{Content: data})
+			}
+		case "forward":
+			if id, ok := seg.Data["id"].(string); ok {
+				elements = append(elements, &message.ForwardElement{ResId: id})
+			}
+		case "file":
+			elements = append(elements, &message.FileElement{
+				Name: getString(seg.Data["name"]),
+				Url:  getString(seg.Data["url"]),
+				File: getString(seg.Data["file"]),
+			})
+		case "video":
+			elements = append(elements, &message.VideoElement{
+				Name: getString(seg.Data["name"]),
+				File: getString(seg.Data["file"]),
+			})
+		}
+	}
+
+	return elements
 }
 
 func (m *Messenger) FindGroup(code int64) *GroupInfo {
