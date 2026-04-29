@@ -18,11 +18,13 @@
 {{ end -}}
 {{ if .msg -}}
     {{ reply .msg -}}
+    {{ $tips := "的动态：" -}}
     {{ if eq .dynamic.Type 8 -}}
-        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的视频：") -}}
-    {{ else if eq .dynamic.Type 2 -}}
-        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+        {{ $tips = "的视频：" -}}
+    {{ else if eq .dynamic.Type 64 -}}
+        {{ $tips = "的专栏：" -}}
     {{ end -}}
+    {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name $tips) -}}
     {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content -}}
 {{ else if eq .dynamic.Type 2 -}}
     {{ if .dynamic.WithOrigin -}}
@@ -109,6 +111,7 @@
 {{ else if eq .dynamic.Type 64 -}}
     {{ $PostUrl := "" -}}
     {{ if .dynamic.WithOrigin -}}
+        {{ $orgTitle = "" -}}
         {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的专栏：") -}}
         {{ $orgTip = join "" (list "\n\n原专栏：\n" $orgTopic $orgTitle) -}}
         {{ $PostUrl = .dynamic.OriginDyUrl -}}

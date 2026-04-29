@@ -873,6 +873,31 @@ abort也支持图片参数
 - `dynamic-card`：嵌入的B站动态，通过 `.opus-tag.tag-dynamic` 判断，Ele=跳转URL，Desc=动态标题，Image=封面图URL
 - `link-card`：其他类型卡片（扩展用），结构同 dynamic-card
 
+**如何区分头图和普通图片：**
+
+在 `parseBiliPost` 返回的 `image` 类型元素中，可以通过 `Desc` 字段的值来区分：
+
+- **头图**：`Desc` 字段的值为 `"top__album__cover"`
+- **正文图片**：`Desc` 字段为空字符串或其他值
+
+示例：只发送头图，不发送正文图片
+```gotemplate
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if and (eq $v.Type "image") (eq $v.Desc "top__album__cover") -}}
+        {{ pic $v.Ele -}}
+    {{ end -}}
+{{ end -}}
+```
+
+示例：只发送普通图片（排除头图）
+```gotemplate
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if and (eq $v.Type "image") (ne $v.Desc "top__album__cover") -}}
+        {{ pic $v.Ele -}}
+    {{ end -}}
+{{ end -}}
+```
+
 ```
 {{ range $v := parseBiliPost $PostUrl -}}
     {{ if eq $v.Type "text" -}}

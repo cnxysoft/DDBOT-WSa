@@ -19,7 +19,7 @@ import (
 
 var (
 	biliCollectionCountRe = regexp.MustCompile(`"module_collection"\s*:\s*\{[^}]*"count"\s*:\s*"(\d+)篇"`)
-	biliCollectionIdRe   = regexp.MustCompile(`"collection_id"\s*:\s*(\d+)`)
+	biliCollectionIdRe    = regexp.MustCompile(`"collection_id"\s*:\s*(\d+)`)
 )
 
 const (
@@ -334,6 +334,7 @@ func parseBiliPostContent(data []byte) []PostElement {
 			content = append(content, PostElement{
 				Ele:  fullUrl,
 				Type: "image",
+				Desc: "top__album__cover",
 			})
 		}
 	}

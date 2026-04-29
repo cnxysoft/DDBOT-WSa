@@ -113,3 +113,23 @@ func TestParseBiliPostContent_ImageCaption(t *testing.T) {
 		t.Errorf("expected desc=这是鱼, got %s", elements[0].Desc)
 	}
 }
+
+func TestParseBiliPostContent_UserURL(t *testing.T) {
+	opts := []requests.Option{
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.RetryOption(3),
+	}
+	var body strings.Builder
+	err := requests.Get("https://www.bilibili.com/opus/1196749689520652312", nil, &body, opts...)
+	if err != nil {
+		t.Skipf("skipping test: failed to fetch page: %v", err)
+	}
+
+	elements := parseBiliPostContent([]byte(body.String()))
+
+	t.Logf("Total elements: %d", len(elements))
+	for i, e := range elements {
+		t.Logf("[%d] type=%q ele=%q desc=%q url=%q image=%q", i, e.Type, e.Ele, e.Desc, e.Url, e.Image)
+	}
+}
