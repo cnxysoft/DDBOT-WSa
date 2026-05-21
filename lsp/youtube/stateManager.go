@@ -3,6 +3,7 @@ package youtube
 import (
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/tidwall/buntdb"
 	"time"
 )
 
@@ -35,6 +36,64 @@ func (s *StateManager) GetVideo(channelId string, videoId string) (*VideoInfo, e
 
 func (s *StateManager) AddVideo(v *VideoInfo) error {
 	return s.SetJson(s.VideoKey(v.ChannelId, v.VideoId), v)
+}
+
+func (s *StateManager) DeleteLiveState(channelId string) error {
+	info, _ := s.GetInfo(channelId)
+
+	return s.RWCoverTx(func(tx *buntdb.Tx) error {
+		var keep []*VideoInfo
+		if info != nil {
+			for _, v := range info.VideoInfo {
+				if v == nil {
+					continue
+				}
+				if !v.IsLive() {
+					keep = append(keep, v)
+				}
+			}
+		}
+
+		var deleteKeys []string
+		err := tx.AscendKeys(s.VideoKey(channelId, "*"), func(key, value string) bool {
+			var v *VideoInfo
+			if unmarshalErr := json.Unmarshal([]byte(value), &v); unmarshalErr == nil && v != nil && v.IsLive() {
+				deleteKeys = append(deleteKeys, key)
+			}
+			return true
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, key := range deleteKeys {
+			if _, err := tx.Delete(key); err != nil && err != buntdb.ErrNotFound {
+				return err
+			}
+		}
+
+		if info == nil {
+			return nil
+		}
+		if len(keep) == 0 {
+			if _, err := tx.Delete(s.InfoKey(channelId)); err != nil && err != buntdb.ErrNotFound {
+				return err
+			}
+			return nil
+		}
+
+		updated := *info
+		updated.VideoInfo = keep
+		data, err := json.Marshal(&updated)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.Set(s.InfoKey(channelId), string(data), &buntdb.SetOptions{
+			Expires: true,
+			TTL:     time.Hour * 24 * 7,
+		})
+		return err
+	})
 }
 
 func (s *StateManager) GetGroupConcernConfig(groupCode int64, id interface{}) (concernConfig concern.IConfig) {
