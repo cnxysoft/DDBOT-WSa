@@ -1982,3 +1982,139 @@ ACFUN-{{ .name }}直播结束了
 ```
 
 </details>
+
+## 模板函数补充
+
+### formatDuration
+
+用法：
+
+```gotemplate
+{{ formatDuration 147 }}
+{{ formatDuration .duration_seconds }}
+```
+
+说明：
+
+- 将“秒数”格式化为易读的时长文本。
+- 这是模板基础能力，可被任意模板直接复用。
+
+支持的参数类型：
+
+- `int`
+- `int32`
+- `int64`
+- `uint`
+- `uint32`
+- `uint64`
+- `string`，内容需为十进制秒数
+
+返回规则：
+
+- 大于等于 `1` 小时：`3小时13分钟0秒`
+- 大于等于 `1` 分钟且小于 `1` 小时：`2分钟27秒`
+- 小于 `1` 分钟：`59秒`
+- 小于等于 `0` 或无法解析：返回空字符串
+
+示例：
+
+```gotemplate
+时长：{{ formatDuration 147 }}
+```
+
+```gotemplate
+{{ if gt .duration_seconds 0 -}}
+时长：{{ formatDuration .duration_seconds }}
+{{ end -}}
+```
+
+### 资源函数与 x 后缀
+
+为了兼顾性能和可控性，模板中的远程资源函数分为两类：
+
+- 默认函数：默认把 URL 交给 QQBOT 处理下载。
+- `x` 后缀函数：作为便捷版，默认由 DDBOT 先下载资源，再投递给 QQBOT。
+
+另外，还可以通过 `DDBOT_REQ_FETCH` 显式控制“谁来下载”：
+
+- `DDBOT_REQ_FETCH=remote`
+  - 交给 QQBOT 下载
+- `DDBOT_REQ_FETCH=local`
+  - 由 DDBOT 先下载再发送
+
+为了让模板更简洁，也提供了几个零参数 helper：
+
+- `fetchLocal`
+  - 等价于 `(dict "DDBOT_REQ_FETCH" "local")`
+- `fetchRemote`
+  - 等价于 `(dict "DDBOT_REQ_FETCH" "remote")`
+- `proxyNone`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_none")`
+- `proxyMainland`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_mainland")`
+- `proxyOversea`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_oversea")`
+
+当前约定如下：
+
+- `pic`
+  - `http/https` URL：直接投递 URL 给 QQBOT 下载
+  - 本地路径 / base64：由 DDBOT 本地读取后发送
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则改为 DDBOT 先下载再发送
+- `picx`
+  - 远程 URL：由 DDBOT 先下载再发送
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+- `picm`
+  - `[]string` / `[]interface{}` / `[][]byte` 图片列表：由 DDBOT 下载并合并为单张拼图发送
+- `picmx`
+  - 是 `picm` 的境外资源便捷版
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+- `video` / `record` / `file`
+  - 默认保持原有行为，远程 URL 直接交给 QQBOT 下载
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则切换为“DDBOT 先下载再发送”
+- `videox` / `recordx` / `filex`
+  - 远程 URL：由 DDBOT 先下载再发送
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+- `remoteDownloadFile`
+  - 默认保持原有行为，远程 URL 直接交给 QQBOT 下载
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则改为 DDBOT 先下载后投递
+- `remoteDownloadFilex`
+  - 是 `remoteDownloadFile` 的便捷版
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+
+示例：
+
+```gotemplate
+{{ pic .cover }}
+{{ picx .cover }}
+{{ picx .cover "封面" }}
+{{ picm .image_urls "拼图" }}
+{{ picmx .image_urls "拼图" }}
+```
+
+```gotemplate
+{{ pic .cover (fetchLocal) (proxyNone) }}
+{{ pic .cover (fetchLocal) (proxyMainland) }}
+{{ picm .image_urls "拼图" }}
+{{ picmx .image_urls "拼图" }}
+{{ video .video_url }}
+{{ videox .video_url }}
+{{ recordx .audio_url }}
+{{ filex .file_url "附件" }}
+```
+
+```gotemplate
+{{ pic .cover (fetchRemote) }}
+{{ video .video_url (fetchLocal) (proxyNone) }}
+{{ remoteDownloadFilex .file_url (dict "name" "sample.zip") }}
+```
+
+说明：
+
+- `x` 后缀主打“小白友好”，适合 YouTube、X、Twitter 等需要代理或经常被 QQBOT 侧下载失败的资源。
+- 如果你明确知道当前部署环境不需要代理，可以继续使用默认函数，或在参数里显式覆盖 `DDBOT_REQ_PROXY`。
+- 如果你想“不走代理，但仍由 DDBOT 本地下载后再发”，推荐写法是 `(fetchLocal) (proxyNone)`。

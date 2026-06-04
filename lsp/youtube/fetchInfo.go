@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"errors"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,16 +18,19 @@ import (
 )
 
 const (
-	// 闂傚倸鍊风粈渚€濡堕幖浣碘偓鍌炴晝閸屾稑娈戦柣鐘荤細閵嗏偓闁?channelID 闂傚倷娴囧畷鍨叏閹惰姤鈷旂€广儱顦崹鍌炴煢濡尨绱?
+	// 老的 channelID 订阅
 	VideoPathOld  = "https://www.youtube.com/channel/%s/videos?view=57&flow=grid"
+	ShortPathOld  = "https://www.youtube.com/channel/%s/shorts?view=57&flow=grid"
 	StreamPathOld = "https://www.youtube.com/channel/%s/streams?view=57&flow=grid"
-	// 闂傚倸鍊风粈渚€骞栭锕€纾归悷娆忓閻濆爼鏌涢埄鍐︿粶闁?UID 闂傚倷娴囧畷鍨叏閹惰姤鈷旂€广儱顦崹鍌炴煢濡尨绱?
+	// 新的 UID 订阅
 	VideoPathNew  = "https://www.youtube.com/%s/videos?view=57&flow=grid"
+	ShortPathNew  = "https://www.youtube.com/%s/shorts?view=57&flow=grid"
 	StreamPathNew = "https://www.youtube.com/%s/streams?view=57&flow=grid"
 )
 
 const (
-	lockupContentTypeVideo = "LOCKUP_CONTENT_TYPE_VIDEO"
+	lockupContentTypeVideo  = "LOCKUP_CONTENT_TYPE_VIDEO"
+	lockupContentTypeShorts = "LOCKUP_CONTENT_TYPE_SHORTS"
 )
 
 var ErrYoutubeConsentPage = errors.New("youtube consent page returned")
@@ -47,6 +51,7 @@ type fetchPageType string
 const (
 	fetchPageTypeVideo  fetchPageType = "video"
 	fetchPageTypeStream fetchPageType = "stream"
+	fetchPageTypeShorts fetchPageType = "shorts"
 )
 
 type fetchPage struct {
@@ -167,6 +172,13 @@ func YPatch(channelID string, video bool) string {
 		}
 	}
 	return fmt.Sprintf(baseURL, channelID)
+}
+
+func YShortPatch(channelID string) string {
+	if strings.HasPrefix(channelID, "@") {
+		return fmt.Sprintf(ShortPathNew, channelID)
+	}
+	return fmt.Sprintf(ShortPathOld, channelID)
 }
 
 func containerString(c *gabs.Container) string {
@@ -355,6 +367,12 @@ func pageMatchesRequestedType(root *gabs.Container, requested fetchPageType) boo
 			return false
 		}
 		return containsAnyFold(title, "LIVE", "STREAM", "直播", "實況", "配信", "ライブ")
+	case fetchPageTypeShorts:
+		title := selectedTabTitle(root)
+		if title == "" {
+			return false
+		}
+		return containsAnyFold(title, "SHORTS", "Shorts", "短视频")
 	default:
 		return true
 	}
@@ -671,7 +689,23 @@ func mergeVideoInfo(current, candidate *VideoInfo) *VideoInfo {
 		secondary = current
 	}
 
-	merged := *primary
+	// NOTE: VideoInfo embeds sync.Once and *mmsg.MSG for the lazily-built
+	// msgCache. Both must never be copied 鈥?copying sync.Once breaks the
+	// once.Do contract, and copying a populated msgCache pointer would
+	// alias the cache across instances. Reconstruct explicitly instead.
+	merged := &VideoInfo{
+		UserInfo:         primary.UserInfo,
+		Cover:            primary.Cover,
+		VideoId:          primary.VideoId,
+		VideoTitle:       primary.VideoTitle,
+		VideoType:        primary.VideoType,
+		VideoStatus:      primary.VideoStatus,
+		VideoTimestamp:   primary.VideoTimestamp,
+		PublishTimestamp: primary.PublishTimestamp,
+		DurationSeconds:  primary.DurationSeconds,
+		GroupCode:        primary.GroupCode,
+		HeaderSummary:    primary.HeaderSummary,
+	}
 	if merged.ChannelId == "" {
 		merged.ChannelId = secondary.ChannelId
 	}
@@ -701,7 +735,7 @@ func mergeVideoInfo(current, candidate *VideoInfo) *VideoInfo {
 		merged.VideoStatus = secondary.VideoStatus
 	}
 
-	return &merged
+	return merged
 }
 
 func extractVideoTypeAndStatusFromLockup(lockup *gabs.Container, pageType fetchPageType, durationSeconds int64) (VideoType, VideoStatus, int64) {
@@ -741,7 +775,7 @@ func extractVideoTypeAndStatusFromLockup(lockup *gabs.Container, pageType fetchP
 
 func parseLockupVideoInfo(lockup *gabs.Container, pageType fetchPageType, channelID, channelName string) *VideoInfo {
 	contentType := readString(lockup, "contentType")
-	if contentType != "" && contentType != lockupContentTypeVideo {
+	if contentType != "" && contentType != lockupContentTypeVideo && contentType != lockupContentTypeShorts {
 		return nil
 	}
 
@@ -757,7 +791,14 @@ func parseLockupVideoInfo(lockup *gabs.Container, pageType fetchPageType, channe
 	metadataTexts := collectMetadataTexts(lockup.S("metadata", "lockupMetadataViewModel", "metadata", "contentMetadataViewModel"))
 	durationTexts := collectDurationTexts(lockup.S("contentImage", "thumbnailViewModel", "overlays"))
 	durationSeconds := parseDurationSeconds(durationTexts)
+
+	// Detect shorts based on content type
+	isShorts := contentType == lockupContentTypeShorts
+
 	videoType, videoStatus, ts := extractVideoTypeAndStatusFromLockup(lockup, pageType, durationSeconds)
+	if isShorts {
+		videoType = VideoType_Shorts
+	}
 
 	var publishTimestamp int64
 	if videoStatus == VideoStatus_Upload {
@@ -778,6 +819,72 @@ func parseLockupVideoInfo(lockup *gabs.Container, pageType fetchPageType, channe
 		PublishTimestamp: publishTimestamp,
 		DurationSeconds:  durationSeconds,
 	}
+}
+
+func parseShortsLockupVideoInfo(shortsLockup *gabs.Container, channelID, channelName string) *VideoInfo {
+	// Get videoId from reelWatchEndpoint
+	videoID := readString(shortsLockup, "onTap", "innertubeCommand", "reelWatchEndpoint", "videoId")
+	if videoID == "" {
+		return nil
+	}
+
+	// Get title from accessibilityText (format: "title #shorts #tags, views次观看")
+	accessibilityText := readString(shortsLockup, "accessibilityText")
+	title := extractShortsTitle(accessibilityText)
+
+	// Get cover/thumbnail
+	cover := readString(shortsLockup, "onTap", "innertubeCommand", "reelWatchEndpoint", "thumbnail", "thumbnails", "0", "url")
+
+	// Get publish timestamp. Try several sources in order of reliability:
+	//   1. explicit publishedTimeText fields on the lockup
+	//   2. relative time inside accessibilityText
+	//   3. fallback to "now" so downstream templates / filterCard always see a
+	//      sensible timestamp instead of 0.
+	// accessibilityText rarely contains a parseable relative time on its own
+	// (it's usually "title #shorts #tags, N views" with no time phrase), so
+	// step 1 / 3 are what keep the field non-zero in practice.
+	now := time.Now()
+	publishTimestamp := parseRelativeTimestampFromTexts([]string{
+		readString(shortsLockup, "publishedTimeText", "simpleText"),
+		readString(shortsLockup, "publishedTimeText", "runs", "0", "text"),
+		readString(shortsLockup, "metadata", "lockupMetadataViewModel", "metadata", "contentMetadataViewModel", "metadataRows", "0", "metadataParts", "0", "text"),
+		readString(shortsLockup, "metadata", "lockupMetadataViewModel", "metadata", "contentMetadataViewModel", "metadataRows", "0", "metadataParts", "1", "text"),
+		accessibilityText,
+	}, now)
+	if publishTimestamp == 0 {
+		publishTimestamp = now.Unix()
+	}
+
+	return &VideoInfo{
+		UserInfo: UserInfo{
+			ChannelId:   channelID,
+			ChannelName: channelName,
+		},
+		Cover:            cover,
+		VideoId:          videoID,
+		VideoTitle:       title,
+		VideoType:        VideoType_Shorts,
+		VideoStatus:      VideoStatus_Upload,
+		VideoTimestamp:   0,
+		PublishTimestamp: publishTimestamp,
+		DurationSeconds:  0,
+	}
+}
+
+func extractShortsTitle(accessibilityText string) string {
+	if accessibilityText == "" {
+		return ""
+	}
+	// Format is like "忍得住这种酥麻感吗？♡ #shorts #asmr, 7,690次观看 - 播放 Shorts 短视频"
+	// We want everything before the first #shorts or #tag
+	if idx := strings.Index(accessibilityText, " #"); idx > 0 {
+		return strings.TrimSpace(accessibilityText[:idx])
+	}
+	// Also check for comma before view count
+	if idx := strings.Index(accessibilityText, ","); idx > 0 {
+		return strings.TrimSpace(accessibilityText[:idx])
+	}
+	return accessibilityText
 }
 
 func parseHeaderLiveInfo(root *gabs.Container, channelID, channelName string) *VideoInfo {
@@ -860,6 +967,11 @@ func extractVideoInfos(root *gabs.Container, pageType fetchPageType, channelID, 
 			result = append(result, info)
 		}
 	}
+	for _, shortsLockup := range searchAll(root, "shortsLockupViewModel") {
+		if info := parseShortsLockupVideoInfo(shortsLockup, channelID, channelName); info != nil {
+			result = append(result, info)
+		}
+	}
 	if info := parseHeaderLiveInfo(root, channelID, channelName); info != nil {
 		result = append(result, info)
 	}
@@ -895,6 +1007,27 @@ func XFetchInfo(channelID string) ([]*VideoInfo, error) {
 			pages = append(pages, fetchPage{root: root, kind: fetchPageTypeVideo})
 		}
 	}
+
+	// Random delay between page fetches to avoid bot detection
+	time.Sleep(time.Duration(100+rand.Intn(200)) * time.Millisecond)
+
+	{
+		path := YShortPatch(channelID)
+		body := new(bytes.Buffer)
+		if err := requests.Get(path, nil, body, opts...); err != nil {
+			return nil, err
+		}
+		if root, err := extractData(body.Bytes()); err == nil {
+			if pageMatchesRequestedType(root, fetchPageTypeShorts) {
+				pages = append(pages, fetchPage{root: root, kind: fetchPageTypeShorts})
+			} else {
+				log.WithField("selected_tab", selectedTabTitle(root)).Debug("skip youtube shorts page because selected tab is not shorts")
+			}
+		}
+	}
+
+	// Random delay between page fetches to avoid bot detection
+	time.Sleep(time.Duration(100+rand.Intn(200)) * time.Millisecond)
 
 	{
 		path := YPatch(channelID, false)

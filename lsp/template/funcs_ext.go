@@ -4,13 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/adapter"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/interfaces"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/shopspring/decimal"
 	"math/rand"
 	"net/url"
 	"os"
@@ -21,6 +14,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/interfaces"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/shopspring/decimal"
 )
 
 var funcsExt = make(FuncMap)
@@ -315,7 +316,6 @@ func picUri(uri string) (e *mmsg.ImageBytesElement) {
 	logger := logger.WithField("uri", uri)
 	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
 		e = mmsg.NewImage(nil, uri)
-		//e = mmsg.NewImageByUrlWithoutCache(uri)
 	} else {
 		fi, err := os.Stat(uri)
 		if err != nil {
@@ -360,15 +360,287 @@ func picUri(uri string) (e *mmsg.ImageBytesElement) {
 	return e
 }
 
-func pic(input interface{}, alternative ...string) *mmsg.ImageBytesElement {
-	var alt string
-	if len(alternative) > 0 && len(alternative[0]) > 0 {
-		alt = alternative[0]
+func picUriWithParams(uri string, oParams ...map[string]interface{}) (e *mmsg.ImageBytesElement) {
+	logger := logger.WithField("uri", uri)
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		_, opts := preProcess(mergePicParams(oParams...))
+		e = mmsg.NewImageByUrl(uri, opts...)
+		return e
 	}
+
+	fi, err := os.Stat(uri)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Errorf("template: pic uri doesn't exist")
+		} else {
+			logger.Errorf("template: pic uri Stat error %v", err)
+		}
+		goto END
+	}
+	if fi.IsDir() {
+		f, err := os.Open(uri)
+		if err != nil {
+			logger.Errorf("template: pic uri Open error %v", err)
+			goto END
+		}
+		dirs, err := f.ReadDir(-1)
+		if err != nil {
+			logger.Errorf("template: pic uri ReadDir error %v", err)
+			goto END
+		}
+		var result []os.DirEntry
+		for _, file := range dirs {
+			if file.IsDir() || !(strings.HasSuffix(file.Name(), ".jpg") ||
+				strings.HasSuffix(file.Name(), ".png") ||
+				strings.HasSuffix(file.Name(), ".gif")) {
+				continue
+			}
+			result = append(result, file)
+		}
+		if len(result) > 0 {
+			e = mmsg.NewImageByLocal(filepath.Join(uri, result[rand.Intn(len(result))].Name()))
+		} else {
+			logger.Errorf("template: pic uri can not find any images")
+		}
+	}
+END:
+	if e == nil {
+		e = mmsg.NewImageByLocal(uri)
+	}
+	return e
+}
+
+func mergePicParams(oParams ...map[string]interface{}) []map[string]interface{} {
+	if len(oParams) == 0 {
+		return nil
+	}
+	merged := make(map[string]interface{})
+	for _, params := range oParams {
+		for key, value := range params {
+			merged[key] = value
+		}
+	}
+	return []map[string]interface{}{merged}
+}
+
+func hasTemplateRequestOptions(options map[string]interface{}) bool {
+	if len(options) == 0 {
+		return false
+	}
+	for _, key := range []string{
+		DDBOT_REQ_DEBUG,
+		DDBOT_REQ_HEADER,
+		DDBOT_REQ_COOKIE,
+		DDBOT_REQ_FETCH,
+		DDBOT_REQ_PROXY,
+		DDBOT_REQ_USER_AGENT,
+		DDBOT_REQ_TIMEOUT,
+		DDBOT_REQ_RETRY,
+	} {
+		if _, found := options[key]; found {
+			return true
+		}
+	}
+	return false
+}
+
+func getTemplateFetchMode(options map[string]interface{}) string {
+	if len(options) == 0 {
+		return ""
+	}
+	fetch, ok := options[DDBOT_REQ_FETCH].(string)
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(fetch)) {
+	case "local":
+		return "local"
+	case "remote":
+		return "remote"
+	default:
+		return ""
+	}
+}
+
+func withLocalFetchAndDefaultProxy(params ...map[string]interface{}) []map[string]interface{} {
+	merged := mergePicParams(params...)
+	if len(merged) == 0 {
+		merged = []map[string]interface{}{{}}
+	}
+	merged[0][DDBOT_REQ_FETCH] = "local"
+	if _, found := merged[0][DDBOT_REQ_PROXY]; !found {
+		merged[0][DDBOT_REQ_PROXY] = "prefer_oversea"
+	}
+	return merged
+}
+
+func fetchLocal() map[string]interface{} {
+	return map[string]interface{}{
+		DDBOT_REQ_FETCH: "local",
+	}
+}
+
+func fetchRemote() map[string]interface{} {
+	return map[string]interface{}{
+		DDBOT_REQ_FETCH: "remote",
+	}
+}
+
+func proxyNone() map[string]interface{} {
+	return map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	}
+}
+
+func proxyMainland() map[string]interface{} {
+	return map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_mainland",
+	}
+}
+
+func proxyOversea() map[string]interface{} {
+	return map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_oversea",
+	}
+}
+
+func parsePicArgs(args []interface{}) (string, []map[string]interface{}) {
+	var alt string
+	var params []map[string]interface{}
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			if alt == "" {
+				alt = v
+			}
+		case map[string]interface{}:
+			params = append(params, v)
+		case nil:
+			continue
+		default:
+			panic(fmt.Sprintf("invalid pic arg %v", arg))
+		}
+	}
+	return alt, params
+}
+
+func imageBytesFromTemplateInput(input interface{}, oParams ...map[string]interface{}) ([]byte, error) {
+	switch e := input.(type) {
+	case string:
+		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
+			return b, nil
+		}
+		if strings.HasPrefix(e, "http://") || strings.HasPrefix(e, "https://") {
+			_, opts := preProcess(mergePicParams(oParams...))
+			return localutils.ImageGet(e, opts...)
+		}
+		img := picUriWithParams(e, oParams...)
+		if img == nil || len(img.Buf) == 0 {
+			return nil, fmt.Errorf("load image failed: %s", e)
+		}
+		return img.Buf, nil
+	case []byte:
+		if len(e) == 0 {
+			return nil, fmt.Errorf("empty image bytes")
+		}
+		return e, nil
+	default:
+		return nil, fmt.Errorf("unsupported image input type %T", input)
+	}
+}
+
+func mergeTemplateImageInputs(inputs []interface{}, oParams ...map[string]interface{}) ([]byte, error) {
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("empty image list")
+	}
+	var images [][]byte
+	for _, input := range inputs {
+		b, err := imageBytesFromTemplateInput(input, oParams...)
+		if err != nil {
+			logger.WithField("input", fmt.Sprintf("%T", input)).Errorf("template: merge image load failed %v", err)
+			continue
+		}
+		images = append(images, b)
+	}
+	switch len(images) {
+	case 0:
+		return nil, fmt.Errorf("no valid image in list")
+	case 1:
+		return images[0], nil
+	default:
+		return localutils.MergeImages(images)
+	}
+}
+
+func mergeTemplateImageList(input interface{}, oParams ...map[string]interface{}) ([]byte, error) {
+	switch v := input.(type) {
+	case []string:
+		items := make([]interface{}, len(v))
+		for i, item := range v {
+			items[i] = item
+		}
+		return mergeTemplateImageInputs(items, oParams...)
+	case [][]byte:
+		items := make([]interface{}, len(v))
+		for i, item := range v {
+			items[i] = item
+		}
+		return mergeTemplateImageInputs(items, oParams...)
+	case []interface{}:
+		return mergeTemplateImageInputs(v, oParams...)
+	default:
+		return nil, fmt.Errorf("unsupported image list type %T", input)
+	}
+}
+
+func picmx(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
+	alt, params := parsePicArgs(args)
+	merged := withLocalFetchAndDefaultProxy(params...)
+	b, err := mergeTemplateImageList(input, merged...)
+	if err != nil {
+		logger.Errorf("template: picmx merge failed %v", err)
+		return mmsg.NewImage(nil).Alternative(alt)
+	}
+	return mmsg.NewImage(b).Alternative(alt)
+}
+
+func picm(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
+	alt, params := parsePicArgs(args)
+	merged := mergePicParams(params...)
+	b, err := mergeTemplateImageList(input, merged...)
+	if err != nil {
+		logger.Errorf("template: picm merge failed %v", err)
+		return mmsg.NewImage(nil).Alternative(alt)
+	}
+	return mmsg.NewImage(b).Alternative(alt)
+}
+
+func picx(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
+	alt, params := parsePicArgs(args)
+	merged := withLocalFetchAndDefaultProxy(params...)
 	switch e := input.(type) {
 	case string:
 		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
 			return mmsg.NewImage(b).Alternative(alt)
+		}
+		return picUriWithParams(e, merged...).Alternative(alt)
+	case []byte:
+		return mmsg.NewImage(e).Alternative(alt)
+	default:
+		panic(fmt.Sprintf("invalid pic %v", input))
+	}
+}
+
+func pic(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
+	alt, params := parsePicArgs(args)
+	merged := mergePicParams(params...)
+	switch e := input.(type) {
+	case string:
+		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
+			return mmsg.NewImage(b).Alternative(alt)
+		}
+		if len(merged) > 0 && getTemplateFetchMode(merged[0]) == "local" {
+			return picUriWithParams(e, merged...).Alternative(alt)
 		}
 		return picUri(e).Alternative(alt)
 	case []byte:
@@ -548,6 +820,45 @@ func fin() interface{} {
 func getUnixTime(i int64, f string) string {
 	t := time.Unix(i, 0)
 	return getTime(t, f)
+}
+
+func formatDuration(s interface{}) string {
+	var total int64
+	switch v := s.(type) {
+	case int:
+		total = int64(v)
+	case int32:
+		total = int64(v)
+	case int64:
+		total = v
+	case uint:
+		total = int64(v)
+	case uint32:
+		total = int64(v)
+	case uint64:
+		total = int64(v)
+	case string:
+		total, _ = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	default:
+		return ""
+	}
+
+	if total <= 0 {
+		return ""
+	}
+
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	seconds := total % 60
+
+	switch {
+	case hours > 0:
+		return fmt.Sprintf("%d小时%d分钟%d秒", hours, minutes, seconds)
+	case minutes > 0:
+		return fmt.Sprintf("%d分钟%d秒", minutes, seconds)
+	default:
+		return fmt.Sprintf("%d秒", seconds)
+	}
 }
 
 func getTimeStamp(t string) int64 {
@@ -787,17 +1098,43 @@ func videoUri(uri string) (e *mmsg.VideoElement) {
 	return e
 }
 
-func video(input interface{}, name ...string) *mmsg.VideoElement {
-	var alt string
-	if len(name) > 0 && len(name[0]) > 0 {
-		alt = name[0]
+func videoUriWithParams(uri string, oParams ...map[string]interface{}) (e *mmsg.VideoElement) {
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		_, opts := preProcess(mergePicParams(oParams...))
+		e = mmsg.NewVideoByUrl(uri, opts...)
+		return e
 	}
+	return videoUri(uri)
+}
+
+func video(input interface{}, args ...interface{}) *mmsg.VideoElement {
+	alt, params := parsePicArgs(args)
+	merged := mergePicParams(params...)
 	switch e := input.(type) {
 	case string:
 		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
 			return mmsg.NewVideo("", b).Alternative(alt)
 		}
+		if len(merged) > 0 && getTemplateFetchMode(merged[0]) == "local" {
+			return videoUriWithParams(e, merged...).Alternative(alt)
+		}
 		return videoUri(e).Alternative(alt)
+	case []byte:
+		return mmsg.NewVideo("", e).Alternative(alt)
+	default:
+		panic(fmt.Sprintf("invalid video %v", input))
+	}
+}
+
+func videox(input interface{}, args ...interface{}) *mmsg.VideoElement {
+	alt, params := parsePicArgs(args)
+	merged := withLocalFetchAndDefaultProxy(params...)
+	switch e := input.(type) {
+	case string:
+		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
+			return mmsg.NewVideo("", b).Alternative(alt)
+		}
+		return videoUriWithParams(e, merged...).Alternative(alt)
 	case []byte:
 		return mmsg.NewVideo("", e).Alternative(alt)
 	default:
@@ -854,17 +1191,43 @@ func recordUri(uri string) (e *mmsg.RecordElement) {
 	return e
 }
 
-func record(input interface{}, name ...string) *mmsg.RecordElement {
-	var alt string
-	if len(name) > 0 && len(name[0]) > 0 {
-		alt = name[0]
+func recordUriWithParams(uri string, oParams ...map[string]interface{}) (e *mmsg.RecordElement) {
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		_, opts := preProcess(mergePicParams(oParams...))
+		e = mmsg.NewRecordByUrl(uri, opts...)
+		return e
 	}
+	return recordUri(uri)
+}
+
+func record(input interface{}, args ...interface{}) *mmsg.RecordElement {
+	alt, params := parsePicArgs(args)
+	merged := mergePicParams(params...)
 	switch e := input.(type) {
 	case string:
 		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
 			return mmsg.NewRecord("", b).Alternative(alt)
 		}
+		if len(merged) > 0 && getTemplateFetchMode(merged[0]) == "local" {
+			return recordUriWithParams(e, merged...).Alternative(alt)
+		}
 		return recordUri(e).Alternative(alt)
+	case []byte:
+		return mmsg.NewRecord("", e).Alternative(alt)
+	default:
+		panic(fmt.Sprintf("invalid record %v", input))
+	}
+}
+
+func recordx(input interface{}, args ...interface{}) *mmsg.RecordElement {
+	alt, params := parsePicArgs(args)
+	merged := withLocalFetchAndDefaultProxy(params...)
+	switch e := input.(type) {
+	case string:
+		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
+			return mmsg.NewRecord("", b).Alternative(alt)
+		}
+		return recordUriWithParams(e, merged...).Alternative(alt)
 	case []byte:
 		return mmsg.NewRecord("", e).Alternative(alt)
 	default:
@@ -917,17 +1280,43 @@ func fileUri(uri string) (e *mmsg.FileElement) {
 	return e
 }
 
-func file(input interface{}, name ...string) *mmsg.FileElement {
-	var alt string
-	if len(name) > 0 && len(name[0]) > 0 {
-		alt = name[0]
+func fileUriWithParams(uri string, oParams ...map[string]interface{}) (e *mmsg.FileElement) {
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		_, opts := preProcess(mergePicParams(oParams...))
+		e = mmsg.NewFileByUrl(uri, opts...)
+		return e
 	}
+	return fileUri(uri)
+}
+
+func file(input interface{}, args ...interface{}) *mmsg.FileElement {
+	alt, params := parsePicArgs(args)
+	merged := mergePicParams(params...)
 	switch e := input.(type) {
 	case string:
 		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
 			return mmsg.NewFile("", b).Alternative(alt)
 		}
+		if len(merged) > 0 && getTemplateFetchMode(merged[0]) == "local" {
+			return fileUriWithParams(e, merged...).Alternative(alt)
+		}
 		return fileUri(e).Alternative(alt)
+	case []byte:
+		return mmsg.NewFile("", e).Alternative(alt)
+	default:
+		panic(fmt.Sprintf("invalid file %v", input))
+	}
+}
+
+func filex(input interface{}, args ...interface{}) *mmsg.FileElement {
+	alt, params := parsePicArgs(args)
+	merged := withLocalFetchAndDefaultProxy(params...)
+	switch e := input.(type) {
+	case string:
+		if b, err := base64.StdEncoding.DecodeString(e); err == nil {
+			return mmsg.NewFile("", b).Alternative(alt)
+		}
+		return fileUriWithParams(e, merged...).Alternative(alt)
 	case []byte:
 		return mmsg.NewFile("", e).Alternative(alt)
 	default:
@@ -958,9 +1347,19 @@ func remoteDownloadFile(urlOrBase64 string, opts ...interface{}) string {
 	if h, ok := options["headers"].([]string); ok {
 		headers = h
 	}
-
 	if strings.HasPrefix(urlOrBase64, "http://") || strings.HasPrefix(urlOrBase64, "https://") {
-		Url = urlOrBase64
+		if getTemplateFetchMode(options) == "local" {
+			mergedParams := mergePicParams(options)
+			_, reqOpts := preProcess(mergedParams)
+			body, _, err := localutils.FileGetWithoutCache(urlOrBase64, reqOpts...)
+			if err != nil {
+				logger.Errorf("remote file download failed: %v", err)
+				return ""
+			}
+			Base64 = "base64://" + base64.StdEncoding.EncodeToString(body)
+		} else {
+			Url = urlOrBase64
+		}
 	} else if strings.HasPrefix(urlOrBase64, "base64://") {
 		Base64 = urlOrBase64
 	}
@@ -976,6 +1375,22 @@ func remoteDownloadFile(urlOrBase64 string, opts ...interface{}) string {
 		logger.Errorf("文件下载失败: %v", err)
 	}
 	return ret
+}
+
+func remoteDownloadFilex(urlOrBase64 string, opts ...interface{}) string {
+	options := make(map[string]interface{})
+	for _, arg := range opts {
+		if m, ok := arg.(map[string]interface{}); ok {
+			for k, v := range m {
+				options[k] = v
+			}
+		}
+	}
+	options[DDBOT_REQ_FETCH] = "local"
+	if _, found := options[DDBOT_REQ_PROXY]; !found {
+		options[DDBOT_REQ_PROXY] = "prefer_oversea"
+	}
+	return remoteDownloadFile(urlOrBase64, options)
 }
 
 func getFileUrl(groupCode int64, fileId string) string {

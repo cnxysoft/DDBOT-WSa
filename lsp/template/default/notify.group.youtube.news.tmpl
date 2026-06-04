@@ -1,4 +1,10 @@
-YTB-{{ .name }}发布了新视频：
+YTB-{{ .name -}}发布了{{ if .is_shorts -}}新Shorts{{ else -}}新视频{{ end -}}：
 {{ .title }}
-{{ pic .cover "[封面]" }}
+{{ if gt .publish_timestamp 0 -}}
+发布时间：{{ getTime .publish_timestamp "" }}
+{{ end -}}
+{{ if gt .duration_seconds 0 -}}
+时长：{{ formatDuration .duration_seconds }}
+{{ end -}}
+{{ picx .cover "[封面]" -}}
 {{ .url }}

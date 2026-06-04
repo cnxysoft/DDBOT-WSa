@@ -61,7 +61,15 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype 
 	if ctype.ContainAny(Live) && groupCode != 0 {
 		for _, living := range livingVideoInfos(info) {
 			living.liveStatusChanged = true
-			c.notify <- NewConcernNotify(groupCode, living)
+			// Use a non-blocking send: the LSP notify channel is shared and may
+			// be saturated; blocking here would deadlock Add() and prevent any
+			// future subscription on this group from completing.
+			select {
+			case c.notify <- NewConcernNotify(groupCode, living):
+			default:
+				log.WithField("video_id", living.VideoId).
+					Warn("youtube notify channel full; drop immediate live notify")
+			}
 		}
 	}
 	return concern.NewIdentity(info.ChannelId, info.ChannelName), nil
@@ -218,11 +226,11 @@ func (c *Concern) diffInfo(oldInfo, newInfo *Info) (result []*VideoInfo) {
 			for _, oldV := range oldInfo.VideoInfo {
 				if newV.VideoId == oldV.VideoId {
 					found = true
+					// Handle status transitions: live→video (offline) or video→live (started streaming)
 					if newV.IsVideo() && oldV.IsLive() {
-						// 应该是下播了吧？
+						// Live ended, notify as video
 						result = append(result, newV)
-					}
-					if newV.IsLive() && oldV.IsVideo() {
+					} else if newV.IsLive() && oldV.IsVideo() {
 						if !shouldNotifyLive(newV) {
 							continue
 						}
@@ -230,8 +238,7 @@ func (c *Concern) diffInfo(oldInfo, newInfo *Info) (result []*VideoInfo) {
 							newV.liveStatusChanged = true
 						}
 						result = append(result, newV)
-					}
-					if newV.IsLive() && oldV.IsLive() {
+					} else if newV.IsLive() && oldV.IsLive() {
 						if !shouldNotifyLive(newV) {
 							continue
 						}

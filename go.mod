@@ -57,6 +57,8 @@ require (
 	google.golang.org/protobuf v1.33.0
 )
 
+require github.com/jonboulle/clockwork v0.5.0 // indirect
+
 require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/sagikazarmark/locafero v0.10.0 // indirect

@@ -26,6 +26,7 @@ const (
 	DDBOT_REQ_DEBUG      = "DDBOT_REQ_DEBUG"
 	DDBOT_REQ_HEADER     = "DDBOT_REQ_HEADER"
 	DDBOT_REQ_COOKIE     = "DDBOT_REQ_COOKIE"
+	DDBOT_REQ_FETCH      = "DDBOT_REQ_FETCH"
 	DDBOT_REQ_PROXY      = "DDBOT_REQ_PROXY"
 	DDBOT_REQ_USER_AGENT = "DDBOT_REQ_USER_AGENT"
 	DDBOT_REQ_TIMEOUT    = "DDBOT_REQ_TIMEOUT"
@@ -107,6 +108,24 @@ func preProcess(oParams []map[string]interface{}) (map[string]interface{}, []req
 					}
 				}
 				return result
+			},
+		},
+		{
+			DDBOT_REQ_FETCH,
+			func() []requests.Option {
+				ifetch := params[DDBOT_REQ_FETCH]
+				fetch, ok := ifetch.(string)
+				if !ok {
+					logger.WithField("DDBOT_REQ_FETCH", ifetch).Errorf("invalid fetch format")
+					return nil
+				}
+				switch strings.ToLower(strings.TrimSpace(fetch)) {
+				case "local", "remote", "":
+					return nil
+				default:
+					logger.WithField("DDBOT_REQ_FETCH", fetch).Errorf("invalid fetch mode")
+					return nil
+				}
 			},
 		},
 		{

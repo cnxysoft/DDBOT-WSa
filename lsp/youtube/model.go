@@ -115,6 +115,13 @@ func (v *VideoInfo) IsVideo() bool {
 	return v.VideoType == VideoType_Video
 }
 
+func (v *VideoInfo) IsShorts() bool {
+	if v == nil {
+		return false
+	}
+	return v.VideoType == VideoType_Shorts
+}
+
 func (v *VideoInfo) EffectiveTimestamp() int64 {
 	if v == nil {
 		return 0
@@ -143,6 +150,7 @@ func (v *VideoInfo) GetMSG() *mmsg.MSG {
 			"duration_seconds":  v.DurationSeconds,
 			"living":            v.IsLiving(),
 			"waiting":           v.IsWaiting(),
+			"is_shorts":         v.IsShorts(),
 			"group_code":        v.GroupCode,
 		}
 		if v.IsLive() {
