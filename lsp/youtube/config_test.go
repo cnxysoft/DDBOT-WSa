@@ -4,6 +4,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/stretchr/testify/assert"
+	"strconv"
 	"testing"
 )
 
@@ -36,6 +37,18 @@ func newNewsInfo(channelId string) *ConcernNotify {
 		},
 	}
 	return li
+}
+
+func newShortsInfo(channelId string) *ConcernNotify {
+	return &ConcernNotify{
+		VideoInfo: &VideoInfo{
+			UserInfo: UserInfo{
+				ChannelId: channelId,
+			},
+			VideoType:   VideoType_Shorts,
+			VideoStatus: VideoStatus_Upload,
+		},
+	}
 }
 
 func TestNewGroupConcernConfig(t *testing.T) {
@@ -124,4 +137,111 @@ func TestGroupConcernConfig_AtBeforeHook(t *testing.T) {
 		assert.EqualValues(t, expected[idx], hook.Pass)
 	}
 
+}
+
+func TestCheckTypeDefine(t *testing.T) {
+	// Known string names should pass.
+	assert.Empty(t, CheckTypeDefine([]string{YtVideo, YtShorts}))
+
+	// Known int values (0..3) should pass — even though some (Live, FirstLive)
+	// aren't mapped in PredefinedType yet, callers may still configure them
+	// numerically and FilterHook handles them via ParseInt.
+	for i := 0; i <= 3; i++ {
+		assert.Empty(t, CheckTypeDefine([]string{strconv.Itoa(i)}),
+			"int %d should be a valid VideoType", i)
+	}
+
+	// Out-of-range ints and unknown strings should be flagged.
+	assert.NotEmpty(t, CheckTypeDefine([]string{"bogus"}))
+	assert.NotEmpty(t, CheckTypeDefine([]string{strconv.Itoa(99)}))
+	assert.NotEmpty(t, CheckTypeDefine([]string{"video", "bogus"}),
+		"any invalid entry should make the slice non-empty")
+}
+
+func TestGroupConcernConfig_Validate(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		assert.Nil(t, g.Validate())
+	})
+
+	t.Run("valid string types", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType,
+			`{"type":["video","shorts"]}`)
+		assert.Nil(t, g.Validate())
+	})
+
+	t.Run("valid int types", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType,
+			`{"type":["2","3"]}`)
+		assert.Nil(t, g.Validate())
+	})
+
+	t.Run("invalid type must fail", func(t *testing.T) {
+		// Regression: previously Validate() returned the wrong err variable and
+		// effectively always succeeded even with bogus type names.
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType,
+			`{"type":["bogus"]}`)
+		err := g.Validate()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "bogus")
+	})
+
+	t.Run("unknown rule type rejected", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule("nonsense", `{}`)
+		assert.ErrorIs(t, g.Validate(), concern.ErrConfigNotSupported)
+	})
+}
+
+func TestGroupConcernConfig_FilterHook(t *testing.T) {
+	t.Run("no filter passes everything", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		assert.True(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.True(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("type=video blocks live and shorts", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType, `{"type":["video"]}`)
+		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("type=shorts blocks video and live", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType, `{"type":["shorts"]}`)
+		assert.True(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+	})
+
+	t.Run("not_type=shorts passes everything except shorts", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeNotType, `{"type":["shorts"]}`)
+		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.True(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("int type values work via ParseInt", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		// VideoType_Video = 2
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType, `{"type":["2"]}`)
+		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("multiple type names OR together", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType,
+			`{"type":["video","shorts"]}`)
+		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.True(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+	})
 }

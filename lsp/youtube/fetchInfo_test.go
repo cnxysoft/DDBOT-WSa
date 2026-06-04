@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -40,12 +41,24 @@ func TestXFetchInfo(t *testing.T) {
 	assert.NotNil(t, vi)
 }
 
+// loadDebugRoot loads a saved YouTube page fixture for offline parsing tests.
+//
+// The fixtures are expected under ../../debug/youtube/ (ignored by .gitignore
+// because they contain captured YouTube HTML). When a fixture is missing —
+// the default in CI / a fresh clone — the calling test is skipped instead of
+// failing, so these tests act as developer-time regression checks rather
+// than hard CI gates. To run them locally, drop the saved HTML into
+// lsp/youtube/testdata/youtube/ (or the legacy ../../debug/youtube/ path)
+// and re-run `go test ./lsp/youtube/...`.
 func loadDebugRoot(t *testing.T, name string) *gabs.Container {
 	t.Helper()
 
 	path := filepath.Join("..", "..", "debug", "youtube", name)
 	body, err := os.ReadFile(path)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skipf("youtube fixture %s not present; skipping (see loadDebugRoot doc)", name)
+		}
 		t.Fatalf("read debug html %s: %v", path, err)
 	}
 	root, err := extractData(body)
@@ -539,4 +552,130 @@ func TestParseRelativeTimestamp(t *testing.T) {
 	assert.Equal(t, now.Add(-6*time.Hour).Unix(), parseRelativeTimestamp("直播于 6 小时前", now))
 	assert.Equal(t, now.AddDate(0, 0, -3).Unix(), parseRelativeTimestamp("Streamed 3 days ago", now))
 	assert.Equal(t, now.AddDate(0, 0, -7).Unix(), parseRelativeTimestamp("1週間前", now))
+}
+
+func TestExtractShortsTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "tag separated by space-hash",
+			in:   "忍得住这种酥麻感吗？♡ #shorts #asmr, 7,690次观看 - 播放 Shorts 短视频",
+			want: "忍得住这种酥麻感吗？♡",
+		},
+		{
+			name: "comma fallback when no tag",
+			in:   "Hello, world! 短视频",
+			want: "Hello",
+		},
+		{
+			name: "no separator returns the whole string",
+			in:   "just a title",
+			want: "just a title",
+		},
+		{
+			name: "empty input",
+			in:   "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractShortsTitle(tt.in))
+		})
+	}
+}
+
+func TestParseShortsLockupVideoInfo_TitleAndType(t *testing.T) {
+	json := `{
+		"accessibilityText": "今天的萌宠合集 #shorts #pets, 1,234次观看",
+		"onTap": {
+			"innertubeCommand": {
+				"reelWatchEndpoint": {
+					"videoId": "abc123",
+					"thumbnail": {
+						"thumbnails": [
+							{"url": "https://example.com/shorts-cover.jpg"}
+						]
+					}
+				}
+			}
+		}
+	}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+
+	before := time.Now().Unix()
+	info := parseShortsLockupVideoInfo(root, "UC_X", "Channel X")
+	after := time.Now().Unix()
+
+	assert.NotNil(t, info)
+	assert.Equal(t, "abc123", info.VideoId)
+	assert.Equal(t, VideoType_Shorts, info.VideoType)
+	assert.Equal(t, VideoStatus_Upload, info.VideoStatus)
+	assert.Equal(t, "Channel X", info.ChannelName)
+	assert.Equal(t, "https://example.com/shorts-cover.jpg", info.Cover)
+	// accessibilityText has no relative time and no publishedTimeText, so the
+	// fallback should pin PublishTimestamp to "now" (not 0).
+	assert.GreaterOrEqual(t, info.PublishTimestamp, before)
+	assert.LessOrEqual(t, info.PublishTimestamp, after)
+	// And the title should be cut at the first " #" tag.
+	assert.Equal(t, "今天的萌宠合集", info.VideoTitle)
+}
+
+func TestParseShortsLockupVideoInfo_PublishedTimeTextHonored(t *testing.T) {
+	// When publishedTimeText carries a parseable relative time, that
+	// should win over the "now" fallback.
+	json := `{
+		"accessibilityText": "title #shorts",
+		"publishedTimeText": {"simpleText": "2天前"},
+		"onTap": {
+			"innertubeCommand": {
+				"reelWatchEndpoint": {
+					"videoId": "vid-with-time",
+					"thumbnail": {"thumbnails": [{"url": "https://x/c.jpg"}]}
+				}
+			}
+		}
+	}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+
+	// We can't override time.Now from outside, so just assert the returned
+	// timestamp is recent (well within a few days) and definitely not 0.
+	info := parseShortsLockupVideoInfo(root, "UC", "C")
+	assert.NotNil(t, info)
+	assert.Greater(t, info.PublishTimestamp, int64(0))
+	assert.Less(t, time.Now().Unix()-info.PublishTimestamp, int64(60*60*24*30))
+}
+
+func TestParseShortsLockupVideoInfo_MissingVideoIdReturnsNil(t *testing.T) {
+	json := `{"accessibilityText": "x", "onTap": {"innertubeCommand": {"reelWatchEndpoint": {}}}}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+	assert.Nil(t, parseShortsLockupVideoInfo(root, "UC", "C"))
+}
+
+func TestPageMatchesRequestedType_ShortsTab(t *testing.T) {
+	// selectedTabTitle expects a ytdc-watch-card or similar; we feed it a
+	// pageHeaderRenderer with the tab title baked in.
+	withTab := func(title string) *gabs.Container {
+		json := `{
+			"contents": {
+				"twoColumnBrowseResultsRenderer": {
+					"tabs": [
+						{"tabRenderer": {"title": "` + title + `", "selected": true}}
+					]
+				}
+			}
+		}`
+		c, _ := gabs.ParseJSON([]byte(json))
+		return c
+	}
+	assert.True(t, pageMatchesRequestedType(withTab("Shorts"), fetchPageTypeShorts))
+	assert.True(t, pageMatchesRequestedType(withTab("Shorts 短视频"), fetchPageTypeShorts))
+	assert.False(t, pageMatchesRequestedType(withTab("Videos 视频"), fetchPageTypeShorts))
+	assert.False(t, pageMatchesRequestedType(withTab(""), fetchPageTypeShorts))
 }
