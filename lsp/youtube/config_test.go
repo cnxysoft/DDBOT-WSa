@@ -141,7 +141,7 @@ func TestGroupConcernConfig_AtBeforeHook(t *testing.T) {
 
 func TestCheckTypeDefine(t *testing.T) {
 	// Known string names should pass.
-	assert.Empty(t, CheckTypeDefine([]string{YtVideo, YtShorts}))
+	assert.Empty(t, CheckTypeDefine([]string{YtVideo, YtShorts, YtLive, YtFirstLive}))
 
 	// Known int values (0..3) should pass — even though some (Live, FirstLive)
 	// aren't mapped in PredefinedType yet, callers may still configure them
@@ -225,6 +225,42 @@ func TestGroupConcernConfig_FilterHook(t *testing.T) {
 		g.GetGroupConcernFilter().SetRule(concern.FilterTypeNotType, `{"type":["shorts"]}`)
 		assert.True(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
 		assert.True(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("type=live passes live and firstlive, blocks video and shorts", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType, `{"type":["live"]}`)
+
+		// Live (actively streaming) passes.
+		assert.True(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		// FirstLive (premiere/waiting) also passes — YtLive covers both.
+		assert.True(t, g.FilterHook(&ConcernNotify{
+			VideoInfo: &VideoInfo{
+				UserInfo:    UserInfo{ChannelId: test.NAME1},
+				VideoType:   VideoType_FirstLive,
+				VideoStatus: VideoStatus_Waiting,
+			},
+		}).Pass)
+		// Regular video / shorts do not pass.
+		assert.False(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
+		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
+	})
+
+	t.Run("type=firstlive only passes premiere/waiting", func(t *testing.T) {
+		g := &GroupConcernConfig{IConfig: &concern.GroupConcernConfig{}}
+		g.GetGroupConcernFilter().SetRule(concern.FilterTypeType, `{"type":["firstlive"]}`)
+
+		assert.True(t, g.FilterHook(&ConcernNotify{
+			VideoInfo: &VideoInfo{
+				UserInfo:    UserInfo{ChannelId: test.NAME1},
+				VideoType:   VideoType_FirstLive,
+				VideoStatus: VideoStatus_Waiting,
+			},
+		}).Pass)
+		// Active live is NOT a firstlive.
+		assert.False(t, g.FilterHook(newLiveInfo(test.NAME1, true, true, false)).Pass)
+		assert.False(t, g.FilterHook(newNewsInfo(test.NAME1)).Pass)
 		assert.False(t, g.FilterHook(newShortsInfo(test.NAME1)).Pass)
 	})
 

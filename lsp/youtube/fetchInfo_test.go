@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Jeffail/gabs/v2"
@@ -579,6 +580,14 @@ func TestExtractShortsTitle(t *testing.T) {
 			name: "empty input",
 			in:   "",
 			want: "",
+		},
+		{
+			// No separator at all + length way over the cap. The function should
+			// fall back to a hard-truncated title so a pathological accessibilityText
+			// can't blow up the renderer downstream.
+			name: "pathological long input is truncated",
+			in:   strings.Repeat("a", 500),
+			want:  strings.Repeat("a", 200) + "…",
 		},
 	}
 	for _, tt := range tests {

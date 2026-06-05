@@ -35,7 +35,9 @@ func (s *StateManager) GetVideo(channelId string, videoId string) (*VideoInfo, e
 }
 
 func (s *StateManager) AddVideo(v *VideoInfo) error {
-	return s.SetJson(s.VideoKey(v.ChannelId, v.VideoId), v)
+	// TTL mirrors AddInfo so an unused VideoKey does not pile up indefinitely
+	// in buntdb; live states are removed via DeleteLiveState when streaming ends.
+	return s.SetJson(s.VideoKey(v.ChannelId, v.VideoId), v, localdb.SetExpireOpt(time.Hour*24*7))
 }
 
 func (s *StateManager) DeleteLiveState(channelId string) error {
@@ -102,26 +104,6 @@ func (s *StateManager) DeleteLiveState(channelId string) error {
 		}
 		return nil
 	})
-}
-
-// getInfoWithoutCache reads info directly from DB without caching layer
-func (s *StateManager) getInfoWithoutCache(channelId string) (*Info, error) {
-	db, err := localdb.GetClient()
-	if err != nil {
-		return nil, err
-	}
-	var info *Info
-	err = db.View(func(tx *buntdb.Tx) error {
-		val, err := tx.Get(s.InfoKey(channelId))
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal([]byte(val), &info)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return info, nil
 }
 
 func (s *StateManager) GetGroupConcernConfig(groupCode int64, id interface{}) (concernConfig concern.IConfig) {

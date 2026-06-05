@@ -877,14 +877,21 @@ func extractShortsTitle(accessibilityText string) string {
 	}
 	// Format is like "忍得住这种酥麻感吗？♡ #shorts #asmr, 7,690次观看 - 播放 Shorts 短视频"
 	// We want everything before the first #shorts or #tag
+	title := accessibilityText
 	if idx := strings.Index(accessibilityText, " #"); idx > 0 {
-		return strings.TrimSpace(accessibilityText[:idx])
+		title = accessibilityText[:idx]
+	} else if idx := strings.Index(accessibilityText, ","); idx > 0 {
+		// Some locales omit the #shorts tag and put a comma before the view count.
+		title = accessibilityText[:idx]
 	}
-	// Also check for comma before view count
-	if idx := strings.Index(accessibilityText, ","); idx > 0 {
-		return strings.TrimSpace(accessibilityText[:idx])
+	title = strings.TrimSpace(title)
+	// Guard against pathological inputs (entire accessibilityText with no
+	// separator at all) — keep the title bounded so templates don't blow up.
+	const maxShortsTitleLen = 200
+	if len(title) > maxShortsTitleLen {
+		title = strings.TrimSpace(title[:maxShortsTitleLen]) + "…"
 	}
-	return accessibilityText
+	return title
 }
 
 func parseHeaderLiveInfo(root *gabs.Container, channelID, channelName string) *VideoInfo {

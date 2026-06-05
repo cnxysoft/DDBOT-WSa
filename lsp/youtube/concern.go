@@ -52,7 +52,10 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype 
 		return nil, fmt.Errorf("查询channel信息失败 %v - %v", id, err)
 	}
 	for _, v := range info.VideoInfo {
-		c.StateManager.AddVideo(v)
+		if err := c.StateManager.AddVideo(v); err != nil {
+			log.WithError(err).WithField("video_id", v.VideoId).
+				Warn("youtube: AddVideo failed during Add()")
+		}
 	}
 	_, err = c.StateManager.AddGroupConcern(groupCode, id, ctype)
 	if err != nil {
@@ -296,7 +299,10 @@ func (c *Concern) FindInfo(channelId string, load bool, addMode bool) (*Info, er
 			return nil, err
 		}
 		info = NewInfo(vi, addMode)
-		c.StateManager.AddInfo(info)
+		if err := c.StateManager.AddInfo(info); err != nil {
+			logger.WithField("channel_id", channelId).
+				WithError(err).Warn("youtube: AddInfo failed during FindInfo()")
+		}
 	}
 
 	if info != nil {

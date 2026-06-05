@@ -12,11 +12,17 @@ const (
 	YtVideo = "video"
 	// YtShorts represents YouTube Shorts type
 	YtShorts = "shorts"
+	// YtLive matches any live status (live streaming or waiting/premiere).
+	YtLive = "live"
+	// YtFirstLive matches premiere/waiting livestreams only.
+	YtFirstLive = "firstlive"
 )
 
 var PredefinedType = map[string][]VideoType{
-	YtVideo:  {VideoType_Video},
-	YtShorts: {VideoType_Shorts},
+	YtVideo:     {VideoType_Video},
+	YtShorts:    {VideoType_Shorts},
+	YtLive:      {VideoType_Live, VideoType_FirstLive},
+	YtFirstLive: {VideoType_FirstLive},
 }
 
 type GroupConcernConfig struct {
@@ -148,7 +154,7 @@ func CheckTypeDefine(types []string) (invalid []string) {
 		}
 		// Try parsing as int32 VideoType
 		if tp, err := strconv.ParseInt(t, 10, 32); err == nil {
-			if tp >= 0 && tp <= 3 {
+			if tp >= 0 && tp <= int64(VideoType_Shorts) {
 				continue
 			}
 		}
