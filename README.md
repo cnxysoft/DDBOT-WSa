@@ -20,6 +20,14 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 
 > DDBOT **不是聊天机器人**。它只在「订阅对象有更新」和「答复命令」时主动发言，交互被刻意设计成最小程度，正常聊天永远不会误触。
 
+**选择版本：**
+
+- [master](https://github.com/cnxysoft/DDBOT-WSa) — 稳定版
+- [next](https://github.com/cnxysoft/DDBOT-WSa/tree/next) — 更多功能（微博 API 模式、ACFUN 动态、推特 API 模式）
+- [next-dev](https://github.com/cnxysoft/DDBOT-WSa/tree/next-dev) — 开发前沿（小红书、Twitch、小黑盒、Telegram 推送）
+
+[📊 详细对比 →](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)
+
 ## 特性
 
 - **多平台订阅推送**：B 站（直播/动态）、斗鱼、虎牙、ACFun、YouTube、微博、TwitCasting、推特、抖音
@@ -72,8 +80,6 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 | [常见问题](https://kizunerwe.github.io/DDBOT-WSa-docs/faq/) | 部署排障、风控、WebSocket 连接等高频问题 |
 
 订阅源详情、插件开发、版本与分支等见文档站完整导航。
-
-文档站区分三个分支版本：[master](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)（稳定）| [next](https://github.com/cnxysoft/DDBOT-WSa/tree/next)（候选）| [next-dev](https://github.com/cnxysoft/DDBOT-WSa/tree/next-dev)（开发前沿）
 
 ## 交流与反馈
 
