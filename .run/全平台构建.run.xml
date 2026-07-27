@@ -1,9 +1,0 @@
-<component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="全平台构建" type="CompoundRunConfigurationType">
-    <toRun name="linux_amd64" type="GoApplicationRunConfiguration" />
-    <toRun name="linux_arm64" type="GoApplicationRunConfiguration" />
-    <toRun name="windows_amd64" type="GoApplicationRunConfiguration" />
-    <toRun name="windows_arm64" type="GoApplicationRunConfiguration" />
-    <method v="2" />
-  </configuration>
-</component>

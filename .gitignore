@@ -1,10 +1,26 @@
+# IDE
 /.idea
-Sora233-MiraiGo
+/.vscode
+/.run
+
+# 构建产物
 DDBOT
-/.coverage.out
-/coverage.html
-/qrcode.png
-/session.token
+DDBOT.exe
 /dist/
+/coverage.html
+/.coverage.out
+
+# 文档站构建产物
+/site/
+
+# 运行时生成文件
+/application.yaml
+/device.json
+/.lsp.db
+/.lsp.db.lock
+/session.token
+/qrcode.png
+/logs/
+/template/
 /version*.json
 /debug
