@@ -1,6 +1,6 @@
 <div align="center">
 
-<p align="center"><strong><span style="font-size: 2em;">DDBOT-WSa</span></strong></p>
+## DDBOT-WSa
 
 [![Release](https://img.shields.io/github/release/cnxysoft/DDBOT-WSa?style=flat-square&include_prereleases)](https://github.com/cnxysoft/DDBOT-WSa/releases)
 [![Downloads](https://img.shields.io/github/downloads/cnxysoft/DDBOT-WSa/total?style=flat-square&color=%239F7AEA&logo=github)](https://github.com/cnxysoft/DDBOT-WSa/releases)
