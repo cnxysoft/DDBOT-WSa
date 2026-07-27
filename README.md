@@ -14,7 +14,7 @@
 
 </div>
 
-⚠️ 您正在查看 **next** 分支。其他分支：[master](https://github.com/cnxysoft/DDBOT-WSa)（稳定版）| [next-dev](https://github.com/cnxysoft/DDBOT-WSa/tree/next-dev)（开发前沿）-- [详细对比](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)
+> ⚠️ **风险须知**：您正在查看 **next** 分支，此分支包含更多实验性功能，稳定性不如 master。生产环境建议使用 [master](https://github.com/cnxysoft/DDBOT-WSa) 稳定版。其他分支：[next-dev](https://github.com/cnxysoft/DDBOT-WSa/tree/next-dev)（开发前沿）—— [详细对比](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)
 
 DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11 兼容实现端，把 B 站、斗鱼、虎牙、ACFun、YouTube、微博、推特、抖音等平台的直播/动态更新推送到 IM 群。
 
