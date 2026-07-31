@@ -59,7 +59,7 @@ func (g *GroupConcernConfig) Validate() error {
 			return concern.ErrConfigNotSupported
 		}
 	}
-	return nil
+	return g.GetGroupConcernFilter().ValidateTextConflict()
 }
 
 // knownTypeNames returns the user-facing names accepted by type filters.

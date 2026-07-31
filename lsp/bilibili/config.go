@@ -34,7 +34,7 @@ func (g *GroupConcernConfig) Validate() error {
 			return concern.ErrConfigNotSupported
 		}
 	}
-	return nil
+	return g.GetGroupConcernFilter().ValidateTextConflict()
 }
 
 func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {

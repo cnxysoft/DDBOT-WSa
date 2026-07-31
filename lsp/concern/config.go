@@ -39,7 +39,7 @@ func (g *GroupConcernConfig) Validate() error {
 			return ErrConfigNotSupported
 		}
 	}
-	return nil
+	return g.GetGroupConcernFilter().ValidateTextConflict()
 }
 
 // FilterHook 默认支持filter text配置，其他为Pass，可以重写这个函数实现自定义的过滤
