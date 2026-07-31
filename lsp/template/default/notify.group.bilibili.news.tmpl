@@ -26,6 +26,10 @@
     {{ end -}}
     {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name $tips) -}}
     {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content -}}
+{{ else if .compact_miss -}}
+    {{- /* 应压缩推送但取不到原消息：只发简要提示，避免复读原动态刷屏 */ -}}
+    {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+    {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
 {{ else if eq .dynamic.Type 2 -}}
     {{ if .dynamic.WithOrigin -}}
         {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}

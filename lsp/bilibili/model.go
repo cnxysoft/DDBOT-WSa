@@ -296,9 +296,16 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	if notify.shouldCompact {
 		// 通过回复之前消息的方式简化推送
 		m = mmsg.NewMSG()
-		msg, _ := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
+		msg, err := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
 		if msg != nil {
 			card.orgMsg = msg
+		} else {
+			// 取不到原消息（消息未成功入库、缓存过期或数据库错误），
+			// 标记 compactMiss，避免模板走完整 fallback 导致复读原动态刷屏。
+			card.compactMiss = true
+			log.WithField("group_code", notify.GroupCode).
+				WithField("compact_key", notify.compactKey).
+				Warnf("compact notify miss: reply msg not found, suppress origin content (err: %v)", err)
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
 	}
@@ -444,6 +451,10 @@ type CacheCard struct {
 	dynamic    DynamicInfo
 	dynamicRaw map[string]interface{}
 	orgMsg     *adapter.GroupMessage
+	// compactMiss 表示本条动态需要紧凑推送（shouldCompact），
+	// 但没能从数据库取到可回复的原消息。
+	// 用于让模板区分「首次推送」与「应压缩却查不到原消息」两种 orgMsg == nil 的情况。
+	compactMiss bool
 }
 
 func NewCacheCard(card *Card) *CacheCard {
@@ -1203,9 +1214,10 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(func() {
 		c.prepare()
 		var data = map[string]interface{}{
-			"dynamic":     c.dynamic,
-			"msg":         c.orgMsg,
-			"group_code":  c.GroupCode,
+			"dynamic":      c.dynamic,
+			"msg":          c.orgMsg,
+			"compact_miss": c.compactMiss,
+			"group_code":   c.GroupCode,
 			"parse_post":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
 			"dynamic_raw": c.dynamicRaw,
 		}
