@@ -9,4 +9,5 @@ var (
 	ErrTypeNotSupported   = errors.New("不支持的类型参数")
 	ErrSiteNotSupported   = errors.New("不支持的网站参数")
 	ErrConfigNotSupported = errors.New("不支持的配置")
+	ErrFilterRuleConflict = errors.New("过滤配置矛盾")
 )
