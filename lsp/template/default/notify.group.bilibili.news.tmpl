@@ -28,7 +28,15 @@
     {{ printf "%v\n%v\n%v%v%v\n" $msg .dynamic.Date $topic $title .dynamic.Content -}}
 {{ else if .compact_miss -}}
     {{- /* 应压缩推送但取不到原消息：只发简要提示，避免复读原动态刷屏 */ -}}
-    {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+    {{ if and (eq .dynamic.Type 8) (not .dynamic.WithOrigin) -}}
+        {{ if ne .dynamic.Video.Action "" -}}
+            {{ $msg = join "" (list .dynamic.User.Name .dynamic.Video.Action "：") -}}
+        {{ else -}}
+            {{ $msg = join "" (list .dynamic.User.Name "投稿了视频：") -}}
+        {{ end -}}
+    {{ else -}}
+        {{ $msg = join "" (list .dynamic.User.Name "转发了" .dynamic.OriginUser.Name "的动态：") -}}
+    {{ end -}}
     {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
 {{ else if eq .dynamic.Type 2 -}}
     {{ if .dynamic.WithOrigin -}}
@@ -318,7 +326,7 @@
         {{ printf "%v\n%v\n" $msg .dynamic.Date -}}
     {{ end -}}
 {{ end -}}
-{{ if gt (len .dynamic.Addons) 0 -}}
+{{ if and (not .compact_miss) (gt (len .dynamic.Addons) 0) -}}
     {{ range $v := .dynamic.Addons -}}
         {{ if eq $v.Type 1 -}}
             {{ printf "\n%v：\n%v\n" $v.Goods.adMark $v.Goods.Name -}}
@@ -349,7 +357,7 @@
 {{ if eq $r.Title "" -}}
     {{ $r = .dynamic.Detail.Reserve -}}
 {{ end -}}
-{{ if ne $r.Title "" -}}
+{{ if and (not .compact_miss) (ne $r.Title "") -}}
     {{ printf "\n%v\n" $r.Title -}}
     {{ if and (ne $r.Desc1 "") (ne $r.Desc2 "") -}}
         {{ printf "%v - %v\n" $r.Desc1 $r.Desc2 -}}
@@ -367,7 +375,7 @@
 {{ if eq $vote nil -}}
     {{ $vote = .dynamic.Detail.Vote -}}
 {{ end -}}
-{{ if $vote -}}
+{{ if and (not .compact_miss) $vote -}}
     {{ printf "\n%v\n" $vote.Title -}}
     {{ if $vote.Desc -}}
         {{ printf "%v\n" $vote.Desc -}}

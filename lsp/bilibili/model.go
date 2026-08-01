@@ -53,6 +53,7 @@ type ConcernNewsNotify struct {
 	// 用于联合投稿和转发的时候防止多人同时推送
 	shouldCompact bool
 	compactKey    string
+	compactReady  bool
 	concern       *Concern
 }
 
@@ -294,18 +295,19 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	)
 	// 推送一条简化动态防止刷屏，主要是联合投稿和转发的时候
 	if notify.shouldCompact {
-		// 通过回复之前消息的方式简化推送
-		m = mmsg.NewMSG()
-		msg, err := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
-		if msg != nil {
+		if !notify.compactReady {
+			// FilterHook may already have rendered and cached the full message.
+			// Prepare compact state and invalidate that cache before rendering again.
+			msg, err := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
 			card.orgMsg = msg
-		} else {
-			// 取不到原消息（消息未成功入库、缓存过期或数据库错误），
-			// 标记 compactMiss，避免模板走完整 fallback 导致复读原动态刷屏。
-			card.compactMiss = true
-			log.WithField("group_code", notify.GroupCode).
-				WithField("compact_key", notify.compactKey).
-				Warnf("compact notify miss: reply msg not found, suppress origin content (err: %v)", err)
+			card.compactMiss = msg == nil
+			card.resetMessageCache()
+			notify.compactReady = true
+			if msg == nil {
+				log.WithField("group_code", notify.GroupCode).
+					WithField("compact_key", notify.compactKey).
+					Warnf("compact notify miss: reply msg not found, suppress origin content (err: %v)", err)
+			}
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
 	}
@@ -461,6 +463,11 @@ func NewCacheCard(card *Card) *CacheCard {
 	cacheCard := new(CacheCard)
 	cacheCard.Card = card
 	return cacheCard
+}
+
+func (c *CacheCard) resetMessageCache() {
+	c.once = sync.Once{}
+	c.msgCache = nil
 }
 
 type DynamicInfo struct {
@@ -1218,8 +1225,8 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 			"msg":          c.orgMsg,
 			"compact_miss": c.compactMiss,
 			"group_code":   c.GroupCode,
-			"parse_post":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
-			"dynamic_raw": c.dynamicRaw,
+			"parse_post":   config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
+			"dynamic_raw":  c.dynamicRaw,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)

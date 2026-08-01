@@ -9,6 +9,8 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -344,6 +346,72 @@ func TestGroupConcernConfig_NotifyBeforeCallback(t *testing.T) {
 
 	live := newLiveInfo(test.UID1, true, false, false)
 	g.NotifyBeforeCallback(live)
+}
+
+func TestGroupConcernConfig_CompactMissAfterFilterCache(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+	template.InitTemplateLoader()
+
+	c := initConcern(t)
+	notify := newNewsInfo(test.UID1, DynamicDescType_WithVideo)[0]
+	notify.GroupCode = test.G1
+	notify.Card.Desc.Bvid = test.BVID1
+
+	baseConfig := new(concern.GroupConcernConfig)
+	baseConfig.GetGroupConcernFilter().SetRule(
+		concern.FilterTypeNotText,
+		(&concern.GroupConcernFilterConfigByText{Text: []string{"never-match"}}).ToString(),
+	)
+	g := NewGroupConcernConfig(baseConfig, c)
+
+	assert.Nil(t, c.SetGroupCompactMarkIfNotExist(test.G1, test.BVID1))
+	assert.True(t, g.FilterHook(notify).Pass)
+	fullMessage := notify.Card.msgCache
+	assert.NotNil(t, fullMessage)
+
+	g.NotifyBeforeCallback(notify)
+	assert.True(t, notify.shouldCompact)
+	compactMessage := notify.ToMessage()
+	assert.True(t, notify.Card.compactMiss)
+	assert.NotSame(t, fullMessage, notify.Card.msgCache)
+
+	content := msgstringer.AdapterMsgToString(compactMessage.Elements())
+	assert.Contains(t, content, "投稿了视频")
+	assert.NotContains(t, content, "转发了的动态")
+}
+
+func TestCompactMissTemplateSuppressesCommonFooter(t *testing.T) {
+	template.InitTemplateLoader()
+
+	var dynamic DynamicInfo
+	dynamic.Type = DynamicDescType_WithVideo
+	dynamic.User.Name = "联合投稿用户"
+	dynamic.Video.Action = "联合投稿了视频"
+	dynamic.DynamicUrl = "https://t.bilibili.com/test"
+
+	addon := Addon{Type: AddOnCardShowType(1)}
+	addon.Goods.Name = "不应出现的附加卡片"
+	dynamic.Addons = []Addon{addon}
+	dynamic.Detail.Reserve.Title = "不应出现的预约"
+	dynamic.Detail.Vote = &VoteInfo{Title: "不应出现的投票"}
+
+	msg, err := template.LoadAndExec("notify.group.bilibili.news.tmpl", map[string]interface{}{
+		"dynamic":      dynamic,
+		"msg":          nil,
+		"compact_miss": true,
+		"group_code":   test.G1,
+		"parse_post":   false,
+		"dynamic_raw":  nil,
+	})
+	assert.NoError(t, err)
+	content := msgstringer.AdapterMsgToString(msg.Elements())
+	assert.Contains(t, content, "联合投稿用户联合投稿了视频")
+	assert.Contains(t, content, dynamic.DynamicUrl)
+	assert.NotContains(t, content, "转发了的动态")
+	assert.NotContains(t, content, addon.Goods.Name)
+	assert.NotContains(t, content, dynamic.Detail.Reserve.Title)
+	assert.NotContains(t, content, dynamic.Detail.Vote.Title)
 }
 
 func TestGroupConcernConfig_NotifyAfterCallback(t *testing.T) {
