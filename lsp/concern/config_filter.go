@@ -178,6 +178,14 @@ func (g *GroupConcernFilterConfig) ValidateTextConflict() error {
 		if err != nil {
 			return fmt.Errorf("解析过滤规则失败: %v", err)
 		}
+		if textFilter == nil || len(textFilter.Text) == 0 {
+			return ErrFilterKeywordEmpty
+		}
+		for _, keyword := range textFilter.Text {
+			if strings.TrimSpace(keyword) == "" {
+				return ErrFilterKeywordEmpty
+			}
+		}
 		if r.Type == FilterTypeText {
 			allowRules = append(allowRules, textFilter.Text)
 		} else {

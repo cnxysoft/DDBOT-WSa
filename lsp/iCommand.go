@@ -616,7 +616,7 @@ func IConfigFilterCmdNotType(c *MessageContext, groupCode int64, id string, site
 func IConfigFilterCmdText(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type, keywords []string) {
 	err := configCmdGroupCommonCheck(c, groupCode)
 	if err == nil {
-		if len(keywords) == 0 {
+		if !validFilterKeywords(keywords) {
 			c.TextReply("失败 - 没有指定过滤关键字")
 			return
 		}
@@ -639,7 +639,7 @@ func IConfigFilterCmdText(c *MessageContext, groupCode int64, id string, site st
 func IConfigFilterCmdNotText(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type, keywords []string) {
 	err := configCmdGroupCommonCheck(c, groupCode)
 	if err == nil {
-		if len(keywords) == 0 {
+		if !validFilterKeywords(keywords) {
 			c.TextReply("失败 - 没有指定过滤关键字")
 			return
 		}
@@ -657,6 +657,18 @@ func IConfigFilterCmdNotText(c *MessageContext, groupCode int64, id string, site
 	} else {
 		ReplyUserInfo(c, groupCode, id, site, ctype)
 	}
+}
+
+func validFilterKeywords(keywords []string) bool {
+	if len(keywords) == 0 {
+		return false
+	}
+	for _, keyword := range keywords {
+		if strings.TrimSpace(keyword) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func IConfigFilterCmdClear(c *MessageContext, groupCode int64, id string, site string, ctype concern_type.Type) {

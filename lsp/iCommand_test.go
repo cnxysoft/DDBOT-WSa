@@ -877,6 +877,14 @@ func TestIConfigFilterCmd(t *testing.T) {
 	result = <-msgChan
 	assert.Contains(t, msgstringer.AdapterMsgToString(result.ToCombineMessage(target).Elements), failed)
 
+	IConfigFilterCmdText(ctx, test.G1, test.NAME1, test.Site1, test.T1, []string{""})
+	result = <-msgChan
+	assert.Contains(t, msgstringer.AdapterMsgToString(result.ToCombineMessage(target).Elements), failed)
+
+	IConfigFilterCmdNotText(ctx, test.G1, test.NAME1, test.Site1, test.T1, []string{"   "})
+	result = <-msgChan
+	assert.Contains(t, msgstringer.AdapterMsgToString(result.ToCombineMessage(target).Elements), failed)
+
 	IConfigFilterCmdText(ctx, test.G1, test.NAME1, test.Site1, test.T1, []string{test.NAME1, test.NAME2})
 	result = <-msgChan
 	assert.Contains(t, msgstringer.AdapterMsgToString(result.ToCombineMessage(target).Elements), success)

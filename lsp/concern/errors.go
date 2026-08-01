@@ -10,4 +10,5 @@ var (
 	ErrSiteNotSupported   = errors.New("不支持的网站参数")
 	ErrConfigNotSupported = errors.New("不支持的配置")
 	ErrFilterRuleConflict = errors.New("过滤配置矛盾")
+	ErrFilterKeywordEmpty = errors.New("过滤关键字不能为空")
 )

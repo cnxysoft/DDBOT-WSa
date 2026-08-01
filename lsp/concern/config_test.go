@@ -304,6 +304,21 @@ func TestGroupConcernFilterConfig_ValidateTextConflict(t *testing.T) {
 	var broken GroupConcernConfig
 	broken.GetGroupConcernFilter().SetRule(FilterTypeText, "wrong")
 	assert.NotNil(t, broken.Validate())
+
+	// 空数组、null、空字符串和纯空白都会让规则永久放行或永久拦截，应拒绝。
+	for _, ruleType := range []string{FilterTypeText, FilterTypeNotText} {
+		for _, config := range []string{
+			`{"text":[]}`,
+			`{"text":null}`,
+			`{"text":[""]}`,
+			`{"text":["   "]}`,
+		} {
+			var empty GroupConcernConfig
+			empty.GetGroupConcernFilter().SetRule(ruleType, config)
+			assert.ErrorIs(t, empty.Validate(), ErrFilterKeywordEmpty,
+				"ruleType=%s config=%s", ruleType, config)
+		}
+	}
 }
 
 type testInfo struct {
