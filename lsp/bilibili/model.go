@@ -301,7 +301,7 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 			msg, err := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
 			card.orgMsg = msg
 			card.compactMiss = msg == nil
-			card.resetMessageCache()
+			card.resetRenderCache()
 			notify.compactReady = true
 			if msg == nil {
 				log.WithField("group_code", notify.GroupCode).
@@ -447,12 +447,13 @@ func urlsMergeImage(urls []string) (result []byte, err error) {
 
 type CacheCard struct {
 	*Card
-	GroupCode  int64
-	once       sync.Once
-	msgCache   *mmsg.MSG
-	dynamic    DynamicInfo
-	dynamicRaw map[string]interface{}
-	orgMsg     *adapter.GroupMessage
+	GroupCode   int64
+	prepareOnce sync.Once
+	renderOnce  sync.Once
+	msgCache    *mmsg.MSG
+	dynamic     DynamicInfo
+	dynamicRaw  map[string]interface{}
+	orgMsg      *adapter.GroupMessage
 	// compactMiss 表示本条动态需要紧凑推送（shouldCompact），
 	// 但没能从数据库取到可回复的原消息。
 	// 用于让模板区分「首次推送」与「应压缩却查不到原消息」两种 orgMsg == nil 的情况。
@@ -465,8 +466,8 @@ func NewCacheCard(card *Card) *CacheCard {
 	return cacheCard
 }
 
-func (c *CacheCard) resetMessageCache() {
-	c.once = sync.Once{}
+func (c *CacheCard) resetRenderCache() {
+	c.renderOnce = sync.Once{}
 	c.msgCache = nil
 }
 
@@ -1218,8 +1219,8 @@ func (c *CacheCard) prepare() {
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
-	c.once.Do(func() {
-		c.prepare()
+	c.prepareOnce.Do(c.prepare)
+	c.renderOnce.Do(func() {
 		var data = map[string]interface{}{
 			"dynamic":      c.dynamic,
 			"msg":          c.orgMsg,

@@ -348,36 +348,85 @@ func TestGroupConcernConfig_NotifyBeforeCallback(t *testing.T) {
 	g.NotifyBeforeCallback(live)
 }
 
-func TestGroupConcernConfig_CompactMissAfterFilterCache(t *testing.T) {
-	test.InitBuntdb(t)
-	defer test.CloseBuntdb(t)
-	template.InitTemplateLoader()
-
-	c := initConcern(t)
+func newFilteredCompactVideo(c *Concern, groupCode int64, bvid, action string) (*ConcernNewsNotify, *GroupConcernConfig) {
 	notify := newNewsInfo(test.UID1, DynamicDescType_WithVideo)[0]
-	notify.GroupCode = test.G1
-	notify.Card.Desc.Bvid = test.BVID1
+	notify.GroupCode = groupCode
+	notify.concern = c
+	notify.Card.Desc.Bvid = bvid
+	notify.Card.Desc.UserProfile = &Card_Desc_UserProfile{
+		Info: &Card_Desc_UserProfile_Info{Uname: "投稿用户"},
+	}
+	notify.Card.Display = &Card_Display{
+		UsrActionTxt: action,
+		AddOnCardInfo: []*Card_Display_AddOnCardInfo{
+			{AddOnCardShowType: AddOnCardShowType_match},
+		},
+	}
 
 	baseConfig := new(concern.GroupConcernConfig)
 	baseConfig.GetGroupConcernFilter().SetRule(
 		concern.FilterTypeNotText,
 		(&concern.GroupConcernFilterConfigByText{Text: []string{"never-match"}}).ToString(),
 	)
-	g := NewGroupConcernConfig(baseConfig, c)
+	return notify, NewGroupConcernConfig(baseConfig, c)
+}
+
+func TestGroupConcernConfig_CompactHitAfterFilterCache(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+	template.InitTemplateLoader()
+
+	c := initConcern(t)
+	notify, g := newFilteredCompactVideo(c, test.G1, test.BVID1, "联合投稿了视频")
+
+	assert.Nil(t, c.SetGroupCompactMarkIfNotExist(test.G1, test.BVID1))
+	assert.NoError(t, c.SetNotifyMsg(test.BVID1, &adapter.GroupMessage{
+		ID:        1,
+		GroupCode: test.G1,
+		Elements: []adapter.IMessageElement{
+			&adapter.TextSegment{Content: "原消息"},
+		},
+	}))
+	assert.True(t, g.FilterHook(notify).Pass)
+	fullMessage := notify.Card.msgCache
+	assert.NotNil(t, fullMessage)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	g.NotifyBeforeCallback(notify)
+	assert.True(t, notify.shouldCompact)
+	compactMessage := notify.ToMessage()
+	assert.False(t, notify.Card.compactMiss)
+	assert.NotSame(t, fullMessage, notify.Card.msgCache)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	content := msgstringer.AdapterMsgToString(compactMessage.Elements())
+	assert.Contains(t, content, "投稿用户联合投稿了视频：")
+	assert.NotContains(t, content, "投稿用户转发了的视频：")
+}
+
+func TestGroupConcernConfig_CompactMissAfterFilterCache(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+	template.InitTemplateLoader()
+
+	c := initConcern(t)
+	notify, g := newFilteredCompactVideo(c, test.G1, test.BVID1, "发布了动态")
 
 	assert.Nil(t, c.SetGroupCompactMarkIfNotExist(test.G1, test.BVID1))
 	assert.True(t, g.FilterHook(notify).Pass)
 	fullMessage := notify.Card.msgCache
 	assert.NotNil(t, fullMessage)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
 
 	g.NotifyBeforeCallback(notify)
 	assert.True(t, notify.shouldCompact)
 	compactMessage := notify.ToMessage()
 	assert.True(t, notify.Card.compactMiss)
 	assert.NotSame(t, fullMessage, notify.Card.msgCache)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
 
 	content := msgstringer.AdapterMsgToString(compactMessage.Elements())
-	assert.Contains(t, content, "投稿了视频")
+	assert.Contains(t, content, "投稿用户发布了动态视频：")
 	assert.NotContains(t, content, "转发了的动态")
 }
 
