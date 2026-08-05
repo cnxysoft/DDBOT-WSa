@@ -124,6 +124,13 @@ func TestFileFuncs(t *testing.T) {
 	data = openFile(tempFile)
 	assert.Equal(t, []byte(content+"\nnew line"), data)
 
+	// updateFile 应能创建不存在的调试文件并写入内容。
+	debugFile := filepath.Join(tempDir, "debug.json")
+	err = updateFile(debugFile, "debug data")
+	assert.NoError(t, err)
+	data = openFile(debugFile)
+	assert.Equal(t, []byte("debug data"), data)
+
 	// 测试delFile
 	err = delFile(tempFile)
 	assert.NoError(t, err)

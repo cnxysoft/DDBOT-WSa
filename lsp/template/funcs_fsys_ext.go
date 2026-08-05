@@ -19,7 +19,7 @@ func openFile(path string) []byte {
 }
 
 func updateFile(path string, data string) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		logger.Errorf("template: openFile <%v> error %v", path, err)
 		return err
