@@ -2,6 +2,7 @@ package bilibili
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
@@ -13,7 +14,6 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -274,11 +274,17 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 	var start = time.Now()
 	resp, err := DynamicSvrDynamicNew()
 	if err != nil {
+		if errors.Is(err, ErrVerifyRequired) {
+			notifyBilibiliLoginExpired()
+		}
 		logger.Errorf("DynamicSvrDynamicNew error %v", err)
 		return nil, err
 	}
 	var newsMap = make(map[int64][]*Card)
 	if resp.GetCode() != 0 {
+		if isBilibiliLoginInvalidResponse(resp.GetCode(), resp.GetMessage()) {
+			notifyBilibiliLoginExpired()
+		}
 		logger.WithField("RespCode", resp.GetCode()).
 			WithField("RespMsg", resp.GetMessage()).
 			Errorf("DynamicSvrDynamicNew failed")
@@ -296,11 +302,17 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 			}
 			historyResp, err = DynamicSvrDynamicHistory(lastDynamicId)
 			if err != nil {
+				if errors.Is(err, ErrVerifyRequired) {
+					notifyBilibiliLoginExpired()
+				}
 				logger.WithField("lastDynamicId", lastDynamicId).
 					Errorf("DynamicSvrDynamicHistory error %v", err)
 				break
 			}
 			if historyResp.GetCode() != 0 {
+				if isBilibiliLoginInvalidResponse(historyResp.GetCode(), historyResp.GetMessage()) {
+					notifyBilibiliLoginExpired()
+				}
 				logger.WithField("RespCode", resp.GetCode()).
 					WithField("RespMsg", resp.GetMessage()).
 					Errorf("DynamicSvrDynamicHistory failed")
@@ -366,10 +378,14 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 	for {
 		resp, err := FeedList(FeedPageOpt(page))
 		if err != nil {
+			if errors.Is(err, ErrVerifyRequired) {
+				notifyBilibiliLoginExpired()
+			}
 			logger.Errorf("freshLive FeedList error %v", err)
 			return nil, err
 		} else if resp.GetCode() != 0 {
-			if resp.GetCode() == -101 && strings.Contains(resp.GetMessage(), "未登录") {
+			if isBilibiliLoginInvalidResponse(resp.GetCode(), resp.GetMessage()) {
+				notifyBilibiliLoginExpired()
 				logger.Errorf("刷新直播列表失败，可能是cookie失效，将尝试重新获取cookie")
 				ClearCookieInfo(username)
 				atomicVerifyInfo.Store(new(VerifyInfo))
