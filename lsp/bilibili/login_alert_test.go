@@ -31,45 +31,142 @@ func TestIsBilibiliLoginInvalidResponse(t *testing.T) {
 }
 
 func TestNotifyBilibiliLoginExpiredOnlyOnceAfterSuccess(t *testing.T) {
-	setBilibiliLoginAlertSenderForTest(t, func() bool { return true })
+	var calls int
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+		calls++
+		return true
+	})
 
-	notifyBilibiliLoginExpired()
-	notifyBilibiliLoginExpired()
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
 
-	assert.True(t, bilibiliLoginAlertSent.Load())
-	assert.Equal(t, 1, bilibiliLoginAlertSendCount)
+	assert.Equal(t, 1, calls)
 }
 
 func TestNotifyBilibiliLoginExpiredOnlyOnceWhenConcurrent(t *testing.T) {
 	var calls atomic.Int32
-	setBilibiliLoginAlertSenderForTest(t, func() bool {
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
 		calls.Add(1)
 		return true
 	})
 
 	var waitGroup sync.WaitGroup
 	for range 20 {
-		waitGroup.Go(notifyBilibiliLoginExpired)
+		waitGroup.Go(func() {
+			notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+		})
 	}
 	waitGroup.Wait()
 
 	assert.EqualValues(t, 1, calls.Load())
 }
 
-func TestNotifyBilibiliLoginExpiredRetriesAfterFailure(t *testing.T) {
-	attempt := 0
-	setBilibiliLoginAlertSenderForTest(t, func() bool {
-		attempt++
-		return attempt > 1
+func TestNotifyBilibiliLoginExpiredRetriesOnlyFailedAdmins(t *testing.T) {
+	calls := make(map[int64]int)
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1, 2}, func(qq int64) bool {
+		calls[qq]++
+		return qq == 1 || calls[qq] > 1
 	})
 
-	notifyBilibiliLoginExpired()
-	assert.False(t, bilibiliLoginAlertSent.Load())
-	notifyBilibiliLoginExpired()
-	notifyBilibiliLoginExpired()
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
 
-	assert.True(t, bilibiliLoginAlertSent.Load())
-	assert.Equal(t, 2, bilibiliLoginAlertSendCount)
+	assert.Equal(t, 1, calls[1])
+	assert.Equal(t, 2, calls[2])
+}
+
+func TestNotifyBilibiliLoginExpiredRetriesAfterBotRecovery(t *testing.T) {
+	var calls int
+	ready := false
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+		calls++
+		return true
+	})
+	bilibiliLoginAlertBotReady = func() bool { return ready }
+
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	assert.Equal(t, 0, calls)
+
+	ready = true
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	assert.Equal(t, 1, calls)
+}
+
+func TestBilibiliLoginAlertResetsAfterSameInterfaceRecovery(t *testing.T) {
+	for _, source := range []bilibiliLoginAlertSource{
+		bilibiliLoginSourceDynamic,
+		bilibiliLoginSourceLive,
+	} {
+		t.Run(sourceName(source), func(t *testing.T) {
+			var calls int
+			setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+				calls++
+				return true
+			})
+
+			notifyBilibiliLoginExpired(source)
+			notifyBilibiliLoginExpired(source)
+			assert.Equal(t, 1, calls)
+
+			markBilibiliLoginRecovered(source)
+			notifyBilibiliLoginExpired(source)
+			assert.Equal(t, 2, calls)
+		})
+	}
+}
+
+func TestBilibiliLoginAlertSelfCheckWaitsForRoutineInterfaces(t *testing.T) {
+	var calls int
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+		calls++
+		return true
+	})
+
+	notifyBilibiliLoginExpired(bilibiliLoginSourceSelf)
+	markBilibiliLoginRecovered(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
+	assert.Equal(t, 1, calls)
+
+	markBilibiliLoginRecovered(bilibiliLoginSourceLive)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	assert.Equal(t, 2, calls)
+}
+
+func TestBilibiliLoginAlertSelfCheckRecoveryResetsAllInterfaces(t *testing.T) {
+	var calls int
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+		calls++
+		return true
+	})
+
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
+	markBilibiliLoginRecovered(bilibiliLoginSourceSelf)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+
+	assert.Equal(t, 2, calls)
+}
+
+func TestBilibiliLoginAlertWaitsForAllFailedInterfacesToRecover(t *testing.T) {
+	var calls int
+	setBilibiliLoginAlertDependenciesForTest(t, []int64{1}, func(int64) bool {
+		calls++
+		return true
+	})
+
+	notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
+	assert.Equal(t, 1, calls)
+
+	markBilibiliLoginRecovered(bilibiliLoginSourceDynamic)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
+	assert.Equal(t, 1, calls)
+
+	markBilibiliLoginRecovered(bilibiliLoginSourceLive)
+	notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
+	assert.Equal(t, 2, calls)
 }
 
 func TestBilibiliLoginExpiredAlertMessage(t *testing.T) {
@@ -82,20 +179,36 @@ func TestBilibiliLoginExpiredAlertMessage(t *testing.T) {
 	assert.Contains(t, text, "bilibili.QRLogin")
 }
 
-var bilibiliLoginAlertSendCount int
-
-func setBilibiliLoginAlertSenderForTest(t *testing.T, sender func() bool) {
+func setBilibiliLoginAlertDependenciesForTest(t *testing.T, admins []int64, sender func(int64) bool) {
 	t.Helper()
-	originalSender := sendBilibiliLoginAlert
-	bilibiliLoginAlertSendCount = 0
-	bilibiliLoginAlertSent.Store(false)
-	sendBilibiliLoginAlert = func() bool {
-		bilibiliLoginAlertSendCount++
-		return sender()
+	originalListAdmins := listBilibiliLoginAlertAdmins
+	originalBotReady := bilibiliLoginAlertBotReady
+	originalSender := sendBilibiliLoginAlertToAdmin
+
+	bilibiliLoginAlertState.reset()
+	bilibiliLoginAlertSending.Store(false)
+	listBilibiliLoginAlertAdmins = func() []int64 {
+		return append([]int64(nil), admins...)
 	}
+	bilibiliLoginAlertBotReady = func() bool { return true }
+	sendBilibiliLoginAlertToAdmin = sender
+
 	t.Cleanup(func() {
-		sendBilibiliLoginAlert = originalSender
-		bilibiliLoginAlertSent.Store(false)
-		bilibiliLoginAlertSendCount = 0
+		listBilibiliLoginAlertAdmins = originalListAdmins
+		bilibiliLoginAlertBotReady = originalBotReady
+		sendBilibiliLoginAlertToAdmin = originalSender
+		bilibiliLoginAlertState.reset()
+		bilibiliLoginAlertSending.Store(false)
 	})
+}
+
+func sourceName(source bilibiliLoginAlertSource) string {
+	switch source {
+	case bilibiliLoginSourceDynamic:
+		return "dynamic"
+	case bilibiliLoginSourceLive:
+		return "live"
+	default:
+		return "self"
+	}
 }
