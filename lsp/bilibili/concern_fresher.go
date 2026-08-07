@@ -3,6 +3,7 @@ package bilibili
 import (
 	"context"
 	"fmt"
+	"github.com/Sora233/MiraiGo-Template/bot"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
@@ -37,6 +38,12 @@ func (c *Concern) fresh() concern.FreshFunc {
 			case <-t.C:
 			case <-ctx.Done():
 				return
+			}
+			if bot.Instance == nil || bot.Instance.Messenger == nil || bot.Instance.Adapter == nil ||
+				!bot.Instance.Messenger.Online.Load() || !bot.Instance.Adapter.IsConnected() {
+				logger.Debug("BOT未连接，延迟B站订阅轮询")
+				t.Reset(time.Second)
+				continue
 			}
 			start := time.Now()
 			var errGroup errgroup.Group

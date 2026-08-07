@@ -1,7 +1,9 @@
 package adapter
 
 import (
+	"errors"
 	"fmt"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/stretchr/testify/assert"
 	"strings"
 	"sync"
@@ -57,6 +59,40 @@ func (m *mockAdapter) SendGroupMessage(groupID int64, message interface{}) (int3
 }
 func (m *mockAdapter) SendPrivateMessage(userID int64, message interface{}) (int32, error) {
 	return 1, nil
+}
+
+type retryMockAdapter struct {
+	*mockAdapter
+	mu             sync.Mutex
+	groupErrors    []error
+	groupSendCount int
+}
+
+func newRetryMockAdapter(groupErrors ...error) *retryMockAdapter {
+	return &retryMockAdapter{
+		mockAdapter: newMockAdapter(),
+		groupErrors: groupErrors,
+	}
+}
+
+func (m *retryMockAdapter) SendGroupMessage(groupID int64, message interface{}) (int32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupSendCount++
+	if len(m.groupErrors) > 0 {
+		err := m.groupErrors[0]
+		m.groupErrors = m.groupErrors[1:]
+		if err != nil {
+			return 0, err
+		}
+	}
+	return int32(m.groupSendCount), nil
+}
+
+func (m *retryMockAdapter) sendCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.groupSendCount
 }
 func (m *mockAdapter) SendGroupForwardMessage(groupID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error) {
 	return 1, "", nil
@@ -923,6 +959,76 @@ func TestMessengerHandleRequestEvent_GroupInvited(t *testing.T) {
 	req := dispatcher.getGroupInvited()
 	assert.NotNil(t, req, "GroupInvitedRequest should be dispatched")
 	assert.Equal(t, "test_group_invite_flag_xyz789", req.Flag, "flag should match event.Flag")
+}
+
+func TestOfflineQueue_RetriesFailedGroupMessage(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	oldDelay := offlineQueueRetryDelay
+	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
+	offlineQueueRetryDelay = 10 * time.Millisecond
+	defer func() {
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
+		offlineQueueRetryDelay = oldDelay
+	}()
+
+	mock := newRetryMockAdapter(errors.New("timeout"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "retry me"})
+	resp := messenger.SendGroupMessage(545402644, msg, "retry me")
+
+	assert.Error(t, resp.Error)
+	assert.Equal(t, int64(-1), resp.RetMSG.ID)
+	assert.Eventually(t, func() bool {
+		return mock.sendCount() == 2 && len(messenger.loadOfflineMsgs()) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestOfflineQueue_FlushRetainsFailedMessages(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	oldDelay := offlineQueueRetryDelay
+	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
+	offlineQueueRetryDelay = time.Hour
+	defer func() {
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
+		offlineQueueRetryDelay = oldDelay
+	}()
+
+	mock := newRetryMockAdapter(errors.New("not connected"), errors.New("timeout"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "keep me"})
+	messenger.SendGroupMessage(545402644, msg, "keep me")
+	assert.Len(t, messenger.loadOfflineMsgs(), 1)
+
+	messenger.flushOfflineQueue()
+	assert.Len(t, messenger.loadOfflineMsgs(), 1)
+	assert.Equal(t, 2, mock.sendCount())
+}
+
+func TestOfflineQueue_MaxSizeDropsOnlyOldest(t *testing.T) {
+	messenger, _, _ := setupTestMessenger(t)
+	defer messenger.Stop()
+
+	for i := 0; i < offlineQueueMaxSize+1; i++ {
+		messenger.saveOfflineMsg(offlineQueueMsg{
+			TargetId:   int64(i),
+			TargetType: "group",
+			Message:    &SendingMessage{},
+			CreatedAt:  time.Now(),
+		})
+	}
+
+	msgs := messenger.loadOfflineMsgs()
+	assert.Len(t, msgs, offlineQueueMaxSize)
+	assert.Equal(t, int64(1), msgs[0].TargetId)
+	assert.Equal(t, int64(offlineQueueMaxSize), msgs[len(msgs)-1].TargetId)
 }
 
 // TestOfflineQueue_SaveAndLoad tests saving and loading offline messages.

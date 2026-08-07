@@ -50,7 +50,11 @@ const (
 	// 消息分片限制
 	MaxTextLength = 4500 // 文本最大长度
 	MaxImageCount = 20   // 图片最大数量
+
+	offlineQueueMaxSize = 100
 )
+
+var offlineQueueRetryDelay = 5 * time.Second
 
 type SendResp struct {
 	RetMSG *GroupMessage
@@ -90,8 +94,10 @@ type Messenger struct {
 	privateSendCount atomic.Int64
 
 	// 离线消息队列
-	offlineQueue   []offlineQueueMsg
-	offlineQueueMu sync.Mutex
+	offlineQueue          []offlineQueueMsg
+	offlineQueueMu        sync.Mutex
+	offlineQueueFlushMu   sync.Mutex
+	offlineFlushScheduled atomic.Bool
 }
 
 func NewMessenger(adapter Adapter) *Messenger {
@@ -146,8 +152,11 @@ func (m *Messenger) registerEventHandlers() {
 	m.Adapter.OnMetaEvent(func(event *MetaEvent) {
 		if event.MetaEventType == "lifecycle" {
 			m.Uin = event.SelfID
-			m.Online.Store(true)
+			wasOnline := m.Online.Swap(true)
 			messengerLogger.Infof("Bot online: %d", m.Uin)
+			if !wasOnline && getOfflineQueueEnable() {
+				go m.flushOfflineQueue()
+			}
 			// Lifecycle事件触发时立即刷新好友、群组、群员信息
 			go func() {
 				if err := m.RefreshList(); err != nil {
@@ -199,15 +208,9 @@ func (m *Messenger) GetSelfID() int64 {
 
 func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newstr string) SendResp {
 	// 检查离线队列条件
-	if getOfflineQueueEnable() && !m.Online.Load() {
+	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", sliceMessage(newstr))
-		m.saveOfflineMsg(offlineQueueMsg{
-			TargetId:   groupCode,
-			TargetType: "group",
-			Message:    msg,
-			NewStr:     newstr,
-			CreatedAt:  time.Now(),
-		})
+		m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", msg, newstr))
 		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: nil}
 	}
 
@@ -239,6 +242,10 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 		m.groupSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+			if getOfflineQueueEnable() {
+				m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", chunkMsg, newstr))
+				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
+			}
 			lastResult = SendResp{
 				RetMSG: &GroupMessage{ID: -1},
 				Error:  err,
@@ -264,15 +271,9 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 
 func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr string) *PrivateMessage {
 	// 检查离线队列条件
-	if getOfflineQueueEnable() && !m.Online.Load() {
+	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存私聊消息: %s", sliceMessage(newstr))
-		m.saveOfflineMsg(offlineQueueMsg{
-			TargetId:   target,
-			TargetType: "private",
-			Message:    msg,
-			NewStr:     newstr,
-			CreatedAt:  time.Now(),
-		})
+		m.saveOfflineMsg(newOfflineQueueMsg(target, "private", msg, newstr))
 		return &PrivateMessage{ID: -1}
 	}
 
@@ -305,6 +306,10 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		m.privateSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+			if getOfflineQueueEnable() {
+				m.saveOfflineMsg(newOfflineQueueMsg(target, "private", chunkMsg, newstr))
+				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
+			}
 		} else {
 			lastMsgID = msgID
 		}
@@ -1562,6 +1567,16 @@ func (m *Messenger) GetFileUrl(groupCode int64, fileId string) string {
 
 // offlineQueue 相关方法
 
+func newOfflineQueueMsg(targetID int64, targetType string, msg *SendingMessage, newStr string) offlineQueueMsg {
+	return offlineQueueMsg{
+		TargetId:   targetID,
+		TargetType: targetType,
+		Message:    msg,
+		NewStr:     newStr,
+		CreatedAt:  time.Now(),
+	}
+}
+
 func getOfflineQueueEnable() bool {
 	return config.GlobalConfig.GetBool("bot.offlineQueue.enable")
 }
@@ -1582,8 +1597,8 @@ func getOfflineQueueExpire() time.Duration {
 func (m *Messenger) saveOfflineMsg(msg offlineQueueMsg) {
 	m.offlineQueueMu.Lock()
 	defer m.offlineQueueMu.Unlock()
-	if len(m.offlineQueue) > 0 && cap(m.offlineQueue) >= 100 {
-		messengerLogger.Warnf("离线队列已满(%d)，丢弃最旧消息", cap(m.offlineQueue))
+	if len(m.offlineQueue) >= offlineQueueMaxSize {
+		messengerLogger.Warnf("离线队列已满(%d)，丢弃最旧消息", offlineQueueMaxSize)
 		m.offlineQueue = m.offlineQueue[1:]
 	}
 	m.offlineQueue = append(m.offlineQueue, msg)
@@ -1597,21 +1612,53 @@ func (m *Messenger) loadOfflineMsgs() []offlineQueueMsg {
 	return result
 }
 
-func (m *Messenger) clearOfflineMsgs() {
+func (m *Messenger) takeOfflineMsgs() []offlineQueueMsg {
 	m.offlineQueueMu.Lock()
 	defer m.offlineQueueMu.Unlock()
-	m.offlineQueue = make([]offlineQueueMsg, 0, 100)
+	result := m.offlineQueue
+	m.offlineQueue = make([]offlineQueueMsg, 0, offlineQueueMaxSize)
+	return result
+}
+
+func (m *Messenger) clearOfflineMsgs() {
+	m.takeOfflineMsgs()
+}
+
+func (m *Messenger) isConnected() bool {
+	return m.Online.Load() && m.Adapter != nil && m.Adapter.IsConnected()
+}
+
+func (m *Messenger) scheduleOfflineQueueFlush(delay time.Duration) {
+	if !getOfflineQueueEnable() || !m.offlineFlushScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(delay, func() {
+		m.offlineFlushScheduled.Store(false)
+		if m.isConnected() {
+			m.flushOfflineQueue()
+		}
+	})
 }
 
 func (m *Messenger) flushOfflineQueue() {
 	if !getOfflineQueueEnable() {
 		return
 	}
-	msgs := m.loadOfflineMsgs()
+	m.offlineQueueFlushMu.Lock()
+	defer m.offlineQueueFlushMu.Unlock()
+
+	if !m.isConnected() {
+		return
+	}
+	msgs := m.takeOfflineMsgs()
+	if len(msgs) == 0 {
+		return
+	}
 	expire := getOfflineQueueExpire()
 	now := time.Now()
 	messengerLogger.Infof("BOT已上线，开始重发缓存的 %d 条离线消息", len(msgs))
 
+	failed := 0
 	for _, msg := range msgs {
 		if now.Sub(msg.CreatedAt) <= expire {
 			messages := m.buildMessageSegments(msg.Message)
@@ -1620,6 +1667,8 @@ func (m *Messenger) flushOfflineQueue() {
 				msgID, err := m.Adapter.SendGroupMessage(msg.TargetId, messages)
 				if err != nil {
 					messengerLogger.Errorf("重发离线群消息失败: %v", err)
+					m.saveOfflineMsg(msg)
+					failed++
 				} else {
 					messengerLogger.Debugf("离线群消息重发成功: group=%d, msgID=%d", msg.TargetId, msgID)
 				}
@@ -1627,6 +1676,8 @@ func (m *Messenger) flushOfflineQueue() {
 				msgID, err := m.Adapter.SendPrivateMessage(msg.TargetId, messages)
 				if err != nil {
 					messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
+					m.saveOfflineMsg(msg)
+					failed++
 				} else {
 					messengerLogger.Debugf("离线私聊消息重发成功: user=%d, msgID=%d", msg.TargetId, msgID)
 				}
@@ -1637,7 +1688,9 @@ func (m *Messenger) flushOfflineQueue() {
 			messengerLogger.Infof("丢弃过期离线消息: %s", msg.NewStr)
 		}
 	}
-	m.clearOfflineMsgs()
+	if failed > 0 {
+		m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
+	}
 }
 
 func sliceMessage(str string) string {
