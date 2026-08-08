@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -16,6 +17,10 @@ import (
 )
 
 var wsLogger = logrus.WithField("module", "wsclient")
+
+// ErrRequestTimeout means the request was written, but its result did not
+// arrive in time. Callers must not assume that the remote side did not act.
+var ErrRequestTimeout = errors.New("timeout")
 
 // isDebugLoggingEnabled 检查当前是否启用 debug 级别日志，用于热路径中避免调用 runtime.Caller
 func isDebugLoggingEnabled() bool {
@@ -52,8 +57,8 @@ const (
 	// 动态写入超时计算参数（参考 NapCat/LLOneBot 实现）
 	// 公式: baseTimeout + (dataSizeBytes / 1024 / speedKBps * 1000)
 	writeWaitBase    = 10 * time.Second // 基础超时 10s
-	writeWaitSpeedKB = 256             // 假设传输速率 256 KB/s（与 NapCat 一致）
-	writeWaitMax      = 30 * time.Minute // 最大超时 30min（与 NapCat 一致）
+	writeWaitSpeedKB = 256              // 假设传输速率 256 KB/s（与 NapCat 一致）
+	writeWaitMax     = 30 * time.Minute // 最大超时 30min（与 NapCat 一致）
 )
 
 type WSResponse struct {
@@ -593,7 +598,7 @@ func (c *WSClient) SendAndWait(action string, params map[string]any, timeout tim
 		}
 		return resp, fmt.Errorf("api error: %s", resp.Message)
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("timeout")
+		return nil, ErrRequestTimeout
 	}
 }
 

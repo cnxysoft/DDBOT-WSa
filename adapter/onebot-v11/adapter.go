@@ -46,6 +46,12 @@ func containsURI(params map[string]interface{}) bool {
 	case string:
 		// CQ码字符串可能包含 URI，但检测复杂，保守处理
 		return false
+	case []adapter.MessageSegment:
+		for _, segment := range m {
+			if segmentContainsURI(segment.Type, segment.Data) {
+				return true
+			}
+		}
 	case []interface{}:
 		for _, seg := range m {
 			segment, ok := seg.(map[string]interface{})
@@ -54,19 +60,21 @@ func containsURI(params map[string]interface{}) bool {
 			}
 			segType, _ := segment["type"].(string)
 			data, _ := segment["data"].(map[string]interface{})
-
-			switch segType {
-			case "image", "video", "record", "file":
-				// 检查 url 或 file 字段是否包含 URI
-				if uri := getSegmentURI(data); uri != "" {
-					if isRemoteURI(uri) {
-						return true
-					}
-				}
+			if segmentContainsURI(segType, data) {
+				return true
 			}
 		}
 	}
 	return false
+}
+
+func segmentContainsURI(segmentType string, data map[string]interface{}) bool {
+	switch segmentType {
+	case "image", "video", "record", "file":
+		return isRemoteURI(getSegmentURI(data))
+	default:
+		return false
+	}
 }
 
 // getSegmentURI 从 segment data 中获取 URI

@@ -971,7 +971,7 @@ func TestOfflineQueue_RetriesFailedGroupMessage(t *testing.T) {
 		offlineQueueRetryDelay = oldDelay
 	}()
 
-	mock := newRetryMockAdapter(errors.New("timeout"))
+	mock := newRetryMockAdapter(errors.New("not connected"))
 	messenger := NewMessenger(mock)
 	defer messenger.Stop()
 	messenger.Online.Store(true)
@@ -987,17 +987,42 @@ func TestOfflineQueue_RetriesFailedGroupMessage(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestOfflineQueue_FlushRetainsFailedMessages(t *testing.T) {
+func TestOfflineQueue_DoesNotRetryTimedOutGroupMessage(t *testing.T) {
 	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
 	oldDelay := offlineQueueRetryDelay
 	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
-	offlineQueueRetryDelay = time.Hour
+	offlineQueueRetryDelay = 10 * time.Millisecond
 	defer func() {
 		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
 		offlineQueueRetryDelay = oldDelay
 	}()
 
-	mock := newRetryMockAdapter(errors.New("not connected"), errors.New("timeout"))
+	mock := newRetryMockAdapter(ErrRequestTimeout)
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "unknown result"})
+	resp := messenger.SendGroupMessage(545402644, msg, "unknown result")
+
+	assert.ErrorIs(t, resp.Error, ErrRequestTimeout)
+	assert.Empty(t, messenger.loadOfflineMsgs())
+	time.Sleep(3 * offlineQueueRetryDelay)
+	assert.Equal(t, 1, mock.sendCount())
+}
+
+func TestOfflineQueue_FlushDropsTimedOutMessages(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	oldDelay := offlineQueueRetryDelay
+	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
+	offlineQueueRetryDelay = 10 * time.Millisecond
+	defer func() {
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
+		offlineQueueRetryDelay = oldDelay
+	}()
+
+	mock := newRetryMockAdapter(errors.New("not connected"), ErrRequestTimeout)
 	messenger := NewMessenger(mock)
 	defer messenger.Stop()
 	messenger.Online.Store(true)
@@ -1008,7 +1033,9 @@ func TestOfflineQueue_FlushRetainsFailedMessages(t *testing.T) {
 	assert.Len(t, messenger.loadOfflineMsgs(), 1)
 
 	messenger.flushOfflineQueue()
-	assert.Len(t, messenger.loadOfflineMsgs(), 1)
+	assert.Empty(t, messenger.loadOfflineMsgs())
+	assert.Equal(t, 2, mock.sendCount())
+	time.Sleep(3 * offlineQueueRetryDelay)
 	assert.Equal(t, 2, mock.sendCount())
 }
 

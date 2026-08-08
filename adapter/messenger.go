@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
@@ -242,7 +243,9 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 		m.groupSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
-			if getOfflineQueueEnable() {
+			if errors.Is(err, ErrRequestTimeout) {
+				messengerLogger.Warnf("群消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
+			} else if getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
 			}
@@ -306,7 +309,9 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		m.privateSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
-			if getOfflineQueueEnable() {
+			if errors.Is(err, ErrRequestTimeout) {
+				messengerLogger.Warnf("私聊消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
+			} else if getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(target, "private", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
 			}
@@ -1666,18 +1671,26 @@ func (m *Messenger) flushOfflineQueue() {
 			case "group":
 				msgID, err := m.Adapter.SendGroupMessage(msg.TargetId, messages)
 				if err != nil {
-					messengerLogger.Errorf("重发离线群消息失败: %v", err)
-					m.saveOfflineMsg(msg)
-					failed++
+					if errors.Is(err, ErrRequestTimeout) {
+						messengerLogger.Warnf("重发离线群消息超时，发送结果未知，不再重试: group=%d", msg.TargetId)
+					} else {
+						messengerLogger.Errorf("重发离线群消息失败: %v", err)
+						m.saveOfflineMsg(msg)
+						failed++
+					}
 				} else {
 					messengerLogger.Debugf("离线群消息重发成功: group=%d, msgID=%d", msg.TargetId, msgID)
 				}
 			case "private":
 				msgID, err := m.Adapter.SendPrivateMessage(msg.TargetId, messages)
 				if err != nil {
-					messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
-					m.saveOfflineMsg(msg)
-					failed++
+					if errors.Is(err, ErrRequestTimeout) {
+						messengerLogger.Warnf("重发离线私聊消息超时，发送结果未知，不再重试: user=%d", msg.TargetId)
+					} else {
+						messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
+						m.saveOfflineMsg(msg)
+						failed++
+					}
 				} else {
 					messengerLogger.Debugf("离线私聊消息重发成功: user=%d, msgID=%d", msg.TargetId, msgID)
 				}
