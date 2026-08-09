@@ -18,9 +18,16 @@ import (
 
 var wsLogger = logrus.WithField("module", "wsclient")
 
-// ErrRequestTimeout means the request was written, but its result did not
-// arrive in time. Callers must not assume that the remote side did not act.
-var ErrRequestTimeout = errors.New("timeout")
+var (
+	// ErrRequestNotSent 表示请求在写入WebSocket前失败，可以安全重试。
+	ErrRequestNotSent = errors.New("request not sent")
+	// ErrRequestResultUnknown 表示请求可能已被OneBot处理，自动重试可能造成重复消息。
+	ErrRequestResultUnknown = errors.New("request result unknown")
+	// ErrRequestRejected 表示OneBot已明确拒绝请求，继续重试没有意义。
+	ErrRequestRejected = errors.New("request rejected")
+	// ErrRequestTimeout 保留旧名称兼容调用方；超时属于发送结果未知。
+	ErrRequestTimeout = ErrRequestResultUnknown
+)
 
 // isDebugLoggingEnabled 检查当前是否启用 debug 级别日志，用于热路径中避免调用 runtime.Caller
 func isDebugLoggingEnabled() bool {
@@ -583,7 +590,7 @@ func (c *WSClient) SendAndWait(action string, params map[string]any, timeout tim
 	req := map[string]any{"action": action, "params": params, "echo": echo}
 	data, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: encode request: %v", ErrRequestRejected, err)
 	}
 	if err := c.SendRawData(data); err != nil {
 		return nil, err
@@ -591,14 +598,21 @@ func (c *WSClient) SendAndWait(action string, params map[string]any, timeout tim
 	select {
 	case resp, ok := <-ch:
 		if !ok {
-			return nil, fmt.Errorf("connection closed")
+			return nil, fmt.Errorf("%w: connection closed while waiting for echo", ErrRequestResultUnknown)
 		}
-		if resp.Status == "ok" || resp.Retcode == 0 {
+		if resp.Status == "ok" || (resp.Status == "" && resp.Retcode == 0) {
 			return resp, nil
 		}
-		return resp, fmt.Errorf("api error: %s", resp.Message)
+		reason := resp.Message
+		if reason == "" {
+			reason = resp.Msg
+		}
+		if reason == "" {
+			reason = resp.Wording
+		}
+		return resp, fmt.Errorf("%w: retcode=%d message=%s", ErrRequestRejected, resp.Retcode, reason)
 	case <-time.After(timeout):
-		return nil, ErrRequestTimeout
+		return nil, fmt.Errorf("%w: timeout waiting for echo", ErrRequestResultUnknown)
 	}
 }
 
@@ -613,7 +627,11 @@ func (c *WSClient) SendRawData(data []byte) error {
 		wsLogger.Debugf("<<< mu.RUnlock() #%d  caller=%s  [SendRawData]", nextLockSeq(), getCallerFuncName(2))
 	}
 	if conn == nil {
-		return fmt.Errorf("not connected")
+		return fmt.Errorf("%w: not connected", ErrRequestNotSent)
 	}
-	return c.writeRaw(conn, websocket.TextMessage, data)
+	if err := c.writeRaw(conn, websocket.TextMessage, data); err != nil {
+		// WriteMessage可能已写入部分或全部数据，不能安全地假设远端未处理。
+		return fmt.Errorf("%w: websocket write failed: %v", ErrRequestResultUnknown, err)
+	}
+	return nil
 }

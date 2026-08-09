@@ -159,6 +159,7 @@ func TestWSClient_SendRawData_NotConnected(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeReverse, "ws://localhost:8080")
 	err := c.SendRawData([]byte("test"))
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrRequestNotSent)
 	assert.Contains(t, err.Error(), "not connected")
 }
 
@@ -168,6 +169,7 @@ func TestWSClient_SendAndWait_NotConnected(t *testing.T) {
 	resp, err := c.SendAndWait("test_action", nil, 1*time.Second)
 	assert.Nil(t, resp)
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrRequestNotSent)
 }
 
 // Test SendAndWait timeout - SendRawData fails first without connection
@@ -1407,6 +1409,7 @@ func TestSendAndWaitTimeout(t *testing.T) {
 	// 发送一个会超时的请求
 	_, err = c.SendAndWait("test_action", nil, 1*time.Second)
 	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrRequestResultUnknown)
 
 	// 等待清理
 	time.Sleep(500 * time.Millisecond)
@@ -1416,6 +1419,64 @@ func TestSendAndWaitTimeout(t *testing.T) {
 
 	// 验证没有 goroutine 泄漏
 	assert.Less(t, finalGoroutines, initialGoroutines+10, "goroutine leak after timeout")
+}
+
+func TestSendAndWaitConnectionClosedAfterWriteIsResultUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		require.NoError(t, err)
+		// 已收到请求但不返回echo，直接断开连接。
+	}))
+	defer server.Close()
+
+	c := NewWSClient("onebot-v11", WSModeReverse, "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, c.Start())
+	defer c.Stop()
+	require.Eventually(t, c.IsConnected, time.Second, 10*time.Millisecond)
+
+	resp, err := c.SendAndWait("send_group_msg", map[string]any{"message": "test"}, time.Second)
+
+	assert.Nil(t, resp)
+	assert.ErrorIs(t, err, ErrRequestResultUnknown)
+	assert.NotErrorIs(t, err, ErrRequestNotSent)
+}
+
+func TestSendAndWaitExplicitOneBotFailureIsRejected(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		_, data, err := conn.ReadMessage()
+		require.NoError(t, err)
+		var req map[string]any
+		require.NoError(t, json.Unmarshal(data, &req))
+		response, err := json.Marshal(map[string]any{
+			"status":  "failed",
+			"retcode": 1200,
+			"message": "bot muted",
+			"echo":    req["echo"],
+		})
+		require.NoError(t, err)
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, response))
+		// 保持连接直到客户端读取并处理echo，避免测试服务器主动关闭制造额外竞争。
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	c := NewWSClient("onebot-v11", WSModeReverse, "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, c.Start())
+	defer c.Stop()
+	require.Eventually(t, c.IsConnected, time.Second, 10*time.Millisecond)
+
+	resp, err := c.SendAndWait("send_group_msg", map[string]any{"message": "test"}, time.Second)
+
+	assert.NotNil(t, resp)
+	assert.ErrorIs(t, err, ErrRequestRejected)
+	assert.Contains(t, err.Error(), "retcode=1200")
 }
 
 // TestManyConcurrentTimeouts 测试大量并发超时

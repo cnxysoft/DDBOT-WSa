@@ -37,5 +37,6 @@ func TestCalcSendTimeoutForTypedMessageSegments(t *testing.T) {
 	}})
 
 	assert.Equal(t, uriMessageTimeout, a.calcSendTimeout("send_group_msg", remoteImage))
+	assert.Less(t, uriMessageTimeout, time.Minute)
 	assert.Equal(t, defaultTimeout, a.calcSendTimeout("send_group_msg", plainText))
 }

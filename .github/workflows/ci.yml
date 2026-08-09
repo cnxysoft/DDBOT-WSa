@@ -42,6 +42,11 @@ jobs:
       - name: go vet
         run: |
           go vet ./...
+      - name: Run adapter module tests and vet
+        working-directory: adapter
+        run: |
+          go test ./...
+          go vet ./...
       - name: Generate HTML report
         run: go tool cover -html=profile.cov -o coverage.html
       - name: Upload as coverage

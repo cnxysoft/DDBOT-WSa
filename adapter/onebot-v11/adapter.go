@@ -14,9 +14,9 @@ import (
 
 var logger = logrus.WithField("adapter", "onebot-v11")
 
-// URI 消息超时时间（NapCat/LLOneBot 需要先下载 URI 文件再上传）
-// 使用与 wsclient 一致的最大值，确保足够长
-const uriMessageTimeout = 30 * time.Minute
+// URI消息超时时间。NapCat/LLOneBot需要先下载远程文件，但不能长期占用默认仅1路的推送并发。
+// 45秒既高于默认API超时，也能保证后续推送在1分钟排队上限内获得执行机会。
+const uriMessageTimeout = 45 * time.Second
 
 type OneBotAdapter struct {
 	config   *adapter.AdapterConfig

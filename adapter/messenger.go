@@ -212,6 +212,7 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", sliceMessage(newstr))
 		m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", msg, newstr))
+		m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
 		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: nil}
 	}
 
@@ -243,8 +244,10 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 		m.groupSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
-			if errors.Is(err, ErrRequestTimeout) {
+			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("群消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
+			} else if errors.Is(err, ErrRequestRejected) {
+				messengerLogger.Warnf("群消息被OneBot明确拒绝，不再自动重试 (chunk %d/%d)", i+1, len(chunks))
 			} else if getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
@@ -277,6 +280,7 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存私聊消息: %s", sliceMessage(newstr))
 		m.saveOfflineMsg(newOfflineQueueMsg(target, "private", msg, newstr))
+		m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
 		return &PrivateMessage{ID: -1}
 	}
 
@@ -309,8 +313,10 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		m.privateSendCount.Add(1)
 		if err != nil {
 			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
-			if errors.Is(err, ErrRequestTimeout) {
+			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("私聊消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
+			} else if errors.Is(err, ErrRequestRejected) {
+				messengerLogger.Warnf("私聊消息被OneBot明确拒绝，不再自动重试 (chunk %d/%d)", i+1, len(chunks))
 			} else if getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(target, "private", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
@@ -1639,8 +1645,16 @@ func (m *Messenger) scheduleOfflineQueueFlush(delay time.Duration) {
 	}
 	time.AfterFunc(delay, func() {
 		m.offlineFlushScheduled.Store(false)
+		select {
+		case <-m.stopChan:
+			return
+		default:
+		}
 		if m.isConnected() {
 			m.flushOfflineQueue()
+		} else if len(m.loadOfflineMsgs()) > 0 {
+			// 定时器触发时仍断线也要继续等待，避免稍后重连后消息永久滞留。
+			m.scheduleOfflineQueueFlush(delay)
 		}
 	})
 }
@@ -1671,8 +1685,10 @@ func (m *Messenger) flushOfflineQueue() {
 			case "group":
 				msgID, err := m.Adapter.SendGroupMessage(msg.TargetId, messages)
 				if err != nil {
-					if errors.Is(err, ErrRequestTimeout) {
+					if errors.Is(err, ErrRequestResultUnknown) {
 						messengerLogger.Warnf("重发离线群消息超时，发送结果未知，不再重试: group=%d", msg.TargetId)
+					} else if errors.Is(err, ErrRequestRejected) {
+						messengerLogger.Warnf("重发离线群消息被OneBot明确拒绝，不再重试: group=%d", msg.TargetId)
 					} else {
 						messengerLogger.Errorf("重发离线群消息失败: %v", err)
 						m.saveOfflineMsg(msg)
@@ -1684,8 +1700,10 @@ func (m *Messenger) flushOfflineQueue() {
 			case "private":
 				msgID, err := m.Adapter.SendPrivateMessage(msg.TargetId, messages)
 				if err != nil {
-					if errors.Is(err, ErrRequestTimeout) {
+					if errors.Is(err, ErrRequestResultUnknown) {
 						messengerLogger.Warnf("重发离线私聊消息超时，发送结果未知，不再重试: user=%d", msg.TargetId)
+					} else if errors.Is(err, ErrRequestRejected) {
+						messengerLogger.Warnf("重发离线私聊消息被OneBot明确拒绝，不再重试: user=%d", msg.TargetId)
 					} else {
 						messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
 						m.saveOfflineMsg(msg)
