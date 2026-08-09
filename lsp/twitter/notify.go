@@ -81,6 +81,53 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	return n.GetMSG(n)
 }
 
+// TextFilterContent 返回模板中的动态文字，供 text/not_text 规则匹配。
+// 这里不调用 ToMessage，避免在 NotifyBeforeCallback 设置紧凑状态前缓存模板渲染结果。
+func (n *ConcernNewsNotify) TextFilterContent() string {
+	if n == nil || n.NewsInfo == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, 12)
+	appendText := func(values ...string) {
+		for _, value := range values {
+			if value != "" {
+				parts = append(parts, value)
+			}
+		}
+	}
+
+	if n.UserInfo != nil {
+		appendText(n.UserInfo.Name, n.UserInfo.Id)
+	}
+	if n.Tweet == nil {
+		return strings.Join(parts, "\n")
+	}
+
+	tweet := n.Tweet
+	appendText(tweet.Content, tweet.Url)
+	createdAt := tweet.CreatedAt
+	if TwitterMode != ModeAPI && tweet.IsRetweet {
+		createdAt = time.Now().UTC()
+	}
+	if !createdAt.IsZero() {
+		appendText(CSTTime(createdAt).Format(time.DateTime))
+	}
+	if (tweet.IsRetweet || tweet.QuoteTweet != nil) && tweet.OrgUser != nil {
+		appendText(tweet.OrgUser.Name, tweet.OrgUser.ScreenName)
+	}
+	if quote := tweet.QuoteTweet; quote != nil {
+		appendText(quote.Content)
+		if !quote.CreatedAt.IsZero() {
+			appendText(CSTTime(quote.CreatedAt).Format(time.DateTime))
+		}
+		if quote.OrgUser != nil {
+			appendText(quote.OrgUser.Name, quote.OrgUser.ScreenName)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // buildTwitterDynamic 构建TwitterDynamic数据
 func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 	dynamic := TwitterDynamic{}

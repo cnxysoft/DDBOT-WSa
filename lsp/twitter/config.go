@@ -12,7 +12,7 @@ type GroupConcernConfig struct {
 	concern *twitterConcern
 }
 
-// FilterHook 保留通用正文过滤，避免Twitter包装层绕过text/not_text规则。
+// FilterHook 保留通用关键词过滤；ConcernNewsNotify会直接提供模板动态文字，避免提前渲染消息。
 func (g *GroupConcernConfig) FilterHook(notify concern.Notify) *concern.HookResult {
 	return g.IConfig.FilterHook(notify)
 }

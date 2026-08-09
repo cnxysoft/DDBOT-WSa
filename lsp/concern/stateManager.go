@@ -117,6 +117,12 @@ func (c *StateManager) getGroupConcernConfig(groupCode int64, id interface{}) (c
 	if concernConfig == nil {
 		concernConfig = new(GroupConcernConfig)
 	}
+	if err := concernConfig.GetGroupConcernFilter().ValidateTextConflict(); err != nil {
+		c.Logger().WithFields(localutils.GroupLogFields(groupCode)).
+			WithFields(logrus.Fields{"id": id, "error": err}).
+			Error("历史关键词过滤配置无效，本次加载已禁用全部过滤规则")
+		concernConfig.GetGroupConcernFilter().Clear()
+	}
 	return
 }
 

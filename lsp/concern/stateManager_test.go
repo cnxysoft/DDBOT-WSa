@@ -300,6 +300,52 @@ func TestStateManager_GroupConcernConfig(t *testing.T) {
 	assert.EqualValues(t, ErrConfigNotSupported, err)
 }
 
+func TestStateManagerDisablesInvalidPersistedTextFilter(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+
+	sm := newStateManager(t)
+	textRule := func(words ...string) string {
+		return (&GroupConcernFilterConfigByText{Text: words}).ToString()
+	}
+	tests := []struct {
+		name  string
+		id    int64
+		setup func(*GroupConcernFilterConfig)
+	}{
+		{
+			name: "空关键词",
+			id:   91001,
+			setup: func(filter *GroupConcernFilterConfig) {
+				filter.SetRule(FilterTypeText, textRule(""))
+			},
+		},
+		{
+			name: "关键词冲突",
+			id:   91002,
+			setup: func(filter *GroupConcernFilterConfig) {
+				filter.SetRule(FilterTypeText, textRule("原神"))
+				filter.SetRule(FilterTypeNotText, textRule("原神"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := new(GroupConcernConfig)
+			stored.GetGroupConcernNotify().TitleChangeNotify = testType
+			tt.setup(stored.GetGroupConcernFilter())
+			assert.NoError(t, sm.SetJson(sm.GroupConcernConfigKey(test.G1, tt.id), stored))
+
+			loaded := sm.GetGroupConcernConfig(test.G1, tt.id)
+
+			assert.True(t, loaded.GetGroupConcernFilter().Empty())
+			assert.Equal(t, testType, loaded.GetGroupConcernNotify().TitleChangeNotify)
+			assert.NoError(t, loaded.Validate())
+		})
+	}
+}
+
 func TestStateManager_CheckAndSetAtAllMark(t *testing.T) {
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)

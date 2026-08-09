@@ -50,7 +50,12 @@ func (g *GroupConcernConfig) FilterHook(notify Notify) *HookResult {
 	}
 	var combinedResult = new(HookResult)
 	combinedResult.Pass = true
-	msgString := msgstringer.AdapterMsgToString(notify.ToMessage().Elements())
+	var msgString string
+	if provider, ok := notify.(TextFilterContentProvider); ok {
+		msgString = provider.TextFilterContent()
+	} else {
+		msgString = msgstringer.AdapterMsgToString(notify.ToMessage().Elements())
+	}
 	logger := notify.Logger().WithField("FilterRules", g.GetGroupConcernFilter().RulesNormalized())
 	for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
 		switch rule.Type {
