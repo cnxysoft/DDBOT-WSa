@@ -1076,6 +1076,31 @@ func TestOfflineQueue_DoesNotRetryRejectedGroupMessage(t *testing.T) {
 	assert.Equal(t, 1, mock.sendCount())
 }
 
+func TestOfflineQueue_DoesNotRetryUnclassifiedAdapterError(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	oldDelay := offlineQueueRetryDelay
+	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
+	offlineQueueRetryDelay = 10 * time.Millisecond
+	defer func() {
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
+		offlineQueueRetryDelay = oldDelay
+	}()
+
+	mock := newRetryMockAdapter(errors.New("satori request failed"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "unclassified error"})
+	resp := messenger.SendGroupMessage(545402644, msg, "unclassified error")
+
+	assert.Error(t, resp.Error)
+	assert.Empty(t, messenger.loadOfflineMsgs())
+	time.Sleep(3 * offlineQueueRetryDelay)
+	assert.Equal(t, 1, mock.sendCount())
+}
+
 func TestOfflineQueue_FlushesAfterReconnectWithoutLifecycleEvent(t *testing.T) {
 	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
 	oldDelay := offlineQueueRetryDelay
@@ -1120,7 +1145,7 @@ func TestOfflineQueue_FlushDropsTimedOutMessages(t *testing.T) {
 		offlineQueueRetryDelay = oldDelay
 	}()
 
-	mock := newRetryMockAdapter(errors.New("not connected"), ErrRequestTimeout)
+	mock := newRetryMockAdapter(fmt.Errorf("%w: not connected", ErrRequestNotSent), ErrRequestTimeout)
 	messenger := NewMessenger(mock)
 	defer messenger.Stop()
 	messenger.Online.Store(true)
@@ -1135,6 +1160,29 @@ func TestOfflineQueue_FlushDropsTimedOutMessages(t *testing.T) {
 	assert.Equal(t, 2, mock.sendCount())
 	time.Sleep(3 * offlineQueueRetryDelay)
 	assert.Equal(t, 2, mock.sendCount())
+}
+
+func TestOfflineQueue_FlushDropsUnclassifiedAdapterError(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	oldDelay := offlineQueueRetryDelay
+	config.GlobalConfig.Set("bot.offlineQueue.enable", true)
+	offlineQueueRetryDelay = 10 * time.Millisecond
+	defer func() {
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldEnable)
+		offlineQueueRetryDelay = oldDelay
+	}()
+
+	mock := newRetryMockAdapter(errors.New("satori response lost"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+	messenger.saveOfflineMsg(newOfflineQueueMsg(545402644, "group", &SendingMessage{}, "queued"))
+
+	messenger.flushOfflineQueue()
+
+	assert.Empty(t, messenger.loadOfflineMsgs())
+	time.Sleep(3 * offlineQueueRetryDelay)
+	assert.Equal(t, 1, mock.sendCount())
 }
 
 func TestOfflineQueue_MaxSizeDropsOnlyOldest(t *testing.T) {

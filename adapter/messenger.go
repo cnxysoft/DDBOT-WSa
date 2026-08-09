@@ -248,9 +248,11 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 				messengerLogger.Warnf("群消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
 			} else if errors.Is(err, ErrRequestRejected) {
 				messengerLogger.Warnf("群消息被OneBot明确拒绝，不再自动重试 (chunk %d/%d)", i+1, len(chunks))
-			} else if getOfflineQueueEnable() {
+			} else if errors.Is(err, ErrRequestNotSent) && getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(groupCode, "group", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
+			} else if !errors.Is(err, ErrRequestNotSent) {
+				messengerLogger.Warnf("群消息发送错误未明确标记为写入前失败，不自动重试 (chunk %d/%d)", i+1, len(chunks))
 			}
 			lastResult = SendResp{
 				RetMSG: &GroupMessage{ID: -1},
@@ -317,9 +319,11 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 				messengerLogger.Warnf("私聊消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
 			} else if errors.Is(err, ErrRequestRejected) {
 				messengerLogger.Warnf("私聊消息被OneBot明确拒绝，不再自动重试 (chunk %d/%d)", i+1, len(chunks))
-			} else if getOfflineQueueEnable() {
+			} else if errors.Is(err, ErrRequestNotSent) && getOfflineQueueEnable() {
 				m.saveOfflineMsg(newOfflineQueueMsg(target, "private", chunkMsg, newstr))
 				m.scheduleOfflineQueueFlush(offlineQueueRetryDelay)
+			} else if !errors.Is(err, ErrRequestNotSent) {
+				messengerLogger.Warnf("私聊消息发送错误未明确标记为写入前失败，不自动重试 (chunk %d/%d)", i+1, len(chunks))
 			}
 		} else {
 			lastMsgID = msgID
@@ -1689,10 +1693,12 @@ func (m *Messenger) flushOfflineQueue() {
 						messengerLogger.Warnf("重发离线群消息超时，发送结果未知，不再重试: group=%d", msg.TargetId)
 					} else if errors.Is(err, ErrRequestRejected) {
 						messengerLogger.Warnf("重发离线群消息被OneBot明确拒绝，不再重试: group=%d", msg.TargetId)
-					} else {
+					} else if errors.Is(err, ErrRequestNotSent) {
 						messengerLogger.Errorf("重发离线群消息失败: %v", err)
 						m.saveOfflineMsg(msg)
 						failed++
+					} else {
+						messengerLogger.Warnf("重发离线群消息错误未明确标记为写入前失败，不再重试: group=%d error=%v", msg.TargetId, err)
 					}
 				} else {
 					messengerLogger.Debugf("离线群消息重发成功: group=%d, msgID=%d", msg.TargetId, msgID)
@@ -1704,10 +1710,12 @@ func (m *Messenger) flushOfflineQueue() {
 						messengerLogger.Warnf("重发离线私聊消息超时，发送结果未知，不再重试: user=%d", msg.TargetId)
 					} else if errors.Is(err, ErrRequestRejected) {
 						messengerLogger.Warnf("重发离线私聊消息被OneBot明确拒绝，不再重试: user=%d", msg.TargetId)
-					} else {
+					} else if errors.Is(err, ErrRequestNotSent) {
 						messengerLogger.Errorf("重发离线私聊消息失败: %v", err)
 						m.saveOfflineMsg(msg)
 						failed++
+					} else {
+						messengerLogger.Warnf("重发离线私聊消息错误未明确标记为写入前失败，不再重试: user=%d error=%v", msg.TargetId, err)
 					}
 				} else {
 					messengerLogger.Debugf("离线私聊消息重发成功: user=%d, msgID=%d", msg.TargetId, msgID)
