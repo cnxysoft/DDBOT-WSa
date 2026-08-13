@@ -89,13 +89,13 @@ func TestTwitterConcern_GetUserInfo(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			// 替换 buildProfileURL
-			originalBuildProfileURL := buildProfileURL
-			buildProfileURL = func(screenName string) *url.URL {
+			// 替换 buildProfileURLs
+			originalBuildProfileURLs := buildProfileURLs
+			buildProfileURLs = func(screenName string) []*url.URL {
 				Url, _ := url.Parse(ts.URL)
-				return Url
+				return []*url.URL{Url}
 			}
-			defer func() { buildProfileURL = originalBuildProfileURL }()
+			defer func() { buildProfileURLs = originalBuildProfileURLs }()
 
 			tc := &twitterConcern{
 				StateManager: &StateManager{
@@ -337,13 +337,22 @@ TVアニメは7月6日(日)放送開始です！
 	}))
 	defer ts.Close()
 
-	// 替换 buildProfileURL 函数（需要修改 production 代码以支持此操作）
-	originalBuildProfileURL := buildProfileURL
-	buildProfileURL = func(screenName string) *url.URL {
-		Url, _ := url.Parse(ts.URL)
-		return Url
+	failedRequests := 0
+	failedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failedRequests++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<html><head><title>Error | nitter</title></head><body><div class="error-panel">temporary error</div></body></html>`))
+	}))
+	defer failedServer.Close()
+
+	// 第一个镜像解析失败时，应自动切换到第二个镜像。
+	originalBuildProfileURLs := buildProfileURLs
+	buildProfileURLs = func(screenName string) []*url.URL {
+		failedURL, _ := url.Parse(failedServer.URL)
+		successURL, _ := url.Parse(ts.URL)
+		return []*url.URL{failedURL, successURL}
 	}
-	defer func() { buildProfileURL = originalBuildProfileURL }()
+	defer func() { buildProfileURLs = originalBuildProfileURLs }()
 
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
@@ -366,6 +375,7 @@ TVアニメは7月6日(日)放送開始です！
 	assert.NoError(t, err)
 	assert.NotNil(t, tweets)
 	assert.Len(t, tweets, 5, "应解析出5条推文")
+	assert.Equal(t, 1, failedRequests, "失败镜像在单轮抓取中只应请求一次")
 
 	// 验证推文内容
 	tweet := tweets[0]
@@ -373,4 +383,38 @@ TVアニメは7月6日(日)放送開始です！
 	assert.Contains(t, tweet.Content, "ムツキ\n#ブルアカ #BlueArchive")
 	assert.Equal(t, int64(4117), tweet.Likes)
 	assert.Equal(t, int64(409), tweet.Retweets)
+}
+
+func TestTwitterConcern_GetTweets_AllMirrorsFailed(t *testing.T) {
+	failedRequests := 0
+	failedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		failedRequests++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer failedServer.Close()
+
+	originalBuildProfileURLs := buildProfileURLs
+	buildProfileURLs = func(screenName string) []*url.URL {
+		firstURL, _ := url.Parse(failedServer.URL + "/first")
+		secondURL, _ := url.Parse(failedServer.URL + "/second")
+		return []*url.URL{firstURL, secondURL}
+	}
+	defer func() { buildProfileURLs = originalBuildProfileURLs }()
+
+	tweets, err := new(twitterConcern).GetTweets("testuser")
+
+	assert.Nil(t, tweets)
+	assert.ErrorContains(t, err, "所有Twitter镜像均无法获取推文")
+	assert.Equal(t, 2, failedRequests, "全部镜像失败后才应返回错误")
+}
+
+func TestBuildProfileURLs_NormalizesPath(t *testing.T) {
+	originalBaseURL := BaseURL
+	BaseURL = []string{"https://example.com/nitter"}
+	defer func() { BaseURL = originalBaseURL }()
+
+	urls := buildProfileURLs("GenshinImpact")
+
+	assert.Len(t, urls, 1)
+	assert.Equal(t, "https://example.com/nitter/GenshinImpact", urls[0].String())
 }
