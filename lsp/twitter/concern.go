@@ -49,11 +49,29 @@ const (
 )
 
 var (
-	logger          = templUtils.GetModuleLogger(ConcernName)
-	requestInterval = time.Second * 5 // 每个请求之间的间隔
-	buildProfileURL = func(screenName string) *url.URL {
-		Url, _ := url.Parse(BaseURL[rand.Intn(len(BaseURL))] + screenName)
-		return Url
+	logger           = templUtils.GetModuleLogger(ConcernName)
+	requestInterval  = time.Second * 5 // 每个请求之间的间隔
+	buildProfileURLs = func(screenName string) []*url.URL {
+		if len(BaseURL) == 0 {
+			return nil
+		}
+		start := rand.Intn(len(BaseURL))
+		urls := make([]*url.URL, 0, len(BaseURL))
+		for i := range BaseURL {
+			profileURL, err := url.JoinPath(BaseURL[(start+i)%len(BaseURL)], screenName)
+			if err != nil {
+				logger.WithField("Mirror", BaseURL[(start+i)%len(BaseURL)]).
+					Warnf("构造用户页面地址失败：%v", err)
+				continue
+			}
+			parsedURL, err := url.Parse(profileURL)
+			if err != nil {
+				logger.WithField("Mirror", profileURL).Warnf("解析用户页面地址失败：%v", err)
+				continue
+			}
+			urls = append(urls, parsedURL)
+		}
+		return urls
 	}
 	Cookie *cookiejar.Jar
 )
@@ -142,47 +160,32 @@ func CSTTime(t time.Time) time.Time {
 }
 
 func (t *twitterConcern) FindUserInfo(id string, refresh bool) (*UserInfo, error) {
-retry:
 	var info *UserInfo
 	if refresh {
-		Url := buildProfileURL(id)
-		opts := SetRequestOptions()
-		var resp bytes.Buffer
-		var respHeaders requests.RespHeader
-		if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-			if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-				logger.WithField("Mirror", Url.Hostname()).Errorf("查找用户失败：%v", err)
-				return nil, err
+		var profile *UserProfile
+		var lastErr error
+		for _, profileURL := range buildProfileURLs(id) {
+			profile, _, lastErr = fetchProfilePage(profileURL)
+			if lastErr == nil && profile != nil {
+				break
 			}
+			if lastErr == nil {
+				lastErr = errors.New("用户不存在或返回结果为空")
+			}
+			logger.WithField("Mirror", profileURL.Hostname()).WithField("User", id).
+				Warnf("查找用户失败，切换下一个镜像：%v", lastErr)
 		}
-
-		// 解压缩HTML
-		body, err := localutils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-		if err != nil {
-			logger.WithField("Mirror", Url.Hostname()).
-				WithField("User", id).Errorf("解压缩HTML失败：%v", err)
-			return nil, err
-		}
-
-		// 解析用户信息
-		profile, _, challenge, err := ParseResp(body, Url.String())
-		if err != nil {
-			return nil, err
-		} else if challenge != nil && challenge.Type == "anubis" {
-			FreshCookie(challenge.Anubis)
-			goto retry
-		} else if challenge != nil && challenge.Type == "poast" {
-			time.Sleep(time.Second * 3)
-			goto retry
-		} else if profile == nil {
-			return nil, errors.New("用户不存在或返回结果为空")
+		if profile == nil {
+			if lastErr == nil {
+				lastErr = errors.New("没有可用的Twitter镜像")
+			}
+			return nil, fmt.Errorf("所有Twitter镜像均无法查询用户：%w", lastErr)
 		}
 		info = &UserInfo{
 			Id:   profile.ScreenName,
 			Name: profile.Name,
 		}
-		err = t.AddUserInfo(info)
-		if err != nil {
+		if err := t.AddUserInfo(info); err != nil {
 			return nil, err
 		}
 	}
@@ -562,45 +565,58 @@ func SetRequestOptions() []requests.Option {
 	}
 }
 
-func (t *twitterConcern) GetTweets(id string) ([]*Tweet, error) {
-retry:
-	Url := buildProfileURL(id)
-	opts := SetRequestOptions()
-	var resp bytes.Buffer
-	var respHeaders requests.RespHeader
-	if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-		if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-			logger.WithField("Mirror", Url.Hostname()).WithField("userId", id).Errorf("获取推文列表失败：%v", err)
-			return nil, err
+func fetchProfilePage(profileURL *url.URL) (*UserProfile, []*Tweet, error) {
+	const maxChallengeAttempts = 2
+	for attempt := 0; attempt < maxChallengeAttempts; attempt++ {
+		opts := append(SetRequestOptions(), requests.RetryOption(0))
+		var resp bytes.Buffer
+		var respHeaders requests.RespHeader
+		if err := requests.GetWithHeader(profileURL.String(), nil, &resp, &respHeaders, opts...); err != nil {
+			return nil, nil, fmt.Errorf("请求失败：%w", err)
+		}
+
+		body, err := localutils.HtmlDecoder(respHeaders.ContentEncoding, resp)
+		if err != nil {
+			return nil, nil, fmt.Errorf("解压缩HTML失败：%w", err)
+		}
+
+		profile, tweets, challenge, err := ParseResp(body, profileURL.String())
+		if err != nil {
+			return nil, nil, fmt.Errorf("解析HTML失败：%w", err)
+		}
+		if challenge == nil {
+			return profile, tweets, nil
+		}
+		switch challenge.Type {
+		case "anubis":
+			FreshCookie(challenge.Anubis)
+		case "poast":
+			time.Sleep(time.Second * 3)
+		default:
+			return nil, nil, fmt.Errorf("不支持的镜像验证类型：%s", challenge.Type)
 		}
 	}
+	return nil, nil, errors.New("镜像验证重试次数已用尽")
+}
 
-	// 解压缩HTML
-	body, err := localutils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解压缩HTML失败：%v", err)
-		return nil, err
+func (t *twitterConcern) GetTweets(id string) ([]*Tweet, error) {
+	var lastErr error
+	for _, profileURL := range buildProfileURLs(id) {
+		_, tweets, err := fetchProfilePage(profileURL)
+		if err == nil && len(tweets) > 0 {
+			return tweets, nil
+		}
+		if err == nil {
+			err = errors.New("无法解析数据或推文列表为空")
+		}
+		lastErr = err
+		logger.WithField("Mirror", profileURL.Hostname()).WithField("userId", id).
+			Warnf("获取推文列表失败，切换下一个镜像：%v", err)
 	}
-
-	// 解析解压后的数据
-	_, tweets, challenge, err := ParseResp(body, Url.String())
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解析HTML失败：%v", err)
-		return nil, err
-	} else if challenge != nil && challenge.Type == "anubis" {
-		FreshCookie(challenge.Anubis)
-		goto retry
-	} else if challenge != nil && challenge.Type == "poast" {
-		time.Sleep(time.Second * 3)
-		goto retry
-	} else if tweets == nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Warn("获取推文列表失败：无法解析数据或推文列表为空")
-		return nil, nil
+	if lastErr == nil {
+		lastErr = errors.New("没有可用的Twitter镜像")
 	}
-	return tweets, nil
+	return nil, fmt.Errorf("所有Twitter镜像均无法获取推文：%w", lastErr)
 }
 
 func (t *twitterConcern) Start() error {
