@@ -206,7 +206,7 @@ acfun:
 # 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
 twitter:
   mode: api  # 模式选择：api（默认）或 mirror
-  apiFetchMode: home_timeline  # API 查询方式：home_timeline 或 per_user
+  apiFetchMode: per_user       # API 查询方式：home_timeline 或 per_user
   baseUrl:     # mirror 模式下的 nitter 镜像列表
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"

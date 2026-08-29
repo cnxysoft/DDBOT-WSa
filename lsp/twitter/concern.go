@@ -253,10 +253,12 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 		}
 		_ = t.AddUserInfo(info)
 
-		// 检查是否已经关注过（首次订阅需要关注）
+		// 逐账号查询不依赖关注关系；HomeTimeline 模式仍在首次订阅时自动关注。
 		if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
-			// 首次订阅，自动关注
-			if twitterAPI != nil {
+			if !apiFetchModeNeedsFollow() {
+				log.Infof("per_user mode, skip automatic follow for %s", userId)
+			} else if twitterAPI != nil {
+				// 首次订阅，自动关注
 				followUserID := ""
 				if userProfile != nil {
 					followUserID = userProfile.RestID
@@ -339,7 +341,7 @@ func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{
 	}
 
 	// 如果开启unsub且该用户已无任何订阅，则取消关注
-	if cfg.GetTwitterUnsub() && allCtype.Empty() {
+	if cfg.GetTwitterUnsub() && allCtype.Empty() && apiFetchModeNeedsFollow() {
 		go t.unsubUser(userId)
 	}
 

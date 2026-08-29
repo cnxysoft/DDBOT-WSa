@@ -32,6 +32,20 @@ func TestNormalizeAPIFetchMode(t *testing.T) {
 	}
 }
 
+func TestAPIFetchModeNeedsFollow(t *testing.T) {
+	oldMode := TwitterAPIFetchMode
+	defer func() { TwitterAPIFetchMode = oldMode }()
+
+	TwitterAPIFetchMode = APIFetchModeHomeTimeline
+	if !apiFetchModeNeedsFollow() {
+		t.Fatal("home timeline mode should require following")
+	}
+	TwitterAPIFetchMode = APIFetchModePerUser
+	if apiFetchModeNeedsFollow() {
+		t.Fatal("per-user mode should not require following")
+	}
+}
+
 func TestQueryIDsReady(t *testing.T) {
 	oldMode := TwitterAPIFetchMode
 	defer func() { TwitterAPIFetchMode = oldMode }()
