@@ -4,6 +4,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -11,8 +12,10 @@ import (
 )
 
 const (
-	ModeAPI    = "api"
-	ModeMirror = "mirror"
+	ModeAPI                  = "api"
+	ModeMirror               = "mirror"
+	APIFetchModeHomeTimeline = "home_timeline"
+	APIFetchModePerUser      = "per_user"
 )
 
 var (
@@ -20,10 +23,24 @@ var (
 	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
 	twitterAPI  *TwitterAPI
 	TwitterMode = ModeMirror
+	// TwitterAPIFetchMode controls how API mode obtains subscribed tweets.
+	TwitterAPIFetchMode = APIFetchModeHomeTimeline
 )
 
 func init() {
 	concern.RegisterConcern(newConcern(concern.GetNotifyChan()))
+}
+
+func normalizeAPIFetchMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", APIFetchModeHomeTimeline, "home", "home-timeline":
+		return APIFetchModeHomeTimeline
+	case APIFetchModePerUser, "user", "user_tweets", "user-tweets":
+		return APIFetchModePerUser
+	default:
+		logger.Warnf("未知的 twitter.apiFetchMode=%q，回退到 %s", value, APIFetchModeHomeTimeline)
+		return APIFetchModeHomeTimeline
+	}
 }
 
 // cleanupTmpDir 清理 ./tmp 目录下的所有临时文件
@@ -64,8 +81,12 @@ func setCookies() {
 	if len(url) > 0 {
 		BaseURL = url
 	}
+	TwitterAPIFetchMode = normalizeAPIFetchMode(config.GlobalConfig.GetString("twitter.apiFetchMode"))
 
-	mode := config.GlobalConfig.GetString("twitter.mode")
+	mode := strings.ToLower(strings.TrimSpace(config.GlobalConfig.GetString("twitter.mode")))
+	if mode == "" {
+		mode = ModeAPI
+	}
 	if mode == ModeAPI {
 		TwitterMode = ModeAPI
 	} else {
@@ -77,9 +98,13 @@ func setCookies() {
 		authToken := config.GlobalConfig.GetString("twitter.auth_token")
 		bearerToken := config.GlobalConfig.GetString("twitter.bearerToken")
 		queryId := config.GlobalConfig.GetString("twitter.queryId")
+		userTweetsQueryId := config.GlobalConfig.GetString("twitter.userTweetsQueryId")
 		screenName := config.GlobalConfig.GetString("twitter.screenName")
 
 		twitterAPI = NewTwitterAPI(ct0, authToken, bearerToken, queryId, screenName)
+		if twitterAPI != nil {
+			twitterAPI.SetUserTimelineQueryId(userTweetsQueryId)
+		}
 
 		// 自动获取 screenName 和 queryId
 		if twitterAPI != nil && twitterAPI.IsEnabled() {
@@ -92,6 +117,7 @@ func setCookies() {
 					sn, mjUrl, err := twitterAPI.FetchInitialState()
 					if err == nil && sn != "" {
 						twitterAPI.screenName = sn
+						twitterAPI.mainJSURL = mjUrl
 						mainJsUrl = mjUrl
 						logger.Infof("Cookie验证成功！账号: %s", sn)
 						break
@@ -104,16 +130,15 @@ func setCookies() {
 						logger.Infof("%v后重试...", retryInterval)
 						time.Sleep(retryInterval)
 					} else {
-						logger.Error("Cookie验证超时，Twitter功能已禁用")
+						logger.Error("Cookie验证超时，API 模式已禁用 Twitter")
 						twitterAPI = nil
-						TwitterMode = ModeMirror
 					}
 				}
 
 				// 获取 queryId（从 sw.js → LoggedInMain 提取缓存）
 				if twitterAPI != nil && twitterAPI.IsEnabled() && mainJsUrl != "" {
 					logger.Info("正在从 sw.js 刷新 queryId 缓存...")
-					if err := RefreshAPIFromMainJS(); err != nil {
+					if err := RefreshAPIFromMainJS(mainJsUrl); err != nil {
 						logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 					} else {
 						logger.Infof("成功获取 queryId: %s", twitterAPI.queryId)

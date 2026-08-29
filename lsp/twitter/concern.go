@@ -217,7 +217,10 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 	userId := id.(string)
 	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
 
-	if IsTwitterEnabled() {
+	if TwitterMode == ModeAPI {
+		if !IsTwitterEnabled() {
+			return nil, errors.New("Twitter API 未配置有效 Cookie")
+		}
 		info := &UserInfo{
 			Id:   userId,
 			Name: userId,
@@ -254,11 +257,22 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 		if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
 			// 首次订阅，自动关注
 			if twitterAPI != nil {
+				followUserID := ""
+				if userProfile != nil {
+					followUserID = userProfile.RestID
+				}
+				if followUserID == "" {
+					followUserID, err = twitterAPI.ResolveUserID(context.Background(), userId)
+					if err != nil {
+						log.Errorf("Resolve Twitter user %s failed: %v", userId, err)
+						return nil, fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+					}
+				}
 				// 如果已经关注，则跳过
 				if userProfile != nil && userProfile.IsFollowing {
 					log.Infof("User %s already following, skip", userId)
 				} else {
-					if err := twitterAPI.Follow(context.Background(), userId); err != nil {
+					if err := twitterAPI.Follow(context.Background(), followUserID); err != nil {
 						log.Errorf("Follow user %s failed: %v", userId, err)
 						return nil, fmt.Errorf("关注用户 %s 失败: %v", userId, err)
 					}
@@ -339,7 +353,12 @@ func (t *twitterConcern) unsubUser(userId string) {
 	if twitterAPI == nil {
 		return
 	}
-	if err := twitterAPI.Unfollow(context.Background(), userId); err != nil {
+	apiUserID, err := twitterAPI.ResolveUserID(context.Background(), userId)
+	if err != nil {
+		logger.Errorf("解析用户 %s 的数字 ID 失败 - %v", userId, err)
+		return
+	}
+	if err := twitterAPI.Unfollow(context.Background(), apiUserID); err != nil {
 		logger.Errorf("取消关注失败 - %v", err)
 	} else {
 		logger.WithField("userId", userId).Info("取消关注成功")
@@ -382,8 +401,16 @@ func getRefreshInterval() time.Duration {
 }
 
 func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- concern.Event) {
-	if IsTwitterEnabled() {
-		t.processHomeTimeline(ctx, eventChan)
+	if TwitterMode == ModeAPI {
+		if !IsTwitterEnabled() {
+			logger.Warn("Twitter API 未配置有效 Cookie，跳过本轮刷新")
+			return
+		}
+		if TwitterAPIFetchMode == APIFetchModePerUser {
+			t.processPerUserTimeline(ctx, eventChan)
+		} else {
+			t.processHomeTimeline(ctx, eventChan)
+		}
 		return
 	}
 
@@ -400,6 +427,113 @@ func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- conc
 			eventChan <- e
 		}
 		time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
+	}
+}
+
+func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	_, ids, _, err := t.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
+		return p.ContainAll(Tweets)
+	})
+	if err != nil {
+		logger.Errorf("List Twitter subscriptions error: %v", err)
+		return
+	}
+
+	uniqueIDs := make([]string, 0, len(ids))
+	seenIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		userID, ok := id.(string)
+		if !ok || strings.TrimSpace(userID) == "" {
+			continue
+		}
+		userID = strings.TrimSpace(userID)
+		if _, exists := seenIDs[userID]; exists {
+			continue
+		}
+		seenIDs[userID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, userID)
+	}
+
+	firstRequest := true
+	waitForRequest := func() bool {
+		if firstRequest {
+			firstRequest = false
+			return true
+		}
+		return waitTwitterRequestInterval(ctx)
+	}
+
+	for _, userID := range uniqueIDs {
+		if !waitForRequest() {
+			return
+		}
+
+		apiUserID, err := twitterAPI.ResolveUserID(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("解析 Twitter 用户 ID 失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+		userInfo, err := t.getAPIUserInfo(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("加载 Twitter 用户信息失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+
+		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
+			continue
+		}
+		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
+
+		for _, tweet := range result.Tweets {
+			if tweet == nil || tweet.ID == "" {
+				continue
+			}
+			if t.filterTweet(tweet) {
+				eventChan <- &NewsInfo{UserInfo: userInfo, Tweet: tweet}
+			}
+		}
+
+	}
+}
+
+func (t *twitterConcern) getAPIUserInfo(ctx context.Context, userID string) (*UserInfo, error) {
+	info, err := t.GetUserInfo(userID)
+	if err == nil && info != nil {
+		return info, nil
+	}
+	profile, err := twitterAPI.GetUserByScreenName(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, errors.New("Twitter API returned empty user profile")
+	}
+	info = &UserInfo{Id: userID, Name: profile.Name}
+	if info.Name == "" {
+		info.Name = userID
+	}
+	if err := t.AddUserInfo(info); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func waitTwitterRequestInterval(ctx context.Context) bool {
+	timer := time.NewTimer(requestInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
