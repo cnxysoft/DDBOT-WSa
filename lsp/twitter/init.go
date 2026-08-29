@@ -43,6 +43,10 @@ func normalizeAPIFetchMode(value string) string {
 	}
 }
 
+func apiFetchModeNeedsFollow() bool {
+	return TwitterAPIFetchMode != APIFetchModePerUser
+}
+
 // cleanupTmpDir 清理 ./tmp 目录下的所有临时文件
 func cleanupTmpDir() {
 	tmpDir := filepath.Clean("./tmp")
