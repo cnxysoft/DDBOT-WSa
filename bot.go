@@ -195,8 +195,8 @@ acfun:
   onlyOnlineNotify: false
 
 # Twitter 推送支持两种模式：
-# 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
-# 2. api 模式：使用 Twitter API，需要配置 cookie 和 Bearer Token
+# 1. api 模式（默认）：使用 Twitter API，需要配置 cookie 和 Bearer Token
+# 2. mirror 模式：使用 nitter 镜像获取推文，无需账号
 # 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
 
 # mirror 模式配置
@@ -205,7 +205,8 @@ acfun:
 # 填入你访问网站时提交的 user_agent，可在浏览器中查看
 # 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
 twitter:
-  mode: mirror  # 模式选择：mirror（默认）或 api
+  mode: api  # 模式选择：api（默认）或 mirror
+  apiFetchMode: per_user       # API 查询方式：home_timeline 或 per_user
   baseUrl:     # mirror 模式下的 nitter 镜像列表
     - "https://nitter.net/"
     - "https://nitter.privacyredirect.com/"
@@ -227,6 +228,7 @@ twitter:
   ct0:          # Twitter ct0 cookie
   bearerToken:  # Twitter Bearer Token
   queryId:      # Twitter 搜索 API queryId
+  userTweetsQueryId:  # UserTweets API queryId（可选，默认自动获取）
   screenName:   # Twitter 账号 screen_name（可选） 
 
 # 抖音直播推送（测试）
