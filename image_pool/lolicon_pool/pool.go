@@ -101,15 +101,28 @@ func (pool *LoliconPool) Get(options ...image_pool.OptionFunc) ([]image_pool.Ima
 func (pool *LoliconPool) getCache(r18 R18Type, num int) (result []image_pool.Image, err error) {
 	pool.cond.L.Lock()
 	defer pool.cond.L.Unlock()
+
+	// 防御未知 R18Type：cache 只初始化了 R18Off/R18On，直接访问会 nil panic
+	l, ok := pool.cache[r18]
+	if !ok || l == nil {
+		err = fmt.Errorf("invalid r18 type %v", r18)
+		return
+	}
+
 	for i := 0; i < num; i++ {
-		if pool.cache[r18].Len() == 0 {
+		if l.Len() == 0 {
 			err = pool.fillCacheFromRemote(r18)
 			if err != nil {
 				logger.WithField("from", "getCache").Errorf("fill cache from remote failed %v", err)
 				break
 			}
+			// 填充成功但仍为空（远端返回 0 张图），继续循环只会反复请求远端
+			if l.Len() == 0 {
+				err = ErrNotFound
+				break
+			}
 		}
-		result = append(result, pool.cache[r18].Remove(pool.cache[r18].Front()).(*Setu))
+		result = append(result, l.Remove(l.Front()).(*Setu))
 		pool.changed = true
 	}
 	pool.cond.Signal()
@@ -131,8 +144,10 @@ func (pool *LoliconPool) fillCacheFromRemote(r18 R18Type) error {
 	if resp.Code != 0 {
 		return fmt.Errorf("response code %v: %v", resp.Code, resp.Msg)
 	}
-	for _, s := range resp.Data {
-		pool.cache[r18].PushFront(s)
+	if l, ok := pool.cache[r18]; ok && l != nil {
+		for _, s := range resp.Data {
+			l.PushFront(s)
+		}
 	}
 	pool.changed = true
 	return nil
@@ -161,11 +176,20 @@ func (pool *LoliconPool) background() {
 		}
 		for r18, l := range pool.cache {
 			if l.Len() < pool.config.CacheMin {
-				for l.Len() < pool.config.CacheMax {
+				// 限制单轮填充次数，并检测"远端成功但返回 0 张"的情况，
+				// 避免缓存始终无法达到 CacheMax 时死循环并永久阻塞 Get
+				attempts := 0
+				for l.Len() < pool.config.CacheMax && attempts < 3 {
+					attempts++
+					before := l.Len()
 					pool.changed = true
 					if err := pool.fillCacheFromRemote(r18); err != nil {
 						logger.WithField("from", "background").Errorf("fill cache from remote failed %v", err)
 						result = false
+						break
+					}
+					if l.Len() == before {
+						logger.WithField("from", "background").Warnf("远端返回 0 张图片，停止本轮填充 (r18=%v)", r18)
 						break
 					}
 				}

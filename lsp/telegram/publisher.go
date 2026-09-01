@@ -1,15 +1,13 @@
 package telegram
 
 import (
-	"context"
 	"encoding/base64"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
-	xproxy "golang.org/x/net/proxy"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -205,8 +203,10 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 	})
 }
 
-// buildTelegramHTTPClient constructs an *http.Client honoring telegram.proxy.url
-// Supports http(s) proxies and socks5/socks5h proxies.
+// buildTelegramHTTPClient constructs an *http.Client using the global proxy pool
+// (PreferOversea，例如 systemProxy 模式检测到的系统代理)。
+// 代理池未初始化或无可用代理时直连。
+// 支持 http(s) 与 socks5 代理 URL（http.Transport.Proxy 原生支持 socks5 scheme）。
 func buildTelegramHTTPClient() *http.Client {
 	// Base transport with conservative timeouts suitable for long-polling
 	tr := &http.Transport{
@@ -218,36 +218,16 @@ func buildTelegramHTTPClient() *http.Client {
 		ResponseHeaderTimeout: 70 * time.Second, // > long-poll Timeout
 		ForceAttemptHTTP2:     false,            // more stable with some proxies
 	}
-	proxyURL := config.GlobalConfig.GetString("telegram.proxy.url")
-	if proxyURL != "" {
-		lower := strings.ToLower(proxyURL)
-		if strings.HasPrefix(lower, "socks5://") || strings.HasPrefix(lower, "socks5h://") {
-			u, err := url.Parse(proxyURL)
-			if err != nil {
-				log.WithError(err).Warnf("invalid telegram.proxy.url for socks5: %s", proxyURL)
-			} else {
-				var auth *xproxy.Auth
-				if u.User != nil {
-					pass, _ := u.User.Password()
-					auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
-				}
-				d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{})
-				if err != nil {
-					log.WithError(err).Warnf("failed to init socks5 dialer for %s", proxyURL)
-				} else {
-					tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-						return d.Dial(network, addr)
-					}
-				}
-			}
+	if p, err := proxy_pool.Get(proxy_pool.PreferOversea); err == nil && p != nil {
+		proxyURL := p.ProxyString()
+		if u, err := url.Parse(proxyURL); err == nil && u.Scheme != "" {
+			tr.Proxy = http.ProxyURL(u)
+			log.WithField("proxy", proxyURL).Info("telegram 将经由全局代理池(oversea)连接")
 		} else {
-			u, err := url.Parse(proxyURL)
-			if err != nil {
-				log.WithError(err).Warnf("invalid telegram.proxy.url: %s", proxyURL)
-			} else {
-				tr.Proxy = http.ProxyURL(u)
-			}
+			log.Warnf("全局代理池返回的代理地址无法解析，telegram 直连: %s", proxyURL)
 		}
+	} else {
+		log.Debug("全局代理池不可用或未配置代理，telegram 直连")
 	}
 	return &http.Client{Transport: tr}
 }

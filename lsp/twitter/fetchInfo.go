@@ -39,20 +39,26 @@ type UserProfile struct {
 }
 
 type Tweet struct {
-	ID          string       `json:"id"`
-	Content     string       `json:"content"`
-	CreatedAt   time.Time    `json:"created_at"`
-	Likes       int64        `json:"likes"`
-	Retweets    int64        `json:"retweets"`
-	Pinned      bool         `json:"pinned"`
-	Replies     int64        `json:"replies"`
-	Media       []*Media     `json:"media"`
-	IsRetweet   bool         `json:"is_retweet"`
-	OrgUser     *UserProfile `json:"org_user"`     // 原作者（转发时）或本人（原创时）
-	RetweetUser *UserProfile `json:"retweet_user"` // 转发者（仅转发时有值）
-	Url         string       `json:"url"`
-	MirrorHost  string       `json:"mirror_url"`
-	QuoteTweet  *Tweet       `json:"quote_tweet"`
+	ID              string       `json:"id"`
+	Content         string       `json:"content"`
+	TranslatedText  string       `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string       `json:"translation_lang,omitempty"` // 翻译源语言
+	CreatedAt       time.Time    `json:"created_at"`
+	Likes           int64        `json:"likes"`
+	Retweets        int64        `json:"retweets"`
+	Pinned          bool         `json:"pinned"`
+	Replies         int64        `json:"replies"`
+	Media           []*Media     `json:"media"`
+	IsRetweet       bool         `json:"is_retweet"`
+	OrgUser         *UserProfile `json:"org_user"`     // 原作者（转发时）或本人（原创时）
+	RetweetUser     *UserProfile `json:"retweet_user"` // 转发者（仅转发时有值）
+	Url             string       `json:"url"`
+	MirrorHost      string       `json:"mirror_url"`
+	QuoteTweet      *Tweet       `json:"quote_tweet"`
+
+	// translationCh 异步预翻译结果通道（不参与序列化）。
+	// fetch 阶段启动预翻译时初始化，推送阶段通过 WaitTranslation 读取。
+	translationCh chan *TranslationResult `json:"-"`
 }
 
 type Media struct {

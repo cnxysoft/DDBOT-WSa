@@ -2,11 +2,13 @@ package adapter
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -204,10 +206,16 @@ func (c *WSClient) startServer() error {
 	if addr == "" {
 		addr = "0.0.0.0:15630"
 	}
+	// 按用户要求解除"空 token 拒绝启动"的限制：允许无鉴权启动，
+	// 但保留醒目告警，提示此时任何能访问该端口的客户端都可接入并控制机器人
+	if c.token == "" {
+		wsLogger.Warnf("ws-server 模式未配置 websocket.token，将以无鉴权方式启动 (addr=%s)：任意客户端均可接入并控制机器人，建议配置 token", addr)
+	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
+		// 配置了 token 时校验：兼容 "Bearer <token>" 与裸 token 两种形式，常量时间比较防时序攻击
 		if c.token != "" {
-			auth := r.Header.Get("Authorization")
-			if auth == "" || strings.TrimPrefix(auth, "Bearer ") != c.token {
+			auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(c.token)) != 1 {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -420,7 +428,15 @@ func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 				return
 			}
 		}
-		go c.handleMessage(message)
+		// 安全修复：handler 调用链中任何 panic 不再击穿整个进程
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					wsLogger.Errorf("handleMessage panic (recovered): %v\n%s", r, debug.Stack())
+				}
+			}()
+			c.handleMessage(message)
+		}()
 	}
 }
 

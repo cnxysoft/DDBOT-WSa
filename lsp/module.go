@@ -26,6 +26,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/local_proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/py"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/system_proxy"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/fsnotify/fsnotify"
@@ -180,6 +181,11 @@ func (l *Lsp) Init() {
 	}
 
 	proxyType := config.GlobalConfig.GetString("proxy.type")
+	// 未配置 proxy.type 时默认使用 systemProxy：自动检测系统代理（环境变量/GNOME/Windows 注册表）
+	if proxyType == "" {
+		proxyType = "systemProxy"
+		log.Info("未配置 proxy.type，默认使用 systemProxy（自动检测系统代理）")
+	}
 	log = logger.WithField("proxy_type", proxyType)
 	switch proxyType {
 	case "pyProxyPool":
@@ -212,6 +218,27 @@ func (l *Lsp) Init() {
 		proxy_pool.Init(pool)
 		log.WithField("local_proxy_num", len(proxies)).Debug("debug")
 		l.status.ProxyPoolEnable = true
+	case "systemProxy":
+		// 自动检测系统代理，仅用于海外请求（X、YouTube 等）
+		sysProxy, enabled := system_proxy.DetectSystemProxy()
+		if enabled && sysProxy != "" {
+			log.Infof("检测到系统代理: %s（仅用于海外请求）", sysProxy)
+			proxies := []*local_proxy_pool.Proxy{
+				{
+					Type:  proxy_pool.PreferOversea,
+					Proxy: sysProxy,
+				},
+			}
+			pool := local_proxy_pool.NewLocalPool(proxies)
+			proxy_pool.Init(pool)
+			l.status.ProxyPoolEnable = true
+		} else {
+			log.Warn("未检测到系统代理或系统代理未启用。" +
+				"检测范围：环境变量(http_proxy/https_proxy/all_proxy)、Linux GNOME 系统代理(gsettings)、Windows 注册表。" +
+				"注意：代理客户端仅监听端口不代表系统代理已开启；" +
+				"终端直接运行可先 export https_proxy=http://127.0.0.1:端口 再启动，" +
+				"或在配置中改用静态代理（proxy.oversea 等条目）")
+		}
 	case "off":
 		log.Debug("proxy pool turn off")
 	default:
@@ -223,6 +250,11 @@ func (l *Lsp) Init() {
 	}
 	cfg.ReloadCustomCommandPrefix()
 	config.GlobalConfig.OnConfigChange(func(in fsnotify.Event) {
+		// 如果正在写入配置，跳过这次热重载
+		if cfg.IsWritingInProgress() {
+			logrus.WithField("config", "GlobalConfig").Debug("配置文件变更被忽略（正在写入中）")
+			return
+		}
 		go cfg.ReloadCustomCommandPrefix()
 		l.CronjobReload()
 	})
@@ -505,9 +537,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			if len(rename) > 60 {
 				rename = rename[:60]
 			}
-			minfo := info.FindMember(bot.Uin)
+			minfo := info.FindMember(bot.Uin.Load())
 			if minfo != nil {
-				localutils.GetBot().EditGroupCard(info.Code, bot.Uin, rename)
+				localutils.GetBot().EditGroupCard(info.Code, bot.Uin.Load(), rename)
 			}
 		}
 
@@ -548,7 +580,7 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 				log = log.WithField(fmt.Sprintf("%v订阅", c.Site()), len(ids))
 			}
 		}
-		if event.Operator == nil || event.Operator.Uin == bot.Uin {
+		if event.Operator == nil || event.Operator.Uin == bot.Uin.Load() {
 			log.Info("退出群聊")
 		} else {
 			log.Infof("被 %v 踢出群聊", event.Operator.DisplayName())
@@ -599,6 +631,15 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMessageEvent.Subscribe(func(msg *adapter.GroupMessage) {
+		// Parse 在本回调内同步执行（NewLspGroupCommand 构造函数里调用），
+		// 用户消息内容触发解析 panic 时必须就地 recover，
+		// 否则会中断同一消息后续所有订阅处理器（logging 等）
+		defer func() {
+			if e := recover(); e != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					Errorf("group message dispatch panic recovered: %v", e)
+			}
+		}()
 		if len(msg.Elements) <= 0 {
 			return
 		}
@@ -613,8 +654,8 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if Debug {
 			cmd.Debug()
 		}
-		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin) ||
-			l.PermissionStateManager.CheckGroupAdministrator(msg.GroupCode, bot.Uin) {
+		if !l.LspStateManager.IsMuted(msg.GroupCode, bot.Uin.Load()) ||
+			l.PermissionStateManager.CheckGroupAdministrator(msg.GroupCode, bot.Uin.Load()) {
 			go cmd.Execute()
 		} else {
 			logger.Debug("BOT被禁言无法响应群指令")
@@ -658,6 +699,13 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.PrivateMessageEvent.Subscribe(func(msg *adapter.PrivateMessage) {
+		// 同 GroupMessageEvent：Parse 在回调内同步执行，需就地 recover
+		defer func() {
+			if e := recover(); e != nil {
+				logger.WithField("stack", string(debug.Stack())).
+					Errorf("private message dispatch panic recovered: %v", e)
+			}
+		}()
 		if !l.started.Load() {
 			return
 		}
@@ -1283,8 +1331,8 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *adapter.SendingMessage, rec
 	if bot.Instance == nil {
 		return &adapter.GroupMessage{ID: -1, GroupCode: groupCode, Elements: msg.Elements}
 	}
-	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin) &&
-		!l.PermissionStateManager.CheckGroupAdministrator(groupCode, bot.Instance.Uin) {
+	if l.LspStateManager.IsMuted(groupCode, bot.Instance.Uin.Load()) &&
+		!l.PermissionStateManager.CheckGroupAdministrator(groupCode, bot.Instance.Uin.Load()) {
 		logger.WithField("content", msgstringer.AdapterMsgToString(msg.Elements)).
 			WithFields(localutils.GroupLogFields(groupCode)).
 			Debug("BOT被禁言无法发送群消息")
@@ -1340,7 +1388,7 @@ var Instance = &Lsp{
 	msgLimit:               semaphore.NewWeighted(3),
 	PermissionStateManager: permission.NewStateManager(),
 	LspStateManager:        NewStateManager(),
-	cron:                   cron.New(cron.WithLogger(cron.VerbosePrintfLogger(cronLog))),
+	cron:                   cron.New(cron.WithLogger(cron.VerbosePrintfLogger(cronLog)), cron.WithChain(cron.Recover(cron.PrintfLogger(cronLog)))),
 }
 
 func init() {

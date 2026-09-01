@@ -38,6 +38,7 @@ var CommandMaps = map[string]string{
 	"AbnormalConcernCheck": AbnormalConcernCheck,
 	"CleanConcern":         CleanConcern,
 	"WbLoginCommand":       WbLoginCommand,
+	"ScanCommand":          ScanCommand,
 }
 
 const (
@@ -56,6 +57,8 @@ const (
 	ReverseCommand = "倒放"
 	HelpCommand    = "help"
 	ConfigCommand  = "config"
+	ScanCommand    = "刷新" // 手动触发订阅刷新（支持英文别名 scan）
+	ScanEnCommand  = "scan"
 )
 
 // private command
@@ -76,7 +79,7 @@ const (
 	AbnormalConcernCheck = "检测异常订阅"
 	CleanConcern         = "清除订阅"
 	ResubscribeCommand   = "重新订阅" // 微博一键重新订阅
-	WbLoginCommand       = "wb登陆"   // 微博扫码登录
+	WbLoginCommand       = "wb登陆" // 微博扫码登录
 )
 
 var allGroupCommand = [...]string{
@@ -87,6 +90,7 @@ var allGroupCommand = [...]string{
 	ReverseCommand, ConfigCommand,
 	HelpCommand, ScoreCommand, AdminCommand,
 	SilenceCommand, NoUpdateCommand, CleanConcern,
+	ScanCommand, ScanEnCommand,
 }
 
 var allPrivateOperate = [...]string{

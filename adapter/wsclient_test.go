@@ -327,13 +327,24 @@ func TestWSClient_ResponseCh_Concurrent(t *testing.T) {
 
 // Test ws-server mode startup
 func TestWSClient_StartServer(t *testing.T) {
-	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15631")
+	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15631",
+		WithWSToken("test-token"))
 	err := c.Start()
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond) // Give server time to start
 	assert.False(t, c.IsConnected())   // No client connected yet
 
 	// Cleanup
+	_ = c.Stop()
+}
+
+// Test ws-server mode without token: allowed to start (per user request),
+// runs in unauthenticated mode with a warning logged
+func TestWSClient_StartServer_WithoutTokenAllowed(t *testing.T) {
+	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15634")
+	err := c.Start()
+	require.NoError(t, err, "ws-server without token should be allowed to start (unauthenticated mode)")
+	time.Sleep(100 * time.Millisecond) // Give server time to start
 	_ = c.Stop()
 }
 
@@ -356,6 +367,7 @@ func TestWSClient_StartServer_WithToken(t *testing.T) {
 // Test ws-server connection upgrade and message handling
 func TestWSClient_ServerConnection(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15633",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {}))
 
 	err := c.Start()
@@ -363,7 +375,8 @@ func TestWSClient_ServerConnection(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Connect a client
-	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15633", nil)
+	header := http.Header{"Authorization": []string{"Bearer test-token"}}
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15633", header)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -852,6 +865,7 @@ func TestWSClient_SendAndWait_MarshalError(t *testing.T) {
 // Test server mode with connection limit (multiple clients)
 func TestWSClient_ServerMode_MultipleClients(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15640",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {}))
 
 	err := c.Start()
@@ -859,13 +873,15 @@ func TestWSClient_ServerMode_MultipleClients(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// First client
-	conn1, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640", nil)
+	conn1, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 	assert.True(t, c.IsConnected())
 
 	// Second client (should replace first)
-	conn2, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640", nil)
+	conn2, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 
@@ -1029,7 +1045,8 @@ func TestWSClient_HandleMessage_LargeMessage(t *testing.T) {
 
 // Test startServer with empty address
 func TestWSClient_StartServer_EmptyAddress(t *testing.T) {
-	c := newTestWSClient("onebot-v11", WSModeServer, "")
+	c := newTestWSClient("onebot-v11", WSModeServer, "",
+		WithWSToken("test-token"))
 	err := c.Start()
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
@@ -1247,6 +1264,7 @@ func TestHighFrequencyMessages(t *testing.T) {
 
 	// 创建 wsclient，监听固定端口
 	c := NewWSClient("onebot-v11", WSModeServer, "127.0.0.1:18999",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {
 			atomic.AddInt32(&msgCount, 1)
 		}))
@@ -1259,7 +1277,8 @@ func TestHighFrequencyMessages(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 连接到这个服务器
-	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18999", nil)
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18999",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -2102,6 +2121,7 @@ func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
 	const heartbeatInterval = 100 * time.Millisecond
 
 	wsClient := NewWSClient("onebot-v11", WSModeServer, "localhost:0",
+		WithWSToken("test-token"),
 		WithWSHeartbeat(heartbeatInterval),
 		WithWSMessageHandler(func(b []byte) {}))
 
@@ -2122,7 +2142,8 @@ func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
 	t.Logf("Initial heartbeat loops: %d", wsClient.activeHeartbeatLoops.Load())
 
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"),
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	defer newConn.Close()
 

@@ -75,7 +75,7 @@ func Run() {
 	if fi, err := os.Stat("application.yaml"); err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
-			if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0755); err != nil {
+			if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0600); err != nil {
 				warn.Warn(fmt.Sprintf("application.yaml 生成失败 - %v", err))
 				os.Exit(1)
 			} else {
@@ -147,6 +147,7 @@ var exampleConfig = func() string {
 	s := `
 ### 注意，填写时请把井号及后面的内容删除，并且冒号后需要加一个空格
 bot:
+  commandPrefix: "/"     # 命令前缀，默认 "/"
   onJoinGroup: 
     rename: "【bot】"   # BOT 进群后自动改名，默认改名为"【bot】"，如果留空则不自动改名
   sendFailureReminder: # 失败提醒：发送失败达到一定次数后触发 notify.bot.send_failed.tmpl 模板
@@ -155,6 +156,39 @@ bot:
   offlineQueue:   # 离线缓存：BOT 离线时暂存要发送的消息，上线后重新发送（期间不能重启 DDBOT）
     enable: false # 是否启用离线缓存
     expire: 30m   # 离线消息有效期
+  onDisconnected: # 断线后的动作，可选 "exit"（退出程序）或留空（仅记录日志）
+
+# 代理配置：X / YouTube / 翻译等海外请求需要海外代理
+# 可选类型：
+#   systemProxy: 自动检测系统代理（Windows 注册表 / Linux 环境变量 / GNOME 系统代理），默认值
+#   localProxyPool: 手动配置代理池（下方的 localProxyPool 段）
+#   pyProxyPool: Python 代理池（下方的 pyProxyPool 段）
+#   off: 不使用代理
+proxy:
+  type: systemProxy
+
+# 本地代理池配置（仅当 proxy.type = localProxyPool 时生效）
+localProxyPool:
+  oversea:          # 海外代理（用于 X、YouTube 等）
+    - "http://127.0.0.1:7890"
+    - "socks5://127.0.0.1:1080"
+  mainland:         # 国内代理（用于 B站、微博等）
+    - "http://127.0.0.1:8080"
+
+# Python 代理池配置（仅当 proxy.type = pyProxyPool 时生效）
+pyProxyPool:
+  host: "http://127.0.0.1:8000"
+
+# 图片池配置（用于色图等命令）
+imagePool:
+  type: lolicon    # 可选：lolicon / localPool / off
+loliconPool:
+  apikey:          # LOLICON API Key（可选）
+  cacheMin: 0      # 缓存图片最小数量
+  cacheMax: 20     # 缓存图片最大数量
+  proxy:           # LOLICON 请求代理（可选）
+localPool:
+  imageDir: "./images"  # 本地图池图片目录
 
 # 初次运行时将不使用 b 站帐号方便进行测试
 # 如果不使用 b 站帐号，则推荐订阅数不要超过 5 个，否则推送延迟将上升
@@ -193,6 +227,8 @@ acfun:
   unsub: false
   interval: 25s
   onlyOnlineNotify: false
+  minFollowerCap: 0   # 低于此粉丝数的用户不推送
+  disableSub: false   # 禁止 A 站自动关注账号
 
 # Twitter 推送支持两种模式：
 # 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
@@ -215,6 +251,17 @@ twitter:
   interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
   userAgent:      # 浏览器 User-Agent
   unsub: false    # 是否自动取消关注（当取消订阅时）
+  retweetFullText: false  # 转发推文是否显示原推文完整内容，false 显示截断摘要，true 显示完整文本
+
+  # 自动翻译配置
+  translate:
+    enabled: false   # 是否启用推文自动翻译（优先 X 官方 API，失败回退 Google）
+    minInterval: 5s  # 两次翻译请求的最小间隔，建议不要过小
+    targetLang: zh   # 翻译目标语言，默认 zh
+    batchWait: 15s   # 推送渲染时等待单条预翻译的兜底时长，默认 = minInterval + 10s
+
+  # queryId 缓存刷新间隔（api 模式，自动从 sw.js 提取 queryId 后生效）
+  queryIdRefreshInterval: 168h
 
   # api 模式配置（mode: api 时生效）
   # 以下字段用于 Twitter API 认证，需要真实账号的 cookies
@@ -269,11 +316,19 @@ weibo:
   # Cookie 告警通知配置
   disableCookieAlert: false  # 设为 true 可关闭 Cookie/SUB 失效告警通知
   alertGroupId: 0            # Cookie 告警发送到指定群，0 表示不发群
-  # alertQQList:             # Cookie 告警私聊发送给指定 QQ（可选，支持数组或逗号分隔字符串）
-  #   - 123456
+  alertQQList: []            # Cookie 告警私聊发送给指定 QQ（可选，支持数组或逗号分隔字符串）
+                             # 示例: [123456, 789012] 或 "123456,789012"
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+
+# 斗鱼直播推送
+douyu:
+  interval: 60s           # 轮询间隔，默认60秒
+
+# 虎牙直播推送
+huya:
+  interval: 60s           # 轮询间隔，默认60秒
 
 # 小红书直播推送
 # 需要配置 cookies 才能获取用户房间信息
@@ -328,6 +383,32 @@ autoreply: # 自定义命令自动回复，自定义命令通过模板发送消�
 customCommandPrefix:
   签到：""
   
+# 通知配置
+notify:
+  parallel: 1     # 并行推送数量，默认 1
+
+# 调度配置
+dispatch:
+  largeNotifyLimit: 50  # 大通知阈值，超过后改为分段推送
+
+# 定时任务配置
+cronjob: []       # 定时任务列表，格式见下面注释
+  # 示例:
+  # - cron: "0 9 * * *"      # 每天 9 点
+  #   templateName: "xxx"    # 使用的模板名
+  #   target:
+  #     group: [123456789]   # 推送到的群
+  #     private: [987654321] # 推送到的私聊用户
+
+# 调试白名单：仅在以下群/QQ 上开启调试日志与调试命令
+debug:
+  group: []       # 调试群列表
+  uin: []         # 调试 QQ 列表
+
+# 消息标记（收到重复/相似消息时合并提醒），默认禁用
+message-marker:
+  disable: false  # 设为 true 禁用消息标记
+
 # 日志等级，可选值：trace / debug / info / warn / error
 logLevel: info
 
@@ -363,12 +444,10 @@ extDb:
 
 # Telegram 推送设置
 # 启用后，可在 Telegram 中进行所有操作（命令与 QQ 一致）
+# Telegram 请求走全局代理池（proxy.type = systemProxy 时自动使用系统代理），无需单独配置
 telegram:
   enable: false            # 是否启用 Telegram
   token: ""                # Telegram Bot Token
-  proxy:
-    enable: false         # 是否启用代理（http/https/socks5/socks5h）
-    url: ""               # 代理地址，例如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080
   endpoint: ""            # 可选：自定义 Telegram API Endpoint，留空使用默认
 
 `

@@ -10,6 +10,9 @@ type Config struct {
 }
 
 // GlobalConfig 默认全局配置
+//
+// 注：GetString/GetInt/GetBool/GetDuration 等读取方法由内嵌的 *viper.Viper 提升提供，
+// 无需在 Config 上重复声明；配置热重载由 bot.go 直接调用 WatchConfig() 建立。
 var GlobalConfig = &Config{
 	viper.New(),
 }

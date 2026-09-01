@@ -152,7 +152,8 @@ type offlineQueueMsg struct {
 type Messenger struct {
 	Adapter Adapter
 
-	Uin    int64
+	// Uin 会被 lifecycle 事件 goroutine 写入、其他 goroutine 频繁读取，必须原子访问
+	Uin    atomic.Int64
 	Online atomic.Bool
 
 	GroupList  []*GroupInfo
@@ -241,9 +242,9 @@ func (m *Messenger) registerEventHandlers() {
 
 	m.Adapter.OnMetaEvent(func(event *MetaEvent) {
 		if event.MetaEventType == "lifecycle" {
-			m.Uin = event.SelfID
+			m.Uin.Store(event.SelfID)
 			wasOnline := m.Online.Swap(true)
-			messengerLogger.Infof("Bot online: %d", m.Uin)
+			messengerLogger.Infof("Bot online: %d", m.Uin.Load())
 			// 重连（lifecycle 事件）时同样刷新离线队列，避免心跳未翻转导致缓存消息滞留
 			if !wasOnline && getOfflineQueueEnable() {
 				go m.flushOfflineQueue()
@@ -290,7 +291,7 @@ func (m *Messenger) Stop() error {
 }
 
 func (m *Messenger) GetUin() int64 {
-	return m.Uin
+	return m.Uin.Load()
 }
 
 func (m *Messenger) GetSelfID() int64 {
@@ -319,6 +320,12 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 
 	// 构建消息分片
 	chunks := m.buildMessageChunks(msg)
+
+	// 空分片时返回明确错误，避免返回零值 SendResp{RetMSG:nil} 导致调用方解引用 panic
+	if len(chunks) == 0 {
+		messengerLogger.Warnf("Send group message: 消息无可构建分片，跳过发送 (group=%d)", groupCode)
+		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: errors.New("no message chunks to send")}
+	}
 
 	var lastResult SendResp
 	for i, chunk := range chunks {
@@ -358,8 +365,8 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 					ID:        int64(msgID),
 					GroupCode: groupCode,
 					Sender: &SenderInfo{
-						UserID: m.Uin,
-						Uin:    m.Uin,
+						UserID: m.Uin.Load(),
+						Uin:    m.Uin.Load(),
 					},
 					Elements: chunkMsg.Elements,
 				},
@@ -394,6 +401,15 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 	// 构建消息分片
 	chunks := m.buildMessageChunks(msg)
 
+	// 空分片时返回明确错误，避免发送无内容的假成功结果
+	if len(chunks) == 0 {
+		messengerLogger.Warnf("Send private message: 消息无可构建分片，跳过发送 (target=%d)", target)
+		return PrivateSendResp{
+			RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin.Load(), Elements: msg.Elements},
+			Error:  errors.New("no message chunks to send"),
+		}
+	}
+
 	var lastMsgID int32 = -1
 	for i, chunk := range chunks {
 		// 构建新的 SendingMessage
@@ -416,7 +432,7 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 			} else if errors.Is(err, ErrRequestNotSent) && getOfflineQueueEnable() {
 				m.queueUnsentChunks(target, "private", chunks, i, newstr)
 				return PrivateSendResp{
-					RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin, Elements: msg.Elements},
+					RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin.Load(), Elements: msg.Elements},
 					Error:  err,
 					Queued: true,
 				}
@@ -424,7 +440,7 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 				messengerLogger.Warnf("私聊消息发送错误未明确标记为写入前失败，不自动重试 (chunk %d/%d)", i+1, len(chunks))
 			}
 			return PrivateSendResp{
-				RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin, Elements: msg.Elements},
+				RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin.Load(), Elements: msg.Elements},
 				Error:  err,
 			}
 		} else {
@@ -436,10 +452,10 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		RetMSG: &PrivateMessage{
 			ID:     int64(lastMsgID),
 			UserID: target,
-			Self:   m.Uin,
+			Self:   m.Uin.Load(),
 			Sender: &SenderInfo{
-				UserID: m.Uin,
-				Uin:    m.Uin,
+				UserID: m.Uin.Load(),
+				Uin:    m.Uin.Load(),
 			},
 			Elements: msg.Elements,
 		},
@@ -902,7 +918,7 @@ func (m *Messenger) FindGroupByUinLocked(uin int64) *GroupInfo {
 }
 
 func (m *Messenger) FindFriend(uin int64) *FriendInfo {
-	if uin == m.Uin {
+	if uin == m.Uin.Load() {
 		return &FriendInfo{
 			Uin:      uin,
 			Nickname: "Bot",
@@ -1209,7 +1225,14 @@ func (m *Messenger) reloadLists() error {
 	}
 
 	var totalMembers int
-	for _, group := range m.GroupList {
+	// 在 groupMu 读锁下拷贝群列表快照后再遍历，避免与 ReloadGroupList（整体替换切片）、
+	// GetGroupMembersByID（加锁写 Members）并发时产生 data race
+	m.groupMu.RLock()
+	groupSnapshot := make([]*GroupInfo, len(m.GroupList))
+	copy(groupSnapshot, m.GroupList)
+	m.groupMu.RUnlock()
+
+	for _, group := range groupSnapshot {
 		members, err := m.GetGroupMembersByID(group.Code)
 		if err != nil {
 			messengerLogger.WithError(err).Errorf("unable to load group members for %d", group.Code)
@@ -1218,7 +1241,7 @@ func (m *Messenger) reloadLists() error {
 			}
 			continue
 		}
-		totalMembers += len(group.Members)
+		totalMembers += len(members)
 		messengerLogger.Debugf("群[%d]加载成员[%d]个", group.Code, len(members))
 	}
 	messengerLogger.Infof("已加载 %d 个群成员", totalMembers)
@@ -1248,6 +1271,24 @@ func (m *Messenger) startListReloadRetry() {
 		}
 		messengerLogger.Error("列表多次重试仍失败，订阅系统将不会启动，请检查适配器连接后重启")
 	}()
+}
+
+// GetGroupListSnapshot 返回群列表的加锁快照副本，调用方可安全遍历而不与 ReloadGroupList 竞争
+func (m *Messenger) GetGroupListSnapshot() []*GroupInfo {
+	m.groupMu.RLock()
+	defer m.groupMu.RUnlock()
+	out := make([]*GroupInfo, len(m.GroupList))
+	copy(out, m.GroupList)
+	return out
+}
+
+// GetFriendListSnapshot 返回好友列表的加锁快照副本
+func (m *Messenger) GetFriendListSnapshot() []*FriendInfo {
+	m.friendMu.RLock()
+	defer m.friendMu.RUnlock()
+	out := make([]*FriendInfo, len(m.FriendList))
+	copy(out, m.FriendList)
+	return out
 }
 
 // IsListLoaded 返回好友/群/群成员列表是否已完成首次加载
@@ -1345,7 +1386,7 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 		}
 	case "group_decrease":
 		// Check if it's the bot being kicked/leaving the group
-		if event.SubType == "kick_me" || event.OperatorID == m.Uin {
+		if event.SubType == "kick_me" || event.OperatorID == m.Uin.Load() {
 			// Bot was kicked or left the group - save group info before removing
 			group := m.FindGroupByUin(event.GroupID)
 			if group != nil {

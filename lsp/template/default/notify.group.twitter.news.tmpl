@@ -17,6 +17,9 @@
     {{ end -}}
 
     {{ printf "X-%s%s了%s的推文：\n%s\n%s\n" $dynamic.User.Name $tips $orgUserName $dynamic.Date $dynamic.Content -}}
+    {{ if $dynamic.TranslatedText -}}
+        {{ printf "[翻译] %s\n" $dynamic.TranslatedText -}}
+    {{ end -}}
 {{ else -}}
    {{ if eq $dynamic.Type 2 -}}
         {{ $retweetUser := "Unknown User" -}}
@@ -36,6 +39,9 @@
             {{ $content = join "" (list $content "\n") -}}
         {{ end -}}
         {{ printf "%s" $content -}}
+        {{ if $dynamic.TranslatedText -}}
+            {{ printf "[翻译] %s\n" $dynamic.TranslatedText -}}
+        {{ end -}}
     {{ end -}}
 
     {{ range $media := $dynamic.Media -}}
@@ -72,6 +78,9 @@
         {{ printf "%s\n" $dynamic.Quote.Date -}}
         {{ if ne $dynamic.Quote.Content "" -}}
             {{ printf "%s\n" $dynamic.Quote.Content -}}
+            {{ if $dynamic.Quote.TranslatedText -}}
+                {{ printf "[翻译] %s\n" $dynamic.Quote.TranslatedText -}}
+            {{ end -}}
         {{ end -}}
 
         {{ range $media := $dynamic.Quote.Media -}}
