@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -583,8 +584,10 @@ func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan c
 		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
 		if err != nil {
 			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
+			recordTwitterFetchResult(false)
 			continue
 		}
+		recordTwitterFetchResult(true)
 		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
 
 		for _, tweet := range result.Tweets {
@@ -651,8 +654,10 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 	if err != nil {
 		logger.Errorf("HomeTimeline fetch error: %v", err)
 		t.homeTimelineCursor = "" // 清除无效 cursor
+		recordTwitterFetchResult(false)
 		return
 	}
+	recordTwitterFetchResult(true)
 
 	for _, tweet := range result.Tweets {
 		var screenName string
@@ -769,6 +774,28 @@ func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
 		return false
 	}
 	return true
+}
+
+// twitterFetchFailures 运行时拉取失败的连续计数；成功一轮即清零。
+// 连续失败达到阈值说明会话/网络级别故障，进入自动恢复模式并告警，
+// 避免像以前那样只刷日志静默停摆。
+var (
+	twitterFetchFailures       atomic.Int32
+	twitterFetchFailThreshold  int32 = 20
+)
+
+func recordTwitterFetchResult(ok bool) {
+	if ok {
+		twitterFetchFailures.Store(0)
+		return
+	}
+	n := twitterFetchFailures.Add(1)
+	if n >= twitterFetchFailThreshold {
+		twitterFetchFailures.Store(0)
+		if !twitterRecovering.Load() {
+			enterTwitterRecovering(fmt.Sprintf("运行中连续%d次获取推文失败", n))
+		}
+	}
 }
 
 func SetRequestOptions() []requests.Option {
