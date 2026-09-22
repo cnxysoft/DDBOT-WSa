@@ -287,6 +287,14 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 					log.Infof("Follow user %s success", userId)
 				}
 			}
+
+			// 首次订阅预标记：预拉一次该账号的现有推文并逐条标记，
+			// 避免下一轮 UserTweets 把最近 N 条存量推文当作新推文全量推送。
+			// 与 mirror 分支的 GetTweets + filterTweet 预标记对齐。
+			if err := t.preMarkUserTweets(context.Background(), userId); err != nil {
+				log.Errorf("PreMark user %s tweets failed: %v", userId, err)
+				return nil, fmt.Errorf("添加订阅失败 - 预标记存量推文失败: %v", err)
+			}
 		}
 		_, err = t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
 		if err != nil {
@@ -734,6 +742,28 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 			}
 		}
 	}
+}
+
+// preMarkUserTweets 首次订阅时预拉该账号的现有推文并逐条写入去重标记，
+// 避免下一轮轮询把最近 N 条存量推文当作新推文全量推送（首见即推）。
+// 仅用于 API 模式；mirror 模式的对等逻辑在 Add 的非 API 分支。
+func (t *twitterConcern) preMarkUserTweets(ctx context.Context, userId string) error {
+	apiUserID, err := twitterAPI.ResolveUserID(ctx, userId)
+	if err != nil {
+		return fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+	}
+	result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+	if err != nil {
+		return fmt.Errorf("拉取用户 %s 存量推文失败: %v", userId, err)
+	}
+	for _, tweet := range result.Tweets {
+		if tweet == nil || tweet.ID == "" {
+			continue
+		}
+		// 逐条写入去重标记；标记写入失败时 filterTweet 内部已记日志并返回 false
+		t.filterTweet(tweet)
+	}
+	return nil
 }
 
 func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {

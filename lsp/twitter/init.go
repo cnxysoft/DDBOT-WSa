@@ -90,14 +90,7 @@ func setCookies() {
 	TwitterAPIFetchMode = normalizeAPIFetchMode(config.GlobalConfig.GetString("twitter.apiFetchMode"))
 
 	mode := strings.ToLower(strings.TrimSpace(config.GlobalConfig.GetString("twitter.mode")))
-	if mode == "" {
-		mode = ModeAPI
-	}
-	if mode == ModeAPI {
-		TwitterMode = ModeAPI
-	} else {
-		TwitterMode = ModeMirror
-	}
+	TwitterMode = resolveTwitterMode(mode)
 
 	if TwitterMode == ModeAPI {
 		ct0 := config.GlobalConfig.GetString("twitter.ct0")
@@ -148,6 +141,16 @@ func IsTwitterEnabled() bool {
 
 func IsMirrorMode() bool {
 	return TwitterMode == ModeMirror
+}
+
+// resolveTwitterMode 解析twitter.mode配置。未配置或缺省时保持mirror，
+// 与历史版本兼容：存量用户配置里没有这个键时不应被静默切到API模式，
+// 要用API需显式配置 twitter.mode: api。
+func resolveTwitterMode(mode string) string {
+	if mode == ModeAPI {
+		return ModeAPI
+	}
+	return ModeMirror
 }
 
 // verifyTwitterAPI 单次验证Cookie：拉取账号信息并刷新queryId缓存。
