@@ -241,7 +241,7 @@ acfun:
 # 填入你访问网站时提交的 user_agent，可在浏览器中查看
 # 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
 twitter:
-  mode: api  # 模式选择：api（默认）或 mirror
+  mode: mirror  # 模式选择：mirror（默认）或 api；要用 API 需显式改为 api 并配置 cookie
   apiFetchMode: per_user       # API 查询方式：home_timeline 或 per_user
   baseUrl:     # mirror 模式下的 nitter 镜像列表
     - "https://nitter.net/"
