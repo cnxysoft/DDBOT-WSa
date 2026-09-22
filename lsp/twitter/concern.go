@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -222,7 +223,10 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 	userId := id.(string)
 	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
 
-	if IsTwitterEnabled() {
+	if TwitterMode == ModeAPI {
+		if !IsTwitterEnabled() {
+			return nil, errors.New("Twitter API 未配置有效 Cookie")
+		}
 		info := &UserInfo{
 			Id:   userId,
 			Name: userId,
@@ -255,20 +259,41 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 		}
 		_ = t.AddUserInfo(info)
 
-		// 检查是否已经关注过（首次订阅需要关注）
+		// 逐账号查询不依赖关注关系；HomeTimeline 模式仍在首次订阅时自动关注。
 		if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
-			// 首次订阅，自动关注
-			if twitterAPI != nil {
+			if !apiFetchModeNeedsFollow() {
+				log.Infof("per_user mode, skip automatic follow for %s", userId)
+			} else if twitterAPI != nil {
+				// 首次订阅，自动关注
+				followUserID := ""
+				if userProfile != nil {
+					followUserID = userProfile.RestID
+				}
+				if followUserID == "" {
+					followUserID, err = twitterAPI.ResolveUserID(context.Background(), userId)
+					if err != nil {
+						log.Errorf("Resolve Twitter user %s failed: %v", userId, err)
+						return nil, fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+					}
+				}
 				// 如果已经关注，则跳过
 				if userProfile != nil && userProfile.IsFollowing {
 					log.Infof("User %s already following, skip", userId)
 				} else {
-					if err := twitterAPI.Follow(context.Background(), userId); err != nil {
+					if err := twitterAPI.Follow(context.Background(), followUserID); err != nil {
 						log.Errorf("Follow user %s failed: %v", userId, err)
 						return nil, fmt.Errorf("关注用户 %s 失败: %v", userId, err)
 					}
 					log.Infof("Follow user %s success", userId)
 				}
+			}
+
+			// 首次订阅预标记：预拉一次该账号的现有推文并逐条标记，
+			// 避免下一轮 UserTweets 把最近 N 条存量推文当作新推文全量推送。
+			// 与 mirror 分支的 GetTweets + filterTweet 预标记对齐。
+			if err := t.preMarkUserTweets(context.Background(), userId); err != nil {
+				log.Errorf("PreMark user %s tweets failed: %v", userId, err)
+				return nil, fmt.Errorf("添加订阅失败 - 预标记存量推文失败: %v", err)
 			}
 		}
 		_, err = t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
@@ -330,7 +355,7 @@ func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{
 	}
 
 	// 如果开启unsub且该用户已无任何订阅，则取消关注
-	if cfg.GetTwitterUnsub() && allCtype.Empty() {
+	if cfg.GetTwitterUnsub() && allCtype.Empty() && apiFetchModeNeedsFollow() {
 		go t.unsubUser(userId)
 	}
 
@@ -344,7 +369,12 @@ func (t *twitterConcern) unsubUser(userId string) {
 	if twitterAPI == nil {
 		return
 	}
-	if err := twitterAPI.Unfollow(context.Background(), userId); err != nil {
+	apiUserID, err := twitterAPI.ResolveUserID(context.Background(), userId)
+	if err != nil {
+		logger.Errorf("解析用户 %s 的数字 ID 失败 - %v", userId, err)
+		return
+	}
+	if err := twitterAPI.Unfollow(context.Background(), apiUserID); err != nil {
 		logger.Errorf("取消关注失败 - %v", err)
 	} else {
 		logger.WithField("userId", userId).Info("取消关注成功")
@@ -471,11 +501,15 @@ func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan
 	if IsTwitterEnabled() {
 		// HomeTimeline 是账号首页的全量时间线，无法按群过滤。
 		// 手动刷新指定群时明确提示，避免用户误以为只拉了本群
-		if groupCode > 0 {
+		if groupCode > 0 && TwitterAPIFetchMode != APIFetchModePerUser {
 			logger.WithField("groupCode", groupCode).
 				Info("API 模式手动刷新为全量 HomeTimeline 拉取（无法按群过滤），推送侧按订阅关系分发")
 		}
-		t.processHomeTimeline(ctx, eventChan)
+		if TwitterAPIFetchMode == APIFetchModePerUser {
+			t.processPerUserTimeline(ctx, eventChan)
+		} else {
+			t.processHomeTimeline(ctx, eventChan)
+		}
 		return
 	}
 
@@ -500,6 +534,115 @@ func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan
 	}
 }
 
+func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	_, ids, _, err := t.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
+		return p.ContainAll(Tweets)
+	})
+	if err != nil {
+		logger.Errorf("List Twitter subscriptions error: %v", err)
+		return
+	}
+
+	uniqueIDs := make([]string, 0, len(ids))
+	seenIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		userID, ok := id.(string)
+		if !ok || strings.TrimSpace(userID) == "" {
+			continue
+		}
+		userID = strings.TrimSpace(userID)
+		if _, exists := seenIDs[userID]; exists {
+			continue
+		}
+		seenIDs[userID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, userID)
+	}
+
+	firstRequest := true
+	waitForRequest := func() bool {
+		if firstRequest {
+			firstRequest = false
+			return true
+		}
+		return waitTwitterRequestInterval(ctx)
+	}
+
+	for _, userID := range uniqueIDs {
+		if !waitForRequest() {
+			return
+		}
+
+		apiUserID, err := twitterAPI.ResolveUserID(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("解析 Twitter 用户 ID 失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+		userInfo, err := t.getAPIUserInfo(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("加载 Twitter 用户信息失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+
+		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
+			recordTwitterFetchResult(false)
+			continue
+		}
+		recordTwitterFetchResult(true)
+		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
+
+		for _, tweet := range result.Tweets {
+			if tweet == nil || tweet.ID == "" {
+				continue
+			}
+			if t.filterTweet(tweet) {
+				eventChan <- &NewsInfo{UserInfo: userInfo, Tweet: tweet}
+			}
+		}
+
+	}
+}
+
+func (t *twitterConcern) getAPIUserInfo(ctx context.Context, userID string) (*UserInfo, error) {
+	info, err := t.GetUserInfo(userID)
+	if err == nil && info != nil {
+		return info, nil
+	}
+	profile, err := twitterAPI.GetUserByScreenName(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, errors.New("Twitter API returned empty user profile")
+	}
+	info = &UserInfo{Id: userID, Name: profile.Name}
+	if info.Name == "" {
+		info.Name = userID
+	}
+	if err := t.AddUserInfo(info); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func waitTwitterRequestInterval(ctx context.Context) bool {
+	timer := time.NewTimer(requestInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan<- concern.Event) {
 	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
 
@@ -519,8 +662,10 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 	if err != nil {
 		logger.Errorf("HomeTimeline fetch error: %v", err)
 		t.homeTimelineCursor = "" // 清除无效 cursor
+		recordTwitterFetchResult(false)
 		return
 	}
+	recordTwitterFetchResult(true)
 
 	for _, tweet := range result.Tweets {
 		var screenName string
@@ -599,6 +744,28 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 	}
 }
 
+// preMarkUserTweets 首次订阅时预拉该账号的现有推文并逐条写入去重标记，
+// 避免下一轮轮询把最近 N 条存量推文当作新推文全量推送（首见即推）。
+// 仅用于 API 模式；mirror 模式的对等逻辑在 Add 的非 API 分支。
+func (t *twitterConcern) preMarkUserTweets(ctx context.Context, userId string) error {
+	apiUserID, err := twitterAPI.ResolveUserID(ctx, userId)
+	if err != nil {
+		return fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+	}
+	result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+	if err != nil {
+		return fmt.Errorf("拉取用户 %s 存量推文失败: %v", userId, err)
+	}
+	for _, tweet := range result.Tweets {
+		if tweet == nil || tweet.ID == "" {
+			continue
+		}
+		// 逐条写入去重标记；标记写入失败时 filterTweet 内部已记日志并返回 false
+		t.filterTweet(tweet)
+	}
+	return nil
+}
+
 func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {
 	var result []concern.Event
 	userId := id.(string)
@@ -637,6 +804,28 @@ func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
 		return false
 	}
 	return true
+}
+
+// twitterFetchFailures 运行时拉取失败的连续计数；成功一轮即清零。
+// 连续失败达到阈值说明会话/网络级别故障，进入自动恢复模式并告警，
+// 避免像以前那样只刷日志静默停摆。
+var (
+	twitterFetchFailures       atomic.Int32
+	twitterFetchFailThreshold  int32 = 20
+)
+
+func recordTwitterFetchResult(ok bool) {
+	if ok {
+		twitterFetchFailures.Store(0)
+		return
+	}
+	n := twitterFetchFailures.Add(1)
+	if n >= twitterFetchFailThreshold {
+		twitterFetchFailures.Store(0)
+		if !twitterRecovering.Load() {
+			enterTwitterRecovering(fmt.Sprintf("运行中连续%d次获取推文失败", n))
+		}
+	}
 }
 
 func SetRequestOptions() []requests.Option {
