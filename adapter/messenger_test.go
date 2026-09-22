@@ -1729,6 +1729,44 @@ func TestBuildMessageChunks_Video(t *testing.T) {
 	assert.Equal(t, 1, len(videoChunk), "video chunk should contain only video")
 }
 
+// TestBuildMessageChunks_JSON 回归测试：json 卡片没有分片分支，不能被静默丢弃。
+// 修复前：messenger.go 的 isSingleElement 不包含 json，buildMessageChunks 的 switch
+// 也没有 json 分支，于是 json 段在分片阶段被直接丢掉，消息里只剩文字。
+func TestBuildMessageChunks_JSON(t *testing.T) {
+	m, _, _ := setupTestMessenger(t)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "hello"})
+	msg.Append(&JsonSegment{Content: `{"app":"com.tencent.miniapp"}`})
+	msg.Append(&TextSegment{Content: "world"})
+
+	chunks := m.buildMessageChunks(msg)
+
+	// json 不可切分，必须单独成段且被保留
+	jsonChunkCount := 0
+	for _, chunk := range chunks {
+		for _, seg := range chunk {
+			if seg.Type == "json" {
+				jsonChunkCount++
+				assert.Equal(t, 1, len(chunk), "json chunk should contain only json")
+			}
+		}
+	}
+	assert.Equal(t, 1, jsonChunkCount, "json segment must be preserved as its own chunk")
+
+	// 还要能转换回 element，否则等于在下一阶段被二次丢弃
+	restored := 0
+	for _, chunk := range chunks {
+		for _, el := range parseChunkToElements(chunk) {
+			if js, ok := el.(*JsonSegment); ok {
+				restored++
+				assert.Equal(t, `{"app":"com.tencent.miniapp"}`, js.Content)
+			}
+		}
+	}
+	assert.Equal(t, 1, restored, "json segment should round-trip back to a JsonSegment")
+}
+
 // TestBuildMessageChunks_File tests that file is sent as a separate message.
 func TestBuildMessageChunks_File(t *testing.T) {
 	m, _, _ := setupTestMessenger(t)
@@ -2002,6 +2040,8 @@ func TestCountImages(t *testing.T) {
 }
 
 // TestIsSingleElement tests single element detection.
+// json 卡片不可切分，且 buildMessageChunks 没有 json 分支，
+// 因此必须算作独立发送类型，否则会在分片时被静默丢弃。
 func TestIsSingleElement(t *testing.T) {
 	tests := []struct {
 		segmentType string
@@ -2016,7 +2056,7 @@ func TestIsSingleElement(t *testing.T) {
 		{"file", true},
 		{"record", true},
 		{"forward", true},
-		{"json", false},
+		{"json", true},
 	}
 
 	for _, tt := range tests {

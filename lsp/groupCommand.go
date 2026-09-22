@@ -23,6 +23,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/twitter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
@@ -168,6 +169,15 @@ func (lgc *LspGroupCommand) Execute() {
 				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
 			) {
 				lgc.ResubscribeCommand()
+			}
+		}
+	case ScanCommand, ScanEnCommand:
+		if lgc.requireNotDisable(ScanCommand) {
+			if lgc.l.PermissionStateManager.RequireAny(
+				permission.AdminRoleRequireOption(lgc.uin()),
+				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+			) {
+				lgc.ScanCommand()
 			}
 		}
 	default:
@@ -1126,6 +1136,26 @@ func (lgc *LspGroupCommand) ResubscribeCommand() {
 	}
 
 	lgc.textSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
+}
+
+func (lgc *LspGroupCommand) ScanCommand() {
+	log := lgc.DefaultLoggerWithCommand(lgc.CommandName())
+	log.Infof("run %v command", lgc.CommandName())
+	defer func() { log.Infof("%v command end", lgc.CommandName()) }()
+
+	if !lgc.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(lgc.uin()),
+		permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+	) {
+		lgc.textReply("权限不足")
+		return
+	}
+
+	if err := twitter.ManualRefresh(lgc.groupCode()); err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+	lgc.textSend("已触发手动刷新，正在强制拉取本群订阅的最新推文...")
 }
 
 func (lgc *LspGroupCommand) DefaultLogger() *logrus.Entry {

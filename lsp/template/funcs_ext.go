@@ -332,6 +332,8 @@ func picUri(uri string) (e *mmsg.ImageBytesElement) {
 				logger.Errorf("template: pic uri Open error %v", err)
 				goto END
 			}
+			// 打开的目录句柄必须关闭，长驻进程反复执行模板会泄漏 fd
+			defer f.Close()
 			dirs, err := f.ReadDir(-1)
 			if err != nil {
 				logger.Errorf("template: pic uri ReadDir error %v", err)
@@ -383,6 +385,8 @@ func picUriWithParams(uri string, oParams ...map[string]interface{}) (e *mmsg.Im
 			logger.Errorf("template: pic uri Open error %v", err)
 			goto END
 		}
+		// 打开的目录句柄必须关闭，长驻进程反复执行模板会泄漏 fd
+		defer f.Close()
 		dirs, err := f.ReadDir(-1)
 		if err != nil {
 			logger.Errorf("template: pic uri ReadDir error %v", err)
@@ -789,7 +793,7 @@ type ddError struct {
 
 func (d *ddError) Error() string {
 	if d.err != nil {
-		return d.Error()
+		return d.err.Error()
 	}
 	return ""
 }
@@ -1072,6 +1076,8 @@ func videoUri(uri string) (e *mmsg.VideoElement) {
 				logger.Errorf("template: video uri Open error %v", err)
 				goto END
 			}
+			// 打开的目录句柄必须关闭，长驻进程反复执行模板会泄漏 fd
+			defer f.Close()
 			dirs, err := f.ReadDir(-1)
 			if err != nil {
 				logger.Errorf("template: video uri ReadDir error %v", err)
@@ -1163,6 +1169,8 @@ func recordUri(uri string) (e *mmsg.RecordElement) {
 				logger.Errorf("template: record uri Open error %v", err)
 				goto END
 			}
+			// 打开的目录句柄必须关闭，长驻进程反复执行模板会泄漏 fd
+			defer f.Close()
 			dirs, err := f.ReadDir(-1)
 			if err != nil {
 				logger.Errorf("template: record uri ReadDir error %v", err)
@@ -1170,9 +1178,10 @@ func recordUri(uri string) (e *mmsg.RecordElement) {
 			}
 			var result []os.DirEntry
 			for _, file := range dirs {
+				// 三个扩展名否定条件用 && 连接（De Morgan）：任一后缀匹配即保留
 				if file.IsDir() || !(strings.HasSuffix(file.Name(), ".mp3") ||
-					!(strings.HasSuffix(file.Name(), ".wav")) ||
-					!(strings.HasSuffix(file.Name(), ".ogg"))) {
+					strings.HasSuffix(file.Name(), ".wav") ||
+					strings.HasSuffix(file.Name(), ".ogg")) {
 					continue
 				}
 				result = append(result, file)
@@ -1256,6 +1265,8 @@ func fileUri(uri string) (e *mmsg.FileElement) {
 				logger.Errorf("template: file uri Open error %v", err)
 				goto END
 			}
+			// 打开的目录句柄必须关闭，长驻进程反复执行模板会泄漏 fd
+			defer f.Close()
 			dirs, err := f.ReadDir(-1)
 			if err != nil {
 				logger.Errorf("template: file uri ReadDir error %v", err)
@@ -1263,6 +1274,10 @@ func fileUri(uri string) (e *mmsg.FileElement) {
 			}
 			var result []os.DirEntry
 			for _, file := range dirs {
+				// 过滤目录，避免随机命中目录导致发送失败
+				if file.IsDir() {
+					continue
+				}
 				result = append(result, file)
 			}
 			if len(result) > 0 {
@@ -1450,13 +1465,14 @@ func sendApi(api string, params map[string]interface{}, expTime ...float64) inte
 }
 
 func loop(from, to int64) <-chan int64 {
-	ch := make(chan int64)
-	go func() {
-		for i := from; i <= to; i++ {
-			ch <- i
-		}
-		close(ch)
-	}()
+	// 使用带缓冲 channel 并同步写入：原实现为无缓冲 channel + 后台 goroutine，
+	// 模板未完整消费（break/只取首个）时 goroutine 永久阻塞泄漏。
+	// from > to 时返回空 channel，避免 rand/溢出类异常。
+	ch := make(chan int64, max(0, to-from+1))
+	for i := from; i <= to; i++ {
+		ch <- i
+	}
+	close(ch)
 	return ch
 }
 
@@ -1517,6 +1533,10 @@ func adapterReplyElement(elem adapter.IMessageElement) (int32, bool) {
 	return 0, false
 }
 
+// exec 在模板中执行本地命令（支持 shell/silent/elevate/nowait 参数）。
+// ⚠️ 安全警告：本函数允许模板作者以当前进程权限（elevate 时为管理员权限）执行任意命令，
+// Unix 环境下未显式传参时默认启用 shell 模式。模板文件仅应由 bot 管理员维护——
+// 任何将模板内容暴露给群成员/普通用户编辑的功能都会构成远程命令执行入口。
 func exec(input interface{}, inargs ...interface{}) string {
 	var cmd string
 	var args []string

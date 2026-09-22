@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,7 +33,9 @@ func (m *mockMsgCtx) Send(msg *mmsg.MSG) interface{}    { return nil }
 func (m *mockMsgCtx) NoPermissionReply() interface{}    { return nil }
 func (m *mockMsgCtx) GetLog() *logrus.Entry             { return logrus.NewEntry(logrus.StandardLogger()) }
 func (m *mockMsgCtx) GetTarget() mmsg.Target            { return mmsg.NewGroupTarget(m.groupCode) }
-func (m *mockMsgCtx) GetSender() *adapter.SenderInfo    { return &adapter.SenderInfo{UserID: 10000, Uin: 10000} }
+func (m *mockMsgCtx) GetSender() *adapter.SenderInfo {
+	return &adapter.SenderInfo{UserID: 10000, Uin: 10000}
+}
 
 type AddSubRequest struct {
 	Site      string      `json:"site"`
@@ -164,6 +167,9 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 		addr = "127.0.0.1:15631"
 	}
 	token := config.GlobalConfig.GetString("admin.token")
+	if token == "" {
+		logrus.Warn("admin.token 未配置：为防止未授权访问，管理 API 将拒绝所有请求（仅 /api/v1/health 可用性另议）。请配置 admin.token 后重启")
+	}
 
 	s := &Server{addr: addr, token: token, startedAt: time.Now(), online: online}
 
@@ -200,13 +206,15 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	mux.HandleFunc("/api/v1/notifications/send", s.withAuth(s.handleSendNotification))
 	mux.HandleFunc("/api/v1/notifications/stats", s.withAuth(s.handleNotificationStats))
 
-	// API 调试界面
-	mux.HandleFunc("/api/debug", s.serveApiDebugger)
-	mux.HandleFunc("/api/debug/", s.serveApiDebuggerAssets)
+	// API 调试界面（同样需要鉴权，避免成为唯一无鉴权路由）
+	mux.HandleFunc("/api/debug", s.withAuth(s.serveApiDebugger))
+	mux.HandleFunc("/api/debug/", s.withAuth(s.serveApiDebuggerAssets))
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	go func() {
-		_ = server.ListenAndServe()
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logrus.Errorf("admin server 启动失败(addr=%s): %v", addr, err)
+		}
 	}()
 	return s, nil
 }
@@ -223,16 +231,21 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if s.token != "" {
-			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			if strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != s.token {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
+		// 安全：token 为空时一律拒绝，不允许无鉴权访问（对应配置 admin.token 为空的默认情况）
+		if s.token == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"admin token not configured"}`))
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// 常量时间比较，防时序攻击
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(s.token)) != 1 {
+			w.WriteHeader(http.StatusForbidden)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		next(w, r)
@@ -479,7 +492,11 @@ func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var groupCode int64
-		fmt.Sscanf(groupCodeStr, "%d", &groupCode)
+		if _, err := fmt.Sscanf(groupCodeStr, "%d", &groupCode); err != nil || groupCode <= 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid groupCode"})
+			return
+		}
 
 		sm := targetConcern.GetStateManager()
 		cfg := sm.GetGroupConcernConfig(groupCode, parsedId)
@@ -539,10 +556,145 @@ func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
 
 // 配置管理 API 处理函数
 
+// redactedPlaceholder 是敏感配置项在 GET /api/v1/config 响应中的占位值；
+// POST 写入时遇到该占位值会被跳过，避免把脱敏值写回真实配置。
+const redactedPlaceholder = "***REDACTED***"
+
+var sensitiveKeyPatterns = []string{
+	"password", "passwd", "secret", "token", "sessdata",
+	"auth_token", "cookie", "credential", "apikey", "api_key",
+	"access_key", "private", "auth",
+}
+
+func isSensitiveKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, p := range sensitiveKeyPatterns {
+		if strings.Contains(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// maskSensitiveConfig 递归地将敏感键的非空字符串值替换为占位符
+func maskSensitiveConfig(cfg map[string]interface{}) {
+	for k, v := range cfg {
+		if m, ok := v.(map[string]interface{}); ok {
+			maskSensitiveConfig(m)
+			continue
+		}
+		if isSensitiveKey(k) {
+			if s, ok := v.(string); ok && s != "" {
+				cfg[k] = redactedPlaceholder
+			}
+		}
+	}
+}
+
+// mergeConfig 将 newCfg 合并到 baseCfg（new 优先）；值为脱敏占位符的键跳过，保留 base 原值
+func mergeConfig(baseCfg, newCfg map[string]interface{}) {
+	for k, v := range newCfg {
+		if s, ok := v.(string); ok && s == redactedPlaceholder {
+			continue
+		}
+		if nm, ok := v.(map[string]interface{}); ok {
+			if bm, ok2 := baseCfg[k].(map[string]interface{}); ok2 {
+				mergeConfig(bm, nm)
+				continue
+			}
+		}
+		baseCfg[k] = v
+	}
+}
+
+// writeFileAtomic 以「临时文件 + rename」方式写入配置文件。
+// 配置热重载由 fsnotify 监听，直接 os.WriteFile 会被读到只写了一半的内容；
+// 原子替换同时也保证写入失败时磁盘上仍是完整的旧配置。
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName) // 失败路径清理临时文件；成功 rename 后 tmpName 会被置空
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	tmpName = ""
+	return nil
+}
+
+// configValueUnset 判断配置值是否等价于「未设置」（nil / 空字符串）
+func configValueUnset(v interface{}) bool {
+	if v == nil {
+		return true
+	}
+	if s, ok := v.(string); ok {
+		return s == ""
+	}
+	return false
+}
+
+// collectConfigWriteViolations 递归比较「请求写入的配置」与「现有配置」，
+// 返回被拒绝修改的键路径：受保护键（protectedConfigKeys）或敏感键，且值确实发生了变化。
+// 只拦截真正发生变化的键，因此 GET 返回的脱敏占位符、原样回传的未修改值都不会被误判，
+// 也不会因为类型差异（yaml int 与 json float64）产生误报。
+func collectConfigWriteViolations(existing, updated map[string]interface{}, prefix string) []string {
+	var violations []string
+	for k, newVal := range updated {
+		key := k
+		if prefix != "" {
+			key = prefix + "." + k
+		}
+		if newMap, ok := newVal.(map[string]interface{}); ok {
+			existingMap, _ := existing[k].(map[string]interface{})
+			violations = append(violations, collectConfigWriteViolations(existingMap, newMap, key)...)
+			continue
+		}
+		if !protectedConfigKeys[key] && !isSensitiveKey(k) {
+			continue
+		}
+		// 与 mergeConfig 保持一致：脱敏占位符代表「未修改」，merge 时会被跳过
+		if s, ok := newVal.(string); ok && s == redactedPlaceholder {
+			continue
+		}
+		oldUnset := configValueUnset(existing[k])
+		newUnset := configValueUnset(newVal)
+		if oldUnset && newUnset {
+			continue // 新旧都是未设置状态，视为未修改
+		}
+		if !oldUnset && !newUnset && fmt.Sprintf("%v", existing[k]) == fmt.Sprintf("%v", newVal) {
+			continue // 值未变化
+		}
+		violations = append(violations, key)
+	}
+	return violations
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		// 获取完整配置
+		// 获取完整配置（敏感键脱敏，防止密钥泄漏）
 		data, err := os.ReadFile("application.yaml")
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -555,10 +707,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to parse config file"})
 			return
 		}
+		maskSensitiveConfig(config)
 		_ = json.NewEncoder(w).Encode(config)
 
 	case http.MethodPost:
-		// 更新配置
+		// 更新配置：与现有配置合并（请求优先），避免整体覆盖丢失未提交的键
 		var req ConfigUpdateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -566,14 +719,40 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		data, err := yaml.Marshal(req.Config)
+		existing := make(map[string]interface{})
+		var oldData []byte
+		if data, err := os.ReadFile("application.yaml"); err == nil {
+			oldData = data
+			_ = yaml.Unmarshal(data, &existing)
+		}
+
+		// 安全：整体写同样要挡掉受保护键/敏感键（admin.token、websocket.token 等），
+		// 否则可以绕过 handleConfigKey 的单键校验，靠整体 merge 落盘 token 提权或留下后门。
+		if violations := collectConfigWriteViolations(existing, req.Config, ""); len(violations) > 0 {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "protected or sensitive config keys cannot be modified via API: " + strings.Join(violations, ", "),
+			})
+			return
+		}
+
+		mergeConfig(existing, req.Config)
+
+		data, err := yaml.Marshal(existing)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
 			return
 		}
 
-		if err := os.WriteFile("application.yaml", data, 0644); err != nil {
+		// 写入前备份原配置
+		if len(oldData) > 0 {
+			if err := os.WriteFile("application.yaml.bak", oldData, 0600); err != nil {
+				logrus.Warnf("配置备份失败: %v", err)
+			}
+		}
+
+		if err := writeFileAtomic("application.yaml", data, 0600); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
 			return
@@ -587,6 +766,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// protectedConfigKeys 禁止通过 API 修改的配置键（防止改 token 提权或持久化后门）
+var protectedConfigKeys = map[string]bool{
+	"admin.token":     true,
+	"websocket.token": true,
+}
+
 func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 	// 从 URL 中获取配置键
 	key := strings.TrimPrefix(r.URL.Path, "/api/v1/config/")
@@ -598,8 +783,17 @@ func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		// 获取特定配置项
+		// 获取特定配置项（敏感键脱敏）
 		value := config.GlobalConfig.Get(key)
+		lastKey := key
+		if idx := strings.LastIndex(key, "."); idx >= 0 {
+			lastKey = key[idx+1:]
+		}
+		if isSensitiveKey(lastKey) {
+			if sv, ok := value.(string); ok && sv != "" {
+				value = redactedPlaceholder
+			}
+		}
 		_ = json.NewEncoder(w).Encode(ConfigInfo{Key: key, Value: value})
 
 	case http.MethodPost:
@@ -608,6 +802,20 @@ func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+			return
+		}
+
+		// 安全：受保护键与敏感键禁止通过 API 修改；值必须是标量，防止写入嵌套结构
+		if protectedConfigKeys[key] || isSensitiveKey(key) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "protected config key cannot be modified via API"})
+			return
+		}
+		switch req.Value.(type) {
+		case string, bool, int, int64, float64, json.Number:
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "config value must be a scalar (string/bool/number)"})
 			return
 		}
 
@@ -628,6 +836,7 @@ func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 
 		// 更新配置项
 		// 处理嵌套键，如 "admin.enable"
+		oldData := data
 		keys := strings.Split(key, ".")
 		current := config
 		for i, k := range keys {
@@ -647,7 +856,7 @@ func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// 写回配置文件
+		// 写回配置文件（写入前备份，权限收紧）
 		data, err = yaml.Marshal(config)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -655,7 +864,10 @@ func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := os.WriteFile("application.yaml", data, 0644); err != nil {
+		if err := os.WriteFile("application.yaml.bak", oldData, 0600); err != nil {
+			logrus.Warnf("配置备份失败: %v", err)
+		}
+		if err := writeFileAtomic("application.yaml", data, 0600); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
 			return
@@ -941,8 +1153,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	systemStatus := s.getSystemStatus()
 
 	// 构建详细状态
+	online := false
+	if s.online != nil {
+		online = s.online.Load()
+	}
 	status := DetailedStatus{
-		Online:              s.online.Load(),
+		Online:              online,
 		Uptime:              uptime,
 		Version:             "", // 版本信息需要从其他地方获取
 		Subscriptions:       subscriptions,

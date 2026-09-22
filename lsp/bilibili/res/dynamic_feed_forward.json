@@ -1,0 +1,1024 @@
+{
+ "id_str": "1247403857365958689",
+ "type": "DYNAMIC_TYPE_FORWARD",
+ "basic": {
+  "rid_str": "1247403857365958689",
+  "comment_type": 17,
+  "comment_id_str": "1247403857365958689",
+  "like_icon": {
+   "id": "34034",
+   "start_url": "",
+   "action_url": "https://i0.hdslb.com/bfs/garb/item/6778e129bc90164988addc81d3b0bd51f35028ca.bin",
+   "end_url": ""
+  },
+  "in_audit": false,
+  "is_only_fans": false,
+  "editable": false,
+  "open_app_extra": "",
+  "jump_url": "",
+  "aigc": false
+ },
+ "visible": true,
+ "modules": {
+  "module_tag": null,
+  "module_author": {
+   "type": "AUTHOR_TYPE_NORMAL",
+   "avatar": {
+    "container_size": {
+     "width": 1.375,
+     "height": 1.375
+    },
+    "layers": [
+     {
+      "group_id": "",
+      "layers": [
+       {
+        "layer_id": "",
+        "visible": true,
+        "general_spec": {
+         "pos_spec": {
+          "coordinate_pos": 2,
+          "axis_x": 0.6875,
+          "axis_y": 0.6875
+         },
+         "size_spec": {
+          "width": 0.787,
+          "height": 0.787
+         },
+         "render_spec": {
+          "opacity": 1
+         }
+        },
+        "layer_config": {
+         "tags": {
+          "AVATAR_LAYER": {
+           "config_type": 0
+          },
+          "GENERAL_CFG": {
+           "config_type": 1,
+           "general_config": {
+            "web_css_style": {
+             "borderRadius": "50%"
+            }
+           }
+          }
+         },
+         "is_critical": true,
+         "allow_over_paint": false,
+         "layer_mask": null
+        },
+        "resource": {
+         "res_type": 3,
+         "res_image": {
+          "image_src": {
+           "src_type": 1,
+           "placeholder": 6,
+           "remote": {
+            "url": "https://i2.hdslb.com/bfs/face/853c4a846793dfbdafd8f16a40d6d8065bdb7c6f.jpg",
+            "bfs_style": "widget-layer-avatar"
+           }
+          }
+         }
+        }
+       }
+      ],
+      "group_mask": null,
+      "is_critical_group": true
+     },
+     {
+      "group_id": "",
+      "layers": [
+       {
+        "layer_id": "",
+        "visible": true,
+        "general_spec": {
+         "pos_spec": {
+          "coordinate_pos": 2,
+          "axis_x": 0.6875,
+          "axis_y": 0.6875
+         },
+         "size_spec": {
+          "width": 1.375,
+          "height": 1.375
+         },
+         "render_spec": {
+          "opacity": 1
+         }
+        },
+        "layer_config": {
+         "tags": {
+          "PENDENT_LAYER": {
+           "config_type": 0
+          }
+         },
+         "is_critical": false,
+         "allow_over_paint": false,
+         "layer_mask": null
+        },
+        "resource": {
+         "res_type": 4,
+         "res_animation": {
+          "webp_src": {
+           "src_type": 1,
+           "placeholder": 0,
+           "remote": {
+            "url": "https://i2.hdslb.com/bfs/garb/item/ff5bde4a6337140b632beffd0cbbaaf927c03ac0.webp",
+            "bfs_style": "widget-layer-avatar"
+           }
+          }
+         }
+        }
+       }
+      ],
+      "group_mask": null,
+      "is_critical_group": false
+     },
+     {
+      "group_id": "",
+      "layers": [
+       {
+        "layer_id": "",
+        "visible": true,
+        "general_spec": {
+         "pos_spec": {
+          "coordinate_pos": 1,
+          "axis_x": 0.7560000000000001,
+          "axis_y": 0.7726666666666667
+         },
+         "size_spec": {
+          "width": 0.41666666666666663,
+          "height": 0.41666666666666663
+         },
+         "render_spec": {
+          "opacity": 1
+         }
+        },
+        "layer_config": {
+         "tags": {
+          "GENERAL_CFG": {
+           "config_type": 1,
+           "general_config": {
+            "web_css_style": {
+             "background-color": "var(--bg1)",
+             "border": "2px solid var(--bg1)",
+             "borderRadius": "50%",
+             "boxSizing": "border-box"
+            }
+           }
+          },
+          "ICON_LAYER": {
+           "config_type": 0
+          }
+         },
+         "is_critical": false,
+         "allow_over_paint": false,
+         "layer_mask": null
+        },
+        "resource": {
+         "res_type": 3,
+         "res_image": {
+          "image_src": {
+           "src_type": 2,
+           "placeholder": 0,
+           "local": 4
+          }
+         }
+        }
+       }
+      ],
+      "group_mask": null,
+      "is_critical_group": false
+     }
+    ],
+    "fallback_layers": {
+     "group_id": "",
+     "layers": [
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 0.787,
+         "height": 0.787
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "AVATAR_LAYER": {
+          "config_type": 0
+         },
+         "GENERAL_CFG": {
+          "config_type": 1,
+          "general_config": {
+           "web_css_style": {
+            "borderRadius": "50%"
+           }
+          }
+         }
+        },
+        "is_critical": true,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 6,
+          "remote": {
+           "url": "https://i2.hdslb.com/bfs/face/853c4a846793dfbdafd8f16a40d6d8065bdb7c6f.jpg",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      },
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 1.375,
+         "height": 1.375
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "PENDENT_LAYER": {
+          "config_type": 0
+         }
+        },
+        "is_critical": false,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 0,
+          "remote": {
+           "url": "https://i2.hdslb.com/bfs/garb/item/6d5969a4f02fa1d4e5776072dc9f0b006478e82b.png",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      },
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 1,
+         "axis_x": 0.7560000000000001,
+         "axis_y": 0.7726666666666667
+        },
+        "size_spec": {
+         "width": 0.41666666666666663,
+         "height": 0.41666666666666663
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "GENERAL_CFG": {
+          "config_type": 1,
+          "general_config": {
+           "web_css_style": {
+            "background-color": "var(--bg1)",
+            "border": "2px solid var(--bg1)",
+            "borderRadius": "50%",
+            "boxSizing": "border-box"
+           }
+          }
+         },
+         "ICON_LAYER": {
+          "config_type": 0
+         }
+        },
+        "is_critical": false,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 2,
+          "placeholder": 0,
+          "local": 4
+         }
+        }
+       }
+      }
+     ],
+     "group_mask": null,
+     "is_critical_group": true
+    },
+    "mid": "401742377"
+   },
+   "face": "https://i2.hdslb.com/bfs/face/853c4a846793dfbdafd8f16a40d6d8065bdb7c6f.jpg",
+   "face_nft": false,
+   "nft_info": null,
+   "name": "原神",
+   "name_render": null,
+   "label": "",
+   "mid": 401742377,
+   "jump_url": "//space.bilibili.com/401742377/dynamic",
+   "following": 1,
+   "pub_ts": "1789272243",
+   "pub_time": "1小时前",
+   "pub_action": "",
+   "pub_location_text": "",
+   "pendant": {
+    "pid": 3144,
+    "name": "原神",
+    "image": "https://i2.hdslb.com/bfs/garb/item/6d5969a4f02fa1d4e5776072dc9f0b006478e82b.png",
+    "expire": "0",
+    "image_enhance": "https://i2.hdslb.com/bfs/garb/item/ff5bde4a6337140b632beffd0cbbaaf927c03ac0.webp",
+    "image_enhance_frame": "https://i2.hdslb.com/bfs/garb/item/a1893352f03d1d6b321d504ba2ae0ecc0ea85647.png",
+    "n_pid": "3144"
+   },
+   "vip": {
+    "type": 2,
+    "status": 1,
+    "due_date": "1791475200000",
+    "vip_pay_type": 0,
+    "theme_type": 0,
+    "label": {
+     "path": "http://i0.hdslb.com/bfs/vip/label_annual.png",
+     "text": "年度大会员",
+     "label_theme": "annual_vip",
+     "text_color": "#FFFFFF",
+     "bg_style": 1,
+     "bg_color": "#FB7299",
+     "border_color": "",
+     "use_img_label": true,
+     "img_label_uri_hans": "",
+     "img_label_uri_hant": "",
+     "img_label_uri_hans_static": "https://i0.hdslb.com/bfs/vip/8d4f8bfc713826a5412a0a27eaaac4d6b9ede1d9.png",
+     "img_label_uri_hant_static": "https://i0.hdslb.com/bfs/activity-plat/static/20220614/e369244d0b14644f5e1a06431e22a4d5/VEW8fCC0hg.png"
+    },
+    "avatar_subscript": 1,
+    "nickname_color": "#FB7299",
+    "role": "3",
+    "avatar_subscript_url": "",
+    "tv_vip_status": 0,
+    "tv_vip_pay_type": 0,
+    "tv_due_date": "0",
+    "avatar_icon": {
+     "icon_type": 1,
+     "icon_resource": {
+      "type": 0,
+      "url": ""
+     }
+    }
+   },
+   "official_verify": {
+    "type": 1,
+    "desc": ""
+   },
+   "decorate": null,
+   "decoration_card": {
+    "id": "48625",
+    "item_id": "48625",
+    "name": "原神-须弥 粉丝",
+    "card_url": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "big_card_url": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "card_type": "2",
+    "expire_time": "0",
+    "card_type_name": "免费",
+    "jump_url": "https://www.bilibili.com/h5/mall/equity-link/collect-home?item_id=48625&isdiy=0&part=card&from=post&f_source=garb&vmid=401742377&native.theme=1&navhide=1",
+    "fan": {
+     "is_fan": "1",
+     "number": "1",
+     "color": "#83bf54",
+     "name": "原神",
+     "num_desc": "000001",
+     "num_prefix": "",
+     "color_format": {
+      "start_point": "0,0",
+      "end_point": "0,100",
+      "colors": [
+       "#83bf54FF",
+       "#83bf54FF"
+      ],
+      "gradients": [
+       "0",
+       "100"
+      ]
+     }
+    },
+    "image_enhance": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "image_group": null
+   },
+   "is_top": false,
+   "icon_badge": null,
+   "views_text": "",
+   "official": null,
+   "more": null,
+   "decorate_card": {
+    "id": "48625",
+    "item_id": "48625",
+    "name": "原神-须弥 粉丝",
+    "card_url": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "big_card_url": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "card_type": "2",
+    "expire_time": "0",
+    "card_type_name": "免费",
+    "jump_url": "https://www.bilibili.com/h5/mall/equity-link/collect-home?item_id=48625&isdiy=0&part=card&from=post&f_source=garb&vmid=401742377&native.theme=1&navhide=1",
+    "fan": {
+     "is_fan": "1",
+     "number": "1",
+     "color": "#83bf54",
+     "name": "原神",
+     "num_desc": "000001",
+     "num_prefix": "",
+     "color_format": {
+      "start_point": "0,0",
+      "end_point": "0,100",
+      "colors": [
+       "#83bf54FF",
+       "#83bf54FF"
+      ],
+      "gradients": [
+       "0",
+       "100"
+      ]
+     }
+    },
+    "image_enhance": "https://i0.hdslb.com/bfs/garb/item/516a2e336a4d2f9262784fb1cdd00e93642e29e7.png",
+    "image_group": null
+   }
+  },
+  "module_more": {
+   "rcmd_text": "",
+   "three_point_items": [
+    {
+     "label": "取消关注",
+     "type": "THREE_POINT_FOLLOWING",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    },
+    {
+     "label": "举报",
+     "type": "THREE_POINT_REPORT",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    }
+   ]
+  },
+  "module_dispute": null,
+  "module_dynamic": {
+   "topic": null,
+   "desc": {
+    "text": "旅行者好呀！一起来看看「千星奇域」将会带来哪些创作功能的新增和优化吧~",
+    "rich_text_nodes": [
+     {
+      "text": "旅行者好呀！一起来看看「千星奇域」将会带来哪些创作功能的新增和优化吧~",
+      "orig_text": "旅行者好呀！一起来看看「千星奇域」将会带来哪些创作功能的新增和优化吧~",
+      "type": "RICH_TEXT_NODE_TYPE_TEXT",
+      "jump_url": "",
+      "icon_url": "",
+      "icon_name": "",
+      "rid": "",
+      "emoji": null,
+      "goods": null,
+      "style": null,
+      "pics": [],
+      "video": null
+     }
+    ],
+    "paragraphs": [],
+    "has_more": false
+   },
+   "major": null,
+   "additional": {
+    "type": "ADDITIONAL_TYPE_COMMON",
+    "goods": null,
+    "vote": null,
+    "common": {
+     "button": {
+      "type": 1,
+      "jump_style": {
+       "icon_url": "",
+       "text": "进入",
+       "interactive": null,
+       "bg_style": 0,
+       "toast": "",
+       "disable": 0
+      },
+      "jump_url": "https://www.biligame.com/detail?id=103496&sourceFrom=1005&biz_scene=dynamic",
+      "check": null,
+      "uncheck": null,
+      "status": 0,
+      "click_type": 0
+     },
+     "sub_type": "game",
+     "head_text": "相关游戏",
+     "jump_url": "https://www.biligame.com/detail?id=103496&sourceFrom=1005&biz_scene=dynamic",
+     "id_str": "103496",
+     "cover": "https://i0.hdslb.com/bfs/game/c94f11ebc80e85bac4cc5efcfb8354371d217641.png",
+     "style": 1,
+     "title": "原神",
+     "desc1": "角色扮演/二次元/冒险",
+     "desc2": "跨越尘世的探索之旅"
+    },
+    "match": null,
+    "ugc": null,
+    "reserve": null,
+    "upower_lottery": null
+   }
+  },
+  "module_extend": null,
+  "module_stat": {
+   "forward": {
+    "status": false,
+    "count": 4,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "comment": {
+    "status": false,
+    "count": 60,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "like": {
+    "status": false,
+    "count": 3700,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "coin": null,
+   "favorite": null
+  },
+  "module_interaction": null,
+  "module_share_info": null,
+  "module_fold": null
+ },
+ "orig": {
+  "id_str": "1247402815852118034",
+  "type": "DYNAMIC_TYPE_DRAW",
+  "basic": {
+   "rid_str": "",
+   "comment_type": 0,
+   "comment_id_str": "",
+   "like_icon": null,
+   "in_audit": false,
+   "is_only_fans": false,
+   "editable": false,
+   "open_app_extra": "",
+   "jump_url": "//www.bilibili.com/opus/1247402815852118034",
+   "aigc": false
+  },
+  "visible": true,
+  "modules": {
+   "module_tag": null,
+   "module_author": {
+    "type": "AUTHOR_TYPE_NORMAL",
+    "avatar": {
+     "container_size": {
+      "width": 1.35,
+      "height": 1.35
+     },
+     "layers": [],
+     "fallback_layers": {
+      "group_id": "",
+      "layers": [
+       {
+        "layer_id": "",
+        "visible": true,
+        "general_spec": {
+         "pos_spec": {
+          "coordinate_pos": 2,
+          "axis_x": 0.675,
+          "axis_y": 0.675
+         },
+         "size_spec": {
+          "width": 1,
+          "height": 1
+         },
+         "render_spec": {
+          "opacity": 1
+         }
+        },
+        "layer_config": {
+         "tags": {
+          "AVATAR_LAYER": {
+           "config_type": 0
+          },
+          "GENERAL_CFG": {
+           "config_type": 1,
+           "general_config": {
+            "web_css_style": {
+             "borderRadius": "50%"
+            }
+           }
+          }
+         },
+         "is_critical": true,
+         "allow_over_paint": false,
+         "layer_mask": null
+        },
+        "resource": {
+         "res_type": 3,
+         "res_image": {
+          "image_src": {
+           "src_type": 1,
+           "placeholder": 6,
+           "remote": {
+            "url": "https://i0.hdslb.com/bfs/face/77d9167e4e75a26ce5f5b6fe49f6ef278d48a329.jpg",
+            "bfs_style": "widget-layer-avatar"
+           }
+          }
+         }
+        }
+       },
+       {
+        "layer_id": "",
+        "visible": true,
+        "general_spec": {
+         "pos_spec": {
+          "coordinate_pos": 1,
+          "axis_x": 0.8000000000000002,
+          "axis_y": 0.8000000000000002
+         },
+         "size_spec": {
+          "width": 0.41666666666666663,
+          "height": 0.41666666666666663
+         },
+         "render_spec": {
+          "opacity": 1
+         }
+        },
+        "layer_config": {
+         "tags": {
+          "GENERAL_CFG": {
+           "config_type": 1,
+           "general_config": {
+            "web_css_style": {
+             "background-color": "var(--bg1)",
+             "border": "2px solid var(--bg1)",
+             "borderRadius": "50%",
+             "boxSizing": "border-box"
+            }
+           }
+          },
+          "ICON_LAYER": {
+           "config_type": 0
+          }
+         },
+         "is_critical": false,
+         "allow_over_paint": false,
+         "layer_mask": null
+        },
+        "resource": {
+         "res_type": 3,
+         "res_image": {
+          "image_src": {
+           "src_type": 2,
+           "placeholder": 0,
+           "local": 4
+          }
+         }
+        }
+       }
+      ],
+      "group_mask": null,
+      "is_critical_group": true
+     },
+     "mid": "3546889200863460"
+    },
+    "face": "https://i0.hdslb.com/bfs/face/77d9167e4e75a26ce5f5b6fe49f6ef278d48a329.jpg",
+    "face_nft": false,
+    "nft_info": null,
+    "name": "原神千星奇域",
+    "name_render": null,
+    "label": "",
+    "mid": 3546889200863460,
+    "jump_url": "//space.bilibili.com/3546889200863460/dynamic",
+    "following": 2,
+    "pub_ts": "1789272000",
+    "pub_time": "",
+    "pub_action": "",
+    "pub_location_text": "",
+    "pendant": {
+     "pid": 0,
+     "name": "",
+     "image": "",
+     "expire": "0",
+     "image_enhance": "",
+     "image_enhance_frame": "",
+     "n_pid": "0"
+    },
+    "vip": {
+     "type": 2,
+     "status": 1,
+     "due_date": "1792166400000",
+     "vip_pay_type": 0,
+     "theme_type": 0,
+     "label": {
+      "path": "http://i0.hdslb.com/bfs/vip/label_annual.png",
+      "text": "年度大会员",
+      "label_theme": "annual_vip",
+      "text_color": "#FFFFFF",
+      "bg_style": 1,
+      "bg_color": "#FB7299",
+      "border_color": "",
+      "use_img_label": true,
+      "img_label_uri_hans": "",
+      "img_label_uri_hant": "",
+      "img_label_uri_hans_static": "https://i0.hdslb.com/bfs/vip/8d4f8bfc713826a5412a0a27eaaac4d6b9ede1d9.png",
+      "img_label_uri_hant_static": "https://i0.hdslb.com/bfs/activity-plat/static/20220614/e369244d0b14644f5e1a06431e22a4d5/VEW8fCC0hg.png"
+     },
+     "avatar_subscript": 1,
+     "nickname_color": "#FB7299",
+     "role": "3",
+     "avatar_subscript_url": "",
+     "tv_vip_status": 0,
+     "tv_vip_pay_type": 0,
+     "tv_due_date": "0",
+     "avatar_icon": {
+      "icon_type": 1,
+      "icon_resource": {
+       "type": 0,
+       "url": ""
+      }
+     }
+    },
+    "official_verify": {
+     "type": 1,
+     "desc": ""
+    },
+    "decorate": null,
+    "decoration_card": null,
+    "is_top": false,
+    "icon_badge": null,
+    "views_text": "",
+    "official": null,
+    "more": null,
+    "decorate_card": null
+   },
+   "module_more": null,
+   "module_dispute": null,
+   "module_dynamic": {
+    "topic": null,
+    "desc": null,
+    "major": {
+     "type": "MAJOR_TYPE_OPUS",
+     "none": null,
+     "blocked": null,
+     "archive": null,
+     "pgc": null,
+     "courses": null,
+     "draw": null,
+     "article": null,
+     "music": null,
+     "common": null,
+     "upower_common": null,
+     "live": null,
+     "live_rcmd": null,
+     "medialist": null,
+     "subscription": null,
+     "ugc_season": null,
+     "subscription_new": null,
+     "opus": {
+      "jump_url": "//www.bilibili.com/opus/1247402815852118034",
+      "title": "",
+      "summary": {
+       "text": "#原神# #原神千星奇域# #奇匠指引#\n\n原神7.1版本即将上线✨\n快来看看新版本将会给奇匠们带来哪些创作功能的新增和优化吧！\n",
+       "rich_text_nodes": [
+        {
+         "text": "#原神#",
+         "orig_text": "#原神#",
+         "type": "RICH_TEXT_NODE_TYPE_TOPIC",
+         "jump_url": "//search.bilibili.com/all?keyword=%E5%8E%9F%E7%A5%9E",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": " ",
+         "orig_text": " ",
+         "type": "RICH_TEXT_NODE_TYPE_TEXT",
+         "jump_url": "",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": "#原神千星奇域#",
+         "orig_text": "#原神千星奇域#",
+         "type": "RICH_TEXT_NODE_TYPE_TOPIC",
+         "jump_url": "//search.bilibili.com/all?keyword=%E5%8E%9F%E7%A5%9E%E5%8D%83%E6%98%9F%E5%A5%87%E5%9F%9F",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": " ",
+         "orig_text": " ",
+         "type": "RICH_TEXT_NODE_TYPE_TEXT",
+         "jump_url": "",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": "#奇匠指引#",
+         "orig_text": "#奇匠指引#",
+         "type": "RICH_TEXT_NODE_TYPE_TOPIC",
+         "jump_url": "//search.bilibili.com/all?keyword=%E5%A5%87%E5%8C%A0%E6%8C%87%E5%BC%95",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": "\n\n原神7.1版本即将上线✨\n快来看看新版本将会给奇匠们带来哪些创作功能的新增和优化吧！",
+         "orig_text": "\n\n原神7.1版本即将上线✨\n快来看看新版本将会给奇匠们带来哪些创作功能的新增和优化吧！",
+         "type": "RICH_TEXT_NODE_TYPE_TEXT",
+         "jump_url": "",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        },
+        {
+         "text": "\n",
+         "orig_text": "\n",
+         "type": "RICH_TEXT_NODE_TYPE_TEXT",
+         "jump_url": "",
+         "icon_url": "",
+         "icon_name": "",
+         "rid": "",
+         "emoji": null,
+         "goods": null,
+         "style": null,
+         "pics": [],
+         "video": null
+        }
+       ],
+       "paragraphs": [],
+       "has_more": false
+      },
+      "style": 0,
+      "pics": [
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/c448efd9c84f95b84ee163c2df829e063546889200863460.jpg",
+        "width": 1125,
+        "height": 3064,
+        "size": 990.0859375,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/e490083de8bf4c98c9037266cb5f465b3546889200863460.png",
+        "width": 1125,
+        "height": 1382,
+        "size": 900.0068359375,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/3b4c40168f39d6cedd5aeb3e2ee895ab3546889200863460.gif",
+        "width": 1125,
+        "height": 1137,
+        "size": 654.83984375,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/755cc487904c708083e415425e88f8df3546889200863460.gif",
+        "width": 1125,
+        "height": 1867,
+        "size": 2809.0859375,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/a0590f3469a158623ebb4897851f72123546889200863460.gif",
+        "width": 900,
+        "height": 1090,
+        "size": 6145.23046875,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/6ad5869921ea4b182d11b221a41d65c13546889200863460.gif",
+        "width": 1125,
+        "height": 828,
+        "size": 4542.0595703125,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/5d321197d134d0548aca9bfb2f2647b73546889200863460.png",
+        "width": 1125,
+        "height": 2466,
+        "size": 1281.1103515625,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/5a005f8800e8a55998bdd64823e33a103546889200863460.png",
+        "width": 1125,
+        "height": 3083,
+        "size": 1504.140625,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       },
+       {
+        "url": "http://i0.hdslb.com/bfs/new_dyn/a5128cb24d9e70a33b9f9042523e92b53546889200863460.jpg",
+        "width": 1125,
+        "height": 2685,
+        "size": 724.408203125,
+        "live_url": "",
+        "aigc": 0,
+        "warning": null
+       }
+      ],
+      "fold_action": [
+       "展开",
+       "收起"
+      ],
+      "paywall": null
+     }
+    },
+    "additional": null
+   },
+   "module_extend": null,
+   "module_stat": null,
+   "module_interaction": null,
+   "module_share_info": null,
+   "module_fold": null
+  },
+  "orig": null
+ }
+}

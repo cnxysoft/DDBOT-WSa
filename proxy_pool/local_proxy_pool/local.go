@@ -36,6 +36,9 @@ type Pool struct {
 
 func (p *Pool) Get(prefer proxy_pool.Prefer) (proxy_pool.IProxy, error) {
 	if prefer == proxy_pool.PreferAny {
+		if len(p.proxies) == 0 {
+			return nil, errors.New("proxy pool is empty")
+		}
 		cnt := p.preferCnt.Add(1) % uint32(len(p.proxies))
 		var index uint32 = 0
 		for k := range p.proxies {
@@ -47,10 +50,14 @@ func (p *Pool) Get(prefer proxy_pool.Prefer) (proxy_pool.IProxy, error) {
 		}
 	}
 
-	if s, found := p.proxies[prefer]; !found {
+	if s, found := p.proxies[prefer]; !found || len(s) == 0 {
 		return nil, errors.New("no proxy found")
 	} else {
-		index := p.cnt[prefer].Add(1)
+		c, ok := p.cnt[prefer]
+		if !ok {
+			return nil, errors.New("no proxy found")
+		}
+		index := c.Add(1)
 		return s[index%uint32(len(s))], nil
 	}
 }

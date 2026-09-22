@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,6 +110,10 @@ func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
 type twitterConcern struct {
 	*StateManager
 	homeTimelineCursor string // 保存 HomeTimeline 翻页 cursor
+
+	// manualRefreshCh 手动刷新触发通道，值为目标群代码（0 表示全部）
+	// 由 RefreshCommand 等外部命令触发，实现"强制拉取最新并重置计时"
+	manualRefreshCh chan int64
 }
 
 func (t *twitterConcern) Site() string {
@@ -370,24 +375,116 @@ func (t *twitterConcern) notifyGenerator() concern.NotifyGeneratorFunc {
 	}
 }
 
-// 新增辅助函数获取刷新间隔
+// getRetweetFullTextEnabled 是否在转发推文中显示原推文完整文本。
+// 关闭（默认）时沿用 X API 的截断摘要（"RT @user: " + 前140字符），
+// 开启时以原推文完整内容替换。
+func getRetweetFullTextEnabled() bool {
+	if config.GlobalConfig != nil {
+		return config.GlobalConfig.GetBool("twitter.retweetFullText")
+	}
+	return false
+}
+
+// twitterRefreshIntervalDefault 未配置 twitter.interval 时的默认刷新间隔。
+// 取 120s 是为了降低 X 的限流/封号风险。
+const twitterRefreshIntervalDefault = 120 * time.Second
+
+// getRefreshInterval 获取推文刷新间隔。
+//
+// 语义：只有「未配置」twitter.interval 时才使用默认 120s；
+// 显式配置的值一律按配置生效——即使低于建议下限也只告警提示，不静默钳制/降级到 120s。
 func getRefreshInterval() time.Duration {
 	if config.GlobalConfig != nil {
-		interval := config.GlobalConfig.GetDuration("twitter.interval")
-		if interval > 0 {
+		if interval := parseInterval(config.GlobalConfig.Get("twitter.interval")); interval > 0 {
+			if interval < twitterRefreshIntervalDefault {
+				logger.Warnf("twitter.interval=%v 低于建议下限 %v，已按配置值生效；间隔过短可能触发 X 限流甚至封禁",
+					interval, twitterRefreshIntervalDefault)
+			}
 			return interval
 		}
 	}
-	return time.Second * 30
+	return twitterRefreshIntervalDefault
+}
+
+// parseInterval 解析 twitter.interval 配置，返回 0 表示「未配置或无法解析」，由调用方取默认值。
+//
+// 支持带单位的字符串（"2m"、"90s"）与数字；数字按「秒」解释。
+// 注意不要直接用 GetDuration：无单位数字会被 viper 当成纳秒，
+// 例如 twitter.interval: 60 会解析成 60ns，等于把限流彻底取消。
+func parseInterval(raw interface{}) time.Duration {
+	switch v := raw.(type) {
+	case nil:
+		return 0
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return 0
+		}
+		if d, err := time.ParseDuration(s); err == nil {
+			if d <= 0 {
+				return 0
+			}
+			return d
+		}
+		// 容忍纯数字字符串（如 "60"），按秒解释
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			return secondsToDuration(n)
+		}
+		logger.Warnf("twitter.interval=%q 无法解析（请使用如 120s / 2m 的格式），将使用默认值 %v",
+			v, twitterRefreshIntervalDefault)
+		return 0
+	case int:
+		return secondsToDuration(float64(v))
+	case int32:
+		return secondsToDuration(float64(v))
+	case int64:
+		return secondsToDuration(float64(v))
+	case uint:
+		return secondsToDuration(float64(v))
+	case uint64:
+		return secondsToDuration(float64(v))
+	case float32:
+		return secondsToDuration(float64(v))
+	case float64:
+		return secondsToDuration(v)
+	default:
+		logger.Warnf("twitter.interval 类型不支持（%T），将使用默认值 %v", raw, twitterRefreshIntervalDefault)
+		return 0
+	}
+}
+
+// secondsToDuration 把按「秒」解释的数值转成 Duration；非正数返回 0，表示未配置。
+func secondsToDuration(seconds float64) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- concern.Event) {
+	t.processUsersInGroup(ctx, eventChan, 0)
+}
+
+// processUsersInGroup 拉取指定群订阅用户的推文。
+// groupCode<=0 表示拉取所有订阅用户
+func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan<- concern.Event, groupCode int64) {
 	if IsTwitterEnabled() {
+		// HomeTimeline 是账号首页的全量时间线，无法按群过滤。
+		// 手动刷新指定群时明确提示，避免用户误以为只拉了本群
+		if groupCode > 0 {
+			logger.WithField("groupCode", groupCode).
+				Info("API 模式手动刷新为全量 HomeTimeline 拉取（无法按群过滤），推送侧按订阅关系分发")
+		}
 		t.processHomeTimeline(ctx, eventChan)
 		return
 	}
 
-	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
+	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool {
+		if groupCode > 0 && g != groupCode {
+			return false
+		}
+		return p.ContainAll(Tweets)
+	})
 	for _, userId := range ids {
 		if ctx.Err() != nil {
 			return
@@ -458,6 +555,8 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 		}
 
 		if pass := t.filterTweet(tweet); pass {
+			// fetch 阶段异步启动翻译，推送时读取缓存，避免阻塞推送管线
+			StartAsyncTranslate(tweet)
 			event := &NewsInfo{
 				UserInfo: userInfo,
 				Tweet:    tweet,
@@ -476,11 +575,23 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 		ti := time.NewTimer(time.Second * 3)
 		defer ti.Stop() // 确保定时器资源释放
 
+		// reset 按 interval+随机抖动重置定时器，供定时与手动刷新共用
+		reset := func() {
+			// 添加随机抖动，避免固定间隔被识别为机器人
+			jitter := time.Duration(rand.Intn(30)) * time.Second // 0-30秒随机抖动
+			ti.Reset(interval + jitter)
+		}
+
 		for {
 			select {
 			case <-ti.C:
 				t.processUsers(ctx, eventChan)
-				ti.Reset(interval) // 重置定时器
+				reset()
+			case groupCode := <-t.manualRefreshCh:
+				// 手动触发：立即强制拉取该群订阅用户的最新推文，并重置计时
+				logger.WithField("groupCode", groupCode).Info("收到手动刷新指令，强制拉取最新推文")
+				t.processUsersInGroup(ctx, eventChan, groupCode)
+				reset()
 			case <-ctx.Done():
 				return
 			}
@@ -502,6 +613,8 @@ func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) 
 		}
 		for _, tweet := range newTweets {
 			if pass := t.filterTweet(tweet); pass {
+				// fetch 阶段异步启动翻译，推送时读取缓存，避免阻塞推送管线
+				StartAsyncTranslate(tweet)
 				res := &NewsInfo{
 					UserInfo: userInfo,
 					Tweet:    tweet,
@@ -543,14 +656,14 @@ func SetRequestOptions() []requests.Option {
 		requests.HeaderOption("sec-ch-ua-platform-version", "19.0.0"),
 		requests.HeaderOption("sec-ch-ua-model", "navigate"),
 		requests.HeaderOption("Sec-Fetch-Site", "none"),
-		requests.HeaderOption("sec-ch-ua", "\"Microsoft Edge\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\""),
+		requests.HeaderOption("sec-ch-ua", "\"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\""),
 		requests.HeaderOption("sec-ch-ua-mobile", "?0"),
 		requests.HeaderOption("sec-ch-ua-platform", "\"Windows\""),
-		requests.HeaderOption("sec-ch-ua-full-version", "\"135.0.3179.73\""),
+		requests.HeaderOption("sec-ch-ua-full-version", "\"149.0.4650.56\""),
 		requests.HeaderOption("sec-ch-ua-arch", "\"x86\""),
 		requests.HeaderOption("sec-ch-ua-bitness", "64"),
 		requests.HeaderOption("sec-ch-ua-full-version-list",
-			"\"Microsoft Edge\";v=\"135.0.3179.73\", \"Not-A.Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"135.0.7049.85\""),
+			"\"Chromium\";v=\"149.0.4650.56\", \"Not)A;Brand\";v=\"24.0.0.0\", \"Google Chrome\";v=\"149.0.4650.56\""),
 		requests.HeaderOption("Upgrade-Insecure-Requests", "1"),
 		requests.HeaderOption("Sec-Fetch-Dest", "document"),
 		requests.HeaderOption("Sec-Fetch-Mode", "navigate"),
@@ -628,8 +741,39 @@ func (t *twitterConcern) GetStateManager() concern.IStateManager {
 	return t.StateManager
 }
 
+// TriggerManualRefresh 手动触发刷新：向 fresh 循环发送信号。
+// groupCode<=0 表示刷新全部订阅；>0 表示仅刷新该群订阅的用户。
+// 返回非 nil 表示触发失败（如通道已满/尚未初始化）。
+func (t *twitterConcern) TriggerManualRefresh(groupCode int64) error {
+	if t == nil || t.manualRefreshCh == nil {
+		return errors.New("twitter concern 未初始化，无法手动刷新")
+	}
+	select {
+	case t.manualRefreshCh <- groupCode:
+		return nil
+	default:
+		return errors.New("已有手动刷新在进行中，请稍后重试")
+	}
+}
+
+// ManualRefresh 外部命令入口：按 site 获取 twitter concern 并触发手动刷新。
+// groupCode<=0 表示刷新全部订阅；>0 表示仅刷新该群订阅的用户。
+func ManualRefresh(groupCode int64) error {
+	c, err := concern.GetConcernBySite(Site)
+	if err != nil {
+		return err
+	}
+	tc, ok := c.(*twitterConcern)
+	if !ok {
+		return errors.New("twitter concern 类型断言失败")
+	}
+	return tc.TriggerManualRefresh(groupCode)
+}
+
 func newConcern(notifyChan chan<- concern.Notify) *twitterConcern {
-	con := &twitterConcern{}
+	con := &twitterConcern{
+		manualRefreshCh: make(chan int64, 8),
+	}
 	// 默认是string格式的id
 	con.StateManager = &StateManager{StateManager: concern.NewStateManagerWithStringID(Site, notifyChan), concern: con, ExtraKey: NewExtraKey()}
 	// 如果要使用int64格式的id，可以用下面的

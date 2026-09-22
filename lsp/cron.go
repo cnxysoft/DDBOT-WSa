@@ -24,9 +24,13 @@ func (c *cronjobRun) Run() {
 	go func() {
 		defer wg.Done()
 		for _, groupCode := range c.Target.Group {
-			m, _ := template.LoadAndExec(templateName, map[string]interface{}{
+			m, err := template.LoadAndExec(templateName, map[string]interface{}{
 				"target": groupCode,
 			})
+			if err != nil {
+				cronLog.WithError(err).WithField("template", templateName).
+					Errorf("定时任务模板执行失败 (group=%d)", groupCode)
+			}
 			if m != nil {
 				c.l.SendMsg(m, mmsg.NewGroupTarget(groupCode))
 			}
@@ -35,9 +39,13 @@ func (c *cronjobRun) Run() {
 	go func() {
 		defer wg.Done()
 		for _, uin := range c.Target.Private {
-			m, _ := template.LoadAndExec(templateName, map[string]interface{}{
+			m, err := template.LoadAndExec(templateName, map[string]interface{}{
 				"target": uin,
 			})
+			if err != nil {
+				cronLog.WithError(err).WithField("template", templateName).
+					Errorf("定时任务模板执行失败 (private=%d)", uin)
+			}
 			if m != nil {
 				c.l.SendMsg(m, mmsg.NewPrivateTarget(uin))
 			}

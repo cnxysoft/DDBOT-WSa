@@ -21,7 +21,6 @@ const (
 	Site         = "bilibili"
 	BaseHost     = "https://api.bilibili.com"
 	BaseLiveHost = "https://api.live.bilibili.com"
-	BaseVCHost   = "https://api.vc.bilibili.com"
 	VideoView    = "https://www.bilibili.com/video"
 	DynamicView  = "https://www.bilibili.com/opus"
 	PassportHost = "https://passport.bilibili.com"
@@ -35,23 +34,22 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var BasePath = map[string]string{
 	PathXSpaceAccInfo:                   BaseHost,
-	PathDynamicSrvSpaceHistory:          BaseVCHost,
-	PathDynamicSrvDynamicNew:            BaseVCHost,
 	PathRelationModify:                  BaseHost,
 	PathRelationFeedList:                BaseLiveHost,
-	PathGetAttentionList:                BaseVCHost,
+	PathGetAttentionList:                BaseHost,
 	PathPassportLoginWebKey:             PassportHost,
 	PathPassportLoginOAuth2Login:        PassportHost,
 	PathQRLoginGenerateQR:               PassportHost,
 	PathQRLoginOAuth2Login:              PassportHost,
 	PathXRelationStat:                   BaseHost,
 	PathXWebInterfaceNav:                BaseHost,
-	PathDynamicSrvDynamicHistory:        BaseVCHost,
 	PathGetPlayTogetherUserAnchorInfoV2: BaseLiveHost,
 	PathRoomInfo:                        BaseLiveHost,
 	PathWebAreaList:                     BaseLiveHost,
 	PathWebDynamicDetail:                BaseHost,
 	PathWebDynamicDetailPic:             BaseHost,
+	PathWebDynamicFeedAll:               BaseHost,
+	PathWebDynamicFeedSpace:             BaseHost,
 }
 
 type VerifyInfo struct {

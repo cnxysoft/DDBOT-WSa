@@ -18,44 +18,36 @@ func timestampFormat(ts int64) string {
 // 用途：验证 getDescContent 能正确解析各种类型的动态
 func TestGetDescContent_Multi(t *testing.T) {
 	testCases := []struct {
-		name              string
-		detailFile        string
-		targetDyId        string // 动态ID，用于从 new JSON 中查找卡片
-		newFile           string
-		expectMainEmojis    int // 期望主动态 Emoji 数量
-		expectOriginEmojis  int // 期望原动态 Emoji 数量
-		mainContent       string // 期望主动态 Content 包含的字符串
-		originContent     string // 期望原动态 Content 包含的字符串
+		name               string
+		detailFile         string
+		expectMainEmojis   int    // 期望主动态 Emoji 数量
+		expectOriginEmojis int    // 期望原动态 Emoji 数量
+		mainContent        string // 期望主动态 Content 包含的字符串
+		originContent      string // 期望原动态 Content 包含的字符串
 	}{
 		{
-			name:              "转发动态-emoji在原动态(动态详情2)",
-			detailFile:        "res/dynamic_detail_2.json",
-			targetDyId:        "1189906589005381649",
-			newFile:           "res/dynamic_new_2.json",
+			name:               "转发动态-emoji在原动态(动态详情2)",
+			detailFile:         "res/dynamic_detail_2.json",
 			expectMainEmojis:   0, // 主动态只有"转发动态"，emoji在origin
 			expectOriginEmojis: 1, // NoWorld emoji 在原动态
-			mainContent:       "转发动态",
-			originContent:     "NoWorld_POWER",
+			mainContent:        "转发动态",
+			originContent:      "NoWorld_POWER",
 		},
 		{
-			name:              "转发动态-emoji在主动态(动态详情3)",
-			detailFile:        "res/dynamic_detail_3.json",
-			targetDyId:        "1189906090826924073",
-			newFile:           "res/dynamic_new_3.json",
+			name:               "转发动态-emoji在主动态(动态详情3)",
+			detailFile:         "res/dynamic_detail_3.json",
 			expectMainEmojis:   2, // 主动态 desc.rich_text_nodes 有2个 emoji
 			expectOriginEmojis: 0, // 原动态是视频，无 emoji
-			mainContent:       "妮莉安Lily",
-			originContent:     "", // 原动态是视频，content 在 Video.Desc，不在 Content
+			mainContent:        "妮莉安Lily",
+			originContent:      "", // 原动态是视频，content 在 Video.Desc，不在 Content
 		},
 		{
-			name:              "原始测试-emoji在正文(含转发-动态详情1)",
-			detailFile:        "res/dynamic_detail.json",
-			targetDyId:        "1189893961821454336",
-			newFile:           "res/dynamic_new.json",
+			name:               "原始测试-emoji在正文(含转发-动态详情1)",
+			detailFile:         "res/dynamic_detail.json",
 			expectMainEmojis:   1, // 主动态 desc.rich_text_nodes 有1个 emoji
 			expectOriginEmojis: 2, // 原动态 emoji 出现2次所以2个
-			mainContent:       "模糊小黄豆",
-			originContent:     "幼年沐表情包25张_死机",
+			mainContent:        "模糊小黄豆",
+			originContent:      "幼年沐表情包25张_死机",
 		},
 	}
 

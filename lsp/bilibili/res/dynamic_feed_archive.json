@@ -1,0 +1,304 @@
+{
+ "id_str": "1247423038725554179",
+ "type": "DYNAMIC_TYPE_AV",
+ "basic": {
+  "rid_str": "117262019200709",
+  "comment_type": 1,
+  "comment_id_str": "117262019200709",
+  "like_icon": {
+   "id": "34034",
+   "start_url": "",
+   "action_url": "https://i0.hdslb.com/bfs/garb/item/6778e129bc90164988addc81d3b0bd51f35028ca.bin",
+   "end_url": ""
+  },
+  "in_audit": false,
+  "is_only_fans": false,
+  "editable": false,
+  "open_app_extra": "",
+  "jump_url": "",
+  "aigc": false
+ },
+ "visible": true,
+ "modules": {
+  "module_tag": null,
+  "module_author": {
+   "type": "AUTHOR_TYPE_NORMAL",
+   "avatar": {
+    "container_size": {
+     "width": 1.375,
+     "height": 1.375
+    },
+    "layers": [],
+    "fallback_layers": {
+     "group_id": "",
+     "layers": [
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 0.787,
+         "height": 0.787
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "AVATAR_LAYER": {
+          "config_type": 0
+         },
+         "GENERAL_CFG": {
+          "config_type": 1,
+          "general_config": {
+           "web_css_style": {
+            "borderRadius": "50%"
+           }
+          }
+         }
+        },
+        "is_critical": true,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 6,
+          "remote": {
+           "url": "https://i1.hdslb.com/bfs/face/403b1e05ee13a4b9a8d9087aea5b55941dbeeb62.jpg",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      },
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 1.375,
+         "height": 1.375
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "PENDENT_LAYER": {
+          "config_type": 0
+         }
+        },
+        "is_critical": false,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 0,
+          "remote": {
+           "url": "https://i1.hdslb.com/bfs/garb/item/42e3d2487f4ce3518bf5e721bc57becf6047e94f.png",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      }
+     ],
+     "group_mask": null,
+     "is_critical_group": true
+    },
+    "mid": "85819912"
+   },
+   "face": "https://i1.hdslb.com/bfs/face/403b1e05ee13a4b9a8d9087aea5b55941dbeeb62.jpg",
+   "face_nft": false,
+   "nft_info": null,
+   "name": "星云吹雪NebulaFubiki",
+   "name_render": null,
+   "label": "",
+   "mid": 85819912,
+   "jump_url": "//space.bilibili.com/85819912/dynamic",
+   "following": 1,
+   "pub_ts": "1789276709",
+   "pub_time": "6分钟前",
+   "pub_action": "投稿了视频",
+   "pub_location_text": "",
+   "pendant": {
+    "pid": 3188,
+    "name": "Kizuna AI",
+    "image": "https://i1.hdslb.com/bfs/garb/item/42e3d2487f4ce3518bf5e721bc57becf6047e94f.png",
+    "expire": "0",
+    "image_enhance": "https://i1.hdslb.com/bfs/garb/item/42e3d2487f4ce3518bf5e721bc57becf6047e94f.png",
+    "image_enhance_frame": "",
+    "n_pid": "3188"
+   },
+   "vip": {
+    "type": 1,
+    "status": 0,
+    "due_date": "1661961600000",
+    "vip_pay_type": 0,
+    "theme_type": 0,
+    "label": {
+     "path": "",
+     "text": "",
+     "label_theme": "",
+     "text_color": "",
+     "bg_style": 0,
+     "bg_color": "",
+     "border_color": "",
+     "use_img_label": true,
+     "img_label_uri_hans": "",
+     "img_label_uri_hant": "",
+     "img_label_uri_hans_static": "https://i0.hdslb.com/bfs/vip/d7b702ef65a976b20ed854cbd04cb9e27341bb79.png",
+     "img_label_uri_hant_static": "https://i0.hdslb.com/bfs/activity-plat/static/20220614/e369244d0b14644f5e1a06431e22a4d5/KJunwh19T5.png"
+    },
+    "avatar_subscript": 0,
+    "nickname_color": "",
+    "role": "0",
+    "avatar_subscript_url": "",
+    "tv_vip_status": 0,
+    "tv_vip_pay_type": 0,
+    "tv_due_date": "0",
+    "avatar_icon": {
+     "icon_type": 0,
+     "icon_resource": {
+      "type": 0,
+      "url": ""
+     }
+    }
+   },
+   "official_verify": {
+    "type": -1,
+    "desc": ""
+   },
+   "decorate": null,
+   "decoration_card": null,
+   "is_top": false,
+   "icon_badge": null,
+   "views_text": "",
+   "official": null,
+   "more": null,
+   "decorate_card": null
+  },
+  "module_more": {
+   "rcmd_text": "",
+   "three_point_items": [
+    {
+     "label": "取消关注",
+     "type": "THREE_POINT_FOLLOWING",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    },
+    {
+     "label": "举报",
+     "type": "THREE_POINT_REPORT",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    }
+   ]
+  },
+  "module_dispute": null,
+  "module_dynamic": {
+   "topic": null,
+   "desc": null,
+   "major": {
+    "type": "MAJOR_TYPE_ARCHIVE",
+    "none": null,
+    "blocked": null,
+    "archive": {
+     "type": 1,
+     "bvid": "BV1BzYa6rEQp",
+     "aid": "117262019200709",
+     "cover": "http://i1.hdslb.com/bfs/archive/ffe4d28fa10460b24c11f1fd22069d344c62f5c7.jpg",
+     "jump_url": "//www.bilibili.com/video/BV1BzYa6rEQp",
+     "stat": {
+      "danmaku": "0",
+      "play": "8",
+      "vt": ""
+     },
+     "duration_text": "01:48",
+     "title": "把360装在“垃圾”里面，再用360扫描垃圾会发生什么",
+     "desc": "把360装在“垃圾”里面，再用360扫描垃圾会发生什么",
+     "badge": {
+      "icon_url": "",
+      "text": "投稿视频",
+      "bg_color": "#FB7299",
+      "color": "#FFFFFF"
+     },
+     "enable_vt": 0,
+     "disable_preview": 0,
+     "premiere_online": "",
+     "stat_hidden": 0
+    },
+    "pgc": null,
+    "courses": null,
+    "draw": null,
+    "article": null,
+    "music": null,
+    "common": null,
+    "upower_common": null,
+    "live": null,
+    "live_rcmd": null,
+    "medialist": null,
+    "subscription": null,
+    "ugc_season": null,
+    "subscription_new": null,
+    "opus": null
+   },
+   "additional": null
+  },
+  "module_extend": null,
+  "module_stat": {
+   "forward": {
+    "status": false,
+    "count": 0,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "comment": {
+    "status": false,
+    "count": 0,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "like": {
+    "status": false,
+    "count": 0,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "coin": null,
+   "favorite": null
+  },
+  "module_interaction": null,
+  "module_share_info": null,
+  "module_fold": null
+ },
+ "orig": null
+}

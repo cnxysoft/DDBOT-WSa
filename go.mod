@@ -67,8 +67,6 @@ require (
 )
 
 require (
-	github.com/RomiChan/protobuf v0.1.1-0.20230204044148-2ed269a2e54d // indirect
-	github.com/RomiChan/syncx v0.0.0-20240418144900-b7402ffdebc7 // indirect
 	github.com/andybalholm/brotli v1.0.5
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/bytedance/sonic v1.9.2 // indirect
@@ -105,7 +103,7 @@ require (
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29 // indirect
-	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/sys v0.36.0
 	golang.org/x/text v0.29.0
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

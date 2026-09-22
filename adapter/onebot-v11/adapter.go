@@ -10,6 +10,7 @@ import (
 
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/sirupsen/logrus"
+	"go.uber.org/atomic"
 )
 
 var logger = logrus.WithField("adapter", "onebot-v11")
@@ -21,7 +22,8 @@ const uriMessageTimeout = 45 * time.Second
 type OneBotAdapter struct {
 	config   *adapter.AdapterConfig
 	wsClient *adapter.WSClient
-	selfID   int64
+	// selfID 会被事件 goroutine 写入、轮询 goroutine 读取，必须原子访问避免 int64 撕裂
+	selfID   atomic.Int64
 	stopChan chan struct{}
 
 	groupMessageHandlers   []func(*adapter.GroupMessageEvent)
@@ -115,7 +117,6 @@ func NewOneBotAdapter(cfg *adapter.AdapterConfig) *OneBotAdapter {
 	return &OneBotAdapter{
 		config:   cfg,
 		stopChan: make(chan struct{}),
-		selfID:   0,
 	}
 }
 
@@ -155,7 +156,7 @@ func (a *OneBotAdapter) GetAdapterName() string {
 }
 
 func (a *OneBotAdapter) GetSelfID() int64 {
-	return a.selfID
+	return a.selfID.Load()
 }
 
 func (a *OneBotAdapter) IsConnected() bool {
@@ -454,9 +455,9 @@ func (a *OneBotAdapter) handleMetaEvent(msg map[string]interface{}) {
 		handler(event)
 	}
 
-	// 处理生命周期事件时更新 selfID
+	// 处理生命周期事件时更新 selfID（原子写入）
 	if event.MetaEventType == "lifecycle" {
-		a.selfID = event.SelfID
+		a.selfID.Store(event.SelfID)
 	}
 }
 

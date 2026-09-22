@@ -279,12 +279,14 @@ func (c *Concern) fresh() concern.FreshFunc {
 
 func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 	var start = time.Now()
-	resp, err := DynamicSvrDynamicNew()
+	// 旧的 dynamic_new / dynamic_history 已被 B 站下线（HTTP 404），
+	// 改用网页新版动态接口 feed/all，返回的 items 再由 polymerItemsToCards 转换回旧的 Card 结构
+	resp, err := WebDynamicFeedAll("")
 	if err != nil {
 		if errors.Is(err, ErrVerifyRequired) {
 			notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
 		}
-		logger.Errorf("DynamicSvrDynamicNew error %v", err)
+		logger.Errorf("WebDynamicFeedAll error %v", err)
 		return nil, err
 	}
 	var newsMap = make(map[int64][]*Card)
@@ -294,50 +296,14 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 		}
 		logger.WithField("RespCode", resp.GetCode()).
 			WithField("RespMsg", resp.GetMessage()).
-			Errorf("DynamicSvrDynamicNew failed")
-		return nil, fmt.Errorf("DynamicSvrDynamicNew failed %v - %v", resp.GetCode(), resp.GetMessage())
+			Errorf("WebDynamicFeedAll failed")
+		return nil, fmt.Errorf("WebDynamicFeedAll failed %v - %v", resp.GetCode(), resp.GetMessage())
 	}
-	dynamicLoginHealthy := true
-	var cards []*Card
-	cards = append(cards, resp.GetData().GetCards()...)
-	// 尝试刷一下历史动态，看看能不能捞一下被审核的动态
-	if len(resp.GetData().GetCards()) > 0 {
-		var historyResp *DynamicSvrDynamicHistoryResponse
-		var lastDynamicId = resp.GetData().GetCards()[len(resp.GetData().GetCards())-1].GetDesc().GetDynamicIdStr()
-		for i := 0; i < 2; i++ {
-			if len(lastDynamicId) == 0 {
-				break
-			}
-			historyResp, err = DynamicSvrDynamicHistory(lastDynamicId)
-			if err != nil {
-				if errors.Is(err, ErrVerifyRequired) {
-					notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
-					dynamicLoginHealthy = false
-				}
-				logger.WithField("lastDynamicId", lastDynamicId).
-					Errorf("DynamicSvrDynamicHistory error %v", err)
-				break
-			}
-			if historyResp.GetCode() != 0 {
-				if isBilibiliLoginInvalidResponse(historyResp.GetCode(), historyResp.GetMessage()) {
-					notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
-				}
-				logger.WithField("RespCode", resp.GetCode()).
-					WithField("RespMsg", resp.GetMessage()).
-					Errorf("DynamicSvrDynamicHistory failed")
-				return nil, fmt.Errorf("DynamicSvrDynamicHistory failed %v - %v",
-					historyResp.GetCode(), historyResp.GetMessage())
-			}
-			cards = append(cards, historyResp.GetData().GetCards()...)
-			if len(historyResp.GetData().GetCards()) > 0 {
-				cardSize := len(historyResp.GetData().GetCards())
-				lastDynamicId = historyResp.GetData().GetCards()[cardSize-1].GetDesc().GetDynamicIdStr()
-			} else {
-				lastDynamicId = ""
-			}
-		}
+	if resp.GetData() == nil {
+		return nil, errors.New("WebDynamicFeedAll empty data")
 	}
-
+	// 重复的动态由 filterCard 里的 MarkDynamicId 去重，与旧接口行为一致
+	var cards = polymerItemsToCards(resp.GetData().GetItems())
 	logger.WithField("cost", time.Now().Sub(start)).Trace("freshDynamicNew cost 1")
 	for _, card := range cards {
 		uid := card.GetDesc().GetUid()
@@ -370,9 +336,7 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 		_ = c.MarkLatestActive(news.Mid, news.Timestamp)
 		_ = c.AddUserInfo(&news.UserInfo)
 	}
-	if dynamicLoginHealthy {
-		markBilibiliLoginRecovered(bilibiliLoginSourceDynamic)
-	}
+	markBilibiliLoginRecovered(bilibiliLoginSourceDynamic)
 	logger.WithField("cost", time.Now().Sub(start)).
 		WithField("NewsInfo Size", len(result)).
 		Trace("freshDynamicNew done")

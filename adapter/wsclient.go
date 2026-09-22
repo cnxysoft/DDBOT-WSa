@@ -2,11 +2,15 @@ package adapter
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +19,22 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
+
+// defaultWSServerAddr ws-server 模式的默认监听地址。
+// 只绑定本机回环地址：未配置 token 时不会把无鉴权的控制端口暴露到局域网/公网。
+const defaultWSServerAddr = "127.0.0.1:15630"
+
+// isLoopbackAddr 判断监听地址是否仅绑定本机回环。
+// 使用 net.SplitHostPort + net.ParseIP().IsLoopback()；
+// 主机名（如 "localhost"）无法解析为 IP，一律按非 loopback 处理（更保守）。
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 var wsLogger = logrus.WithField("module", "wsclient")
 
@@ -202,17 +222,47 @@ func (c *WSClient) IsConnected() bool {
 func (c *WSClient) startServer() error {
 	addr := c.url
 	if addr == "" {
-		addr = "0.0.0.0:15630"
+		addr = defaultWSServerAddr
+	}
+	// 空 token 的安全策略（避免把无鉴权的控制端口暴露出去）：
+	//   - 仅监听回环地址（127.0.0.1 / ::1）时允许无鉴权启动，日志降为 Info；
+	//   - 监听 0.0.0.0、具体网卡或公网 IP 时拒绝启动，必须配置 websocket.token，
+	//     否则同网段/公网上的任意客户端都能接入并控制机器人。
+	if c.token == "" {
+		if !isLoopbackAddr(addr) {
+			wsLogger.Errorf("ws-server 监听 %s 且未配置 websocket.token，已拒绝启动："+
+				"对外暴露的监听地址必须配置 token；如仅需本机使用，请将 websocket.ws-server 设为 %s",
+				addr, defaultWSServerAddr)
+			return fmt.Errorf("ws-server: refusing to start on non-loopback address %q with empty token", addr)
+		}
+		wsLogger.Infof("ws-server 未配置 websocket.token，仅监听本机回环地址 %s（无鉴权启动，仅本机可访问）", addr)
 	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
+		// 配置了 token 时校验：兼容 "Bearer <token>" 与裸 token 两种形式，常量时间比较防时序攻击
 		if c.token != "" {
-			auth := r.Header.Get("Authorization")
-			if auth == "" || strings.TrimPrefix(auth, "Bearer ") != c.token {
+			auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(auth), []byte(c.token)) != 1 {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 		}
-		upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+		upgrader := websocket.Upgrader{
+			// 收紧 Origin 校验：只允许同源（浏览器）连接。
+			// OneBot 实现等非浏览器客户端通常不发送 Origin，此处放行；
+			// 携带 Origin 的浏览器请求必须与请求 Host 一致，
+			// 否则任意网页都能连接本机控制端口并控制机器人。
+			CheckOrigin: func(r *http.Request) bool {
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true
+				}
+				u, err := url.Parse(origin)
+				if err != nil {
+					return false
+				}
+				return strings.EqualFold(u.Host, r.Host)
+			},
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			wsLogger.Errorf("WebSocket upgrade error: %v", err)
@@ -229,10 +279,15 @@ func (c *WSClient) startServer() error {
 		wsLogger.Info("WebSocket client connected (ws-server mode)")
 		c.handleConnection(conn)
 	}
-	c.httpServer = &http.Server{Addr: addr, Handler: http.HandlerFunc(handler)}
+	// 先发布 server 引用再启动监听 goroutine：goroutine 内使用局部变量 srv，
+	// 避免 Stop() 把 c.httpServer 置空后与 ListenAndServe 竞争导致空指针
+	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(handler)}
+	c.mu.Lock()
+	c.httpServer = srv
+	c.mu.Unlock()
 	go func() {
 		wsLogger.Infof("WebSocket server starting on ws://%s/", addr)
-		if err := c.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			wsLogger.Errorf("WebSocket server error: %v", err)
 		}
 	}()
@@ -420,7 +475,15 @@ func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 				return
 			}
 		}
-		go c.handleMessage(message)
+		// 安全修复：handler 调用链中任何 panic 不再击穿整个进程
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					wsLogger.Errorf("handleMessage panic (recovered): %v\n%s", r, debug.Stack())
+				}
+			}()
+			c.handleMessage(message)
+		}()
 	}
 }
 

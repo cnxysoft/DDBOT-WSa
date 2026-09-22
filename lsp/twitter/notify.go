@@ -23,18 +23,20 @@ import (
 
 // TwitterDynamic 推文动态数据结构，用于模板渲染
 type TwitterDynamic struct {
-	User          TwitterUser    `json:"user"`
-	Type          int            `json:"type"`
-	Content       string         `json:"content"`
-	Date          string         `json:"date"`
-	Url           string         `json:"url"`
-	Media         []TwitterMedia `json:"media"`
-	IsRetweet     bool           `json:"is_retweet"`
-	WithQuote     bool           `json:"with_quote"`
-	Retweet       TwitterRetweet `json:"retweet"`
-	Quote         TwitterQuote   `json:"quote"`
-	ShouldCompact bool           `json:"should_compact"`
-	CompactKey    string         `json:"compact_key"`
+	User            TwitterUser    `json:"user"`
+	Type            int            `json:"type"`
+	Content         string         `json:"content"`
+	TranslatedText  string         `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string         `json:"translation_lang,omitempty"` // 翻译源语言
+	Date            string         `json:"date"`
+	Url             string         `json:"url"`
+	Media           []TwitterMedia `json:"media"`
+	IsRetweet       bool           `json:"is_retweet"`
+	WithQuote       bool           `json:"with_quote"`
+	Retweet         TwitterRetweet `json:"retweet"`
+	Quote           TwitterQuote   `json:"quote"`
+	ShouldCompact   bool           `json:"should_compact"`
+	CompactKey      string         `json:"compact_key"`
 }
 
 // TwitterUser 用户信息
@@ -59,10 +61,12 @@ type TwitterRetweet struct {
 
 // TwitterQuote 引用信息
 type TwitterQuote struct {
-	User    TwitterUser    `json:"user"`
-	Content string         `json:"content"`
-	Media   []TwitterMedia `json:"media"`
-	Date    string         `json:"date"`
+	User            TwitterUser    `json:"user"`
+	Content         string         `json:"content"`
+	TranslatedText  string         `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string         `json:"translation_lang,omitempty"` // 翻译源语言
+	Media           []TwitterMedia `json:"media"`
+	Date            string         `json:"date"`
 }
 
 type ConcernNewsNotify struct {
@@ -142,6 +146,21 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 	dynamic.Url = n.Tweet.Url
 	dynamic.ShouldCompact = n.shouldCompact
 	dynamic.CompactKey = n.compactKey
+
+	// 翻译推文内容：读取 fetch 阶段异步预翻译的缓存，避免在推送路径上同步调用网络 API
+	// 翻译未启用时直接跳过，避免每条文外推文都打一次告警日志
+	if IsTranslateEnabled() && ShouldTranslate(n.Tweet.Content, n.Tweet.TranslationLang) {
+		if result := n.Tweet.WaitTranslation(getTranslationBatchWait()); result != nil {
+			dynamic.TranslatedText = result.TranslatedText
+			dynamic.TranslationLang = result.SourceLang
+			// 同时更新到Tweet对象，供后续使用
+			n.Tweet.TranslatedText = result.TranslatedText
+			n.Tweet.TranslationLang = result.SourceLang
+		} else {
+			logger.WithField("TweetId", n.Tweet.ID).
+				Warn("推文翻译缓存未就绪，本次推送不带翻译")
+		}
+	}
 
 	// 时间处理
 	var createdAt time.Time
@@ -230,6 +249,16 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 			Content: quote.Content,
 			Media:   quoteMedia,
 			Date:    CSTTime(quote.CreatedAt).Format(time.DateTime),
+		}
+		// 读取 fetch 阶段异步预翻译的引用推文结果
+		if IsTranslateEnabled() && ShouldTranslate(quote.Content, quote.TranslationLang) {
+			if result := quote.WaitTranslation(getTranslationBatchWait()); result != nil {
+				dynamic.Quote.TranslatedText = result.TranslatedText
+				dynamic.Quote.TranslationLang = result.SourceLang
+			} else {
+				logger.WithField("TweetId", quote.ID).
+					Warn("引用推文翻译缓存未就绪，本次推送不带翻译")
+			}
 		}
 	}
 
@@ -408,6 +437,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 			CSTTime(time.Now().UTC()).Format(time.DateTime),
 			n.Tweet.Content,
 		)
+		// 添加翻译内容
+		if n.Tweet.TranslatedText != "" {
+			m.Textf("[翻译] %s\n", n.Tweet.TranslatedText)
+		}
 		addTweetUrl(m, n.Tweet.Url, &addedUrl)
 	} else {
 		// 构造消息
@@ -438,6 +471,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 				content += "\n"
 			}
 			m.Text(content)
+			// 添加翻译内容
+			if n.Tweet.TranslatedText != "" {
+				m.Textf("[翻译] %s\n", n.Tweet.TranslatedText)
+			}
 		}
 		// msg加入媒体
 		addMedia(n.Tweet, m, true, &addedUrl)
@@ -461,6 +498,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 			// msg加入推文
 			if QuoteTweet.Content != "" {
 				m.Text(QuoteTweet.Content + "\n")
+				// 添加引用推文的翻译
+				if QuoteTweet.TranslatedText != "" {
+					m.Textf("[翻译] %s\n", QuoteTweet.TranslatedText)
+				}
 			}
 			// msg加入媒体
 			addMedia(QuoteTweet, m, false, &addedUrl)

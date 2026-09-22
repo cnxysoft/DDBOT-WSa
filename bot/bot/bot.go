@@ -20,18 +20,14 @@ var reconnectStop chan struct{}
 type Bot struct {
 	*adapter.Messenger
 
-	start bool
+	start atomic.Bool
 
-	Uin        int64
-	Online     atomic.Bool
-	FriendList []*adapter.FriendInfo
-	GroupList  []*adapter.GroupInfo
-	Nickname   string
-	Age        uint16
-	Gender     uint16
-
-	groupListLock  sync.Mutex
-	friendListLock sync.Mutex
+	// Uin 由上线 goroutine 写入、各模块并发读取，必须原子访问
+	Uin      atomic.Int64
+	Online   atomic.Bool
+	Nickname string
+	Age      uint16
+	Gender   uint16
 
 	GroupMessageRecalledEvent         *EventHandle[*adapter.GroupMessageRecalledEvent]
 	GroupMessageEvent                 *EventHandle[*adapter.GroupMessage]
@@ -71,7 +67,7 @@ func (bot *Bot) GetUin() int64 {
 	if bot.Messenger != nil {
 		return bot.Messenger.GetUin()
 	}
-	return bot.Uin
+	return bot.Uin.Load()
 }
 
 func (bot *Bot) FindGroup(code int64) *adapter.GroupInfo {
@@ -97,24 +93,15 @@ func (bot *Bot) FindFriend(uin int64) *adapter.FriendInfo {
 
 func (bot *Bot) ReloadGroupList() error {
 	if bot.Messenger != nil {
-		err := bot.Messenger.ReloadGroupList()
-		if err != nil {
-			return err
-		}
-		bot.GroupList = bot.Messenger.GroupList
-		return nil
+		// 不再镜像 GroupList：统一从 Messenger 读取，避免绕过 groupMu 产生数据竞争
+		return bot.Messenger.ReloadGroupList()
 	}
 	return fmt.Errorf("messenger not initialized")
 }
 
 func (bot *Bot) ReloadFriendList() error {
 	if bot.Messenger != nil {
-		err := bot.Messenger.ReloadFriendList()
-		if err != nil {
-			return err
-		}
-		bot.FriendList = bot.Messenger.FriendList
-		return nil
+		return bot.Messenger.ReloadFriendList()
 	}
 	return fmt.Errorf("messenger not initialized")
 }
@@ -239,14 +226,15 @@ func (bot *Bot) SendApi(api string, params map[string]interface{}) (interface{},
 
 func (bot *Bot) GetGroupList() []*adapter.GroupInfo {
 	if bot.Messenger != nil {
-		return bot.Messenger.GroupList
+		// 返回加锁快照副本，调用方可安全遍历（原实现直接共享切片，存在数据竞争）
+		return bot.Messenger.GetGroupListSnapshot()
 	}
 	return nil
 }
 
 func (bot *Bot) GetFriendList() []*adapter.FriendInfo {
 	if bot.Messenger != nil {
-		return bot.Messenger.FriendList
+		return bot.Messenger.GetFriendListSnapshot()
 	}
 	return nil
 }
@@ -286,7 +274,6 @@ func Init() {
 
 	Instance = &Bot{
 		Messenger:                         messenger,
-		start:                             false,
 		GroupMessageRecalledEvent:         &EventHandle[*adapter.GroupMessageRecalledEvent]{},
 		GroupMessageEvent:                 &EventHandle[*adapter.GroupMessage]{},
 		GroupMuteEvent:                    &EventHandle[*adapter.GroupMuteEvent]{},
@@ -336,7 +323,7 @@ func Init() {
 	go func() {
 		for {
 			if messenger.GetSelfID() > 0 {
-				Instance.Uin = messenger.GetSelfID()
+				Instance.Uin.Store(messenger.GetSelfID())
 				botOnline()
 				break
 			}
@@ -377,7 +364,7 @@ func Init() {
 }
 
 func botOnline() {
-	logger.Infof("Bot online: %d", Instance.Uin)
+	logger.Infof("Bot online: %d", Instance.Uin.Load())
 	Instance.Online.Store(true)
 	// 发布 bot_online 事件，通知所有订阅模块（weibo/bilibili/acfun 等）
 	eventbus.BusObj.Publish("bot_online", true)
@@ -388,15 +375,16 @@ func refreshList() {
 	if err != nil {
 		logger.WithError(err).Error("unable to load friends list")
 	}
-	logger.Infof("load %d friends", len(Instance.FriendList))
+	logger.Infof("load %d friends", len(Instance.GetFriendList()))
 
 	err = Instance.ReloadGroupList()
 	if err != nil {
 		logger.WithError(err).Error("unable to load groups list")
 	}
-	logger.Infof("load %d groups", len(Instance.GroupList))
+	groupSnapshot := Instance.GetGroupList()
+	logger.Infof("load %d groups", len(groupSnapshot))
 
-	for _, group := range Instance.GroupList {
+	for _, group := range groupSnapshot {
 		members, err := Instance.GetGroupMembersByID(group.Code)
 		if err != nil {
 			logger.WithError(err).Errorf("unable to load group members for %d", group.Code)
@@ -413,11 +401,11 @@ func RefreshList() {
 
 func StartService() {
 	logger.Infof("StartService called, Instance=%p", Instance)
-	if Instance.start {
+	if Instance.start.Load() {
 		return
 	}
 
-	Instance.start = true
+	Instance.start.Store(true)
 
 	logger.Infof("initializing modules ...")
 	for _, mi := range modules {
@@ -448,14 +436,26 @@ func Stop() {
 	if reconnectStop != nil {
 		close(reconnectStop)
 	}
-	wg := sync.WaitGroup{}
+	// 与 RegisterModule/GetModule 的 modulesMu 保持一致：先在锁下取快照再停止，
+	// 避免模块 Stop 回调内调用 GetModule 时死锁
+	modulesMu.RLock()
+	moduleSnapshot := make([]ModuleInfo, 0, len(modules))
 	for _, mi := range modules {
+		moduleSnapshot = append(moduleSnapshot, mi)
+	}
+	modulesMu.RUnlock()
+
+	wg := sync.WaitGroup{}
+	for _, mi := range moduleSnapshot {
 		wg.Add(1)
 		mi.Instance.Stop(Instance, &wg)
 	}
 	wg.Wait()
-	logger.Info("stopped")
+
+	modulesMu.Lock()
 	modules = make(map[string]ModuleInfo)
+	modulesMu.Unlock()
+	logger.Info("stopped")
 
 	if Instance.Messenger != nil {
 		Instance.Messenger.Stop()

@@ -327,7 +327,8 @@ func TestWSClient_ResponseCh_Concurrent(t *testing.T) {
 
 // Test ws-server mode startup
 func TestWSClient_StartServer(t *testing.T) {
-	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15631")
+	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15631",
+		WithWSToken("test-token"))
 	err := c.Start()
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond) // Give server time to start
@@ -335,6 +336,106 @@ func TestWSClient_StartServer(t *testing.T) {
 
 	// Cleanup
 	_ = c.Stop()
+}
+
+// Test ws-server mode without token on a loopback address:
+// allowed to start (unauthenticated, reachable from this machine only)
+func TestWSClient_StartServer_WithoutTokenLoopbackAllowed(t *testing.T) {
+	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15634")
+	err := c.Start()
+	require.NoError(t, err, "loopback ws-server without token should be allowed to start")
+	time.Sleep(100 * time.Millisecond) // Give server time to start
+	_ = c.Stop()
+}
+
+// Test ws-server mode without token on a non-loopback address:
+// must refuse to start, otherwise an unauthenticated control port would be exposed
+func TestWSClient_StartServer_WithoutTokenNonLoopbackRejected(t *testing.T) {
+	addrs := []string{
+		"0.0.0.0:15635",
+		"[::]:15635",
+		"192.168.1.10:15635",
+		"localhost:15635",
+		"example.com:15635",
+		"15635",
+	}
+	for _, addr := range addrs {
+		c := newTestWSClient("onebot-v11", WSModeServer, addr)
+		err := c.Start()
+		assert.Error(t, err, "non-loopback ws-server without token must refuse to start (addr=%q)", addr)
+		if err != nil {
+			assert.Contains(t, err.Error(), "non-loopback")
+		}
+		_ = c.Stop()
+	}
+
+	// 空地址会落到默认的 127.0.0.1:15630（回环），属于安全默认值，允许无 token 启动
+	c := newTestWSClient("onebot-v11", WSModeServer, "")
+	require.NoError(t, c.Start(), "empty addr falls back to loopback default and should be allowed")
+	_ = c.Stop()
+}
+
+// Test isLoopbackAddr classification: only real loopback IPs count,
+// hostnames that cannot be parsed as IP are treated as non-loopback
+func TestIsLoopbackAddr(t *testing.T) {
+	loopback := []string{
+		"127.0.0.1:15630",
+		"127.0.0.2:15630", // 127.0.0.0/8 全部为回环
+		"127.255.255.254:1",
+		"[::1]:15630",
+	}
+	nonLoopback := []string{
+		"0.0.0.0:15630",
+		"[::]:15630",
+		"192.168.1.10:15630",
+		"8.8.8.8:15630",
+		"localhost:15630",
+		"example.com:15630",
+		"15630",
+		"",
+	}
+	for _, addr := range loopback {
+		assert.True(t, isLoopbackAddr(addr), "expected loopback: %q", addr)
+	}
+	for _, addr := range nonLoopback {
+		assert.False(t, isLoopbackAddr(addr), "expected non-loopback: %q", addr)
+	}
+
+	// 默认监听地址必须本身是回环地址，否则空 token 时会拒绝启动
+	assert.True(t, isLoopbackAddr(defaultWSServerAddr),
+		"defaultWSServerAddr must be loopback so that empty token can still start locally")
+}
+
+// Test CheckOrigin: browser requests must be same-origin, non-browser clients (no Origin) pass
+func TestWSClient_ServerCheckOrigin(t *testing.T) {
+	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15639",
+		WithWSToken("test-token"))
+	require.NoError(t, c.Start())
+	defer c.Stop()
+	time.Sleep(100 * time.Millisecond)
+
+	// 跨源浏览器请求必须被拒绝
+	header := http.Header{
+		"Authorization": []string{"Bearer test-token"},
+		"Origin":        []string{"http://evil.example"},
+	}
+	_, resp, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15639", header)
+	assert.Error(t, err, "cross-origin browser request must be rejected")
+	if resp != nil {
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	}
+
+	// 同源 Origin 允许
+	header.Set("Origin", "http://127.0.0.1:15639")
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15639", header)
+	require.NoError(t, err)
+	conn.Close()
+
+	// 非浏览器客户端（无 Origin）允许
+	header.Del("Origin")
+	conn2, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15639", header)
+	require.NoError(t, err)
+	conn2.Close()
 }
 
 // Test ws-server mode with token authentication
@@ -356,6 +457,7 @@ func TestWSClient_StartServer_WithToken(t *testing.T) {
 // Test ws-server connection upgrade and message handling
 func TestWSClient_ServerConnection(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15633",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {}))
 
 	err := c.Start()
@@ -363,7 +465,8 @@ func TestWSClient_ServerConnection(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Connect a client
-	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15633", nil)
+	header := http.Header{"Authorization": []string{"Bearer test-token"}}
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15633", header)
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -852,6 +955,7 @@ func TestWSClient_SendAndWait_MarshalError(t *testing.T) {
 // Test server mode with connection limit (multiple clients)
 func TestWSClient_ServerMode_MultipleClients(t *testing.T) {
 	c := newTestWSClient("onebot-v11", WSModeServer, "127.0.0.1:15640",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {}))
 
 	err := c.Start()
@@ -859,13 +963,15 @@ func TestWSClient_ServerMode_MultipleClients(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// First client
-	conn1, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640", nil)
+	conn1, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 	assert.True(t, c.IsConnected())
 
 	// Second client (should replace first)
-	conn2, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640", nil)
+	conn2, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:15640",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	time.Sleep(50 * time.Millisecond)
 
@@ -1029,7 +1135,8 @@ func TestWSClient_HandleMessage_LargeMessage(t *testing.T) {
 
 // Test startServer with empty address
 func TestWSClient_StartServer_EmptyAddress(t *testing.T) {
-	c := newTestWSClient("onebot-v11", WSModeServer, "")
+	c := newTestWSClient("onebot-v11", WSModeServer, "",
+		WithWSToken("test-token"))
 	err := c.Start()
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
@@ -1247,6 +1354,7 @@ func TestHighFrequencyMessages(t *testing.T) {
 
 	// 创建 wsclient，监听固定端口
 	c := NewWSClient("onebot-v11", WSModeServer, "127.0.0.1:18999",
+		WithWSToken("test-token"),
 		WithWSMessageHandler(func(b []byte) {
 			atomic.AddInt32(&msgCount, 1)
 		}))
@@ -1259,7 +1367,8 @@ func TestHighFrequencyMessages(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 连接到这个服务器
-	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18999", nil)
+	conn, _, err := websocket.DefaultDialer.Dial("ws://127.0.0.1:18999",
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -2102,6 +2211,7 @@ func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
 	const heartbeatInterval = 100 * time.Millisecond
 
 	wsClient := NewWSClient("onebot-v11", WSModeServer, "localhost:0",
+		WithWSToken("test-token"),
 		WithWSHeartbeat(heartbeatInterval),
 		WithWSMessageHandler(func(b []byte) {}))
 
@@ -2122,7 +2232,8 @@ func TestHeartbeatLoopExitsOnConnectionReplacement(t *testing.T) {
 	t.Logf("Initial heartbeat loops: %d", wsClient.activeHeartbeatLoops.Load())
 
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	newConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"),
+		http.Header{"Authorization": []string{"Bearer test-token"}})
 	require.NoError(t, err)
 	defer newConn.Close()
 
@@ -2165,6 +2276,12 @@ func TestConnectionStress_RapidReconnect(t *testing.T) {
 	wsClient.url = wsURL
 	wsClient.maxReconnect = 100
 
+	// 基线必须在本测试启动前现取，不能写死绝对值：
+	// 包内稳态 goroutine 数在 48~50 之间，且随平台（Windows/Linux）与运行间有 ±1 波动，
+	// 原先断言 final < 50 等于骑在阈值上，CI 上取到 50 就必然失败（与测试本身是否泄漏无关）。
+	// 这里改为与本测试自身的基线比较，只关注「反复重连是否泄漏」，与同文件其它 goroutine 断言写法一致。
+	initialGoroutines := runtime.NumGoroutine()
+
 	startTime := time.Now()
 	err := wsClient.Start()
 	require.NoError(t, err)
@@ -2173,12 +2290,24 @@ func TestConnectionStress_RapidReconnect(t *testing.T) {
 
 	wsClient.Stop()
 
+	// 等待重连/心跳 goroutine 与 httptest 的连接处理 goroutine 退出后再判定
+	var finalGoroutines int
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		finalGoroutines = runtime.NumGoroutine()
+		if finalGoroutines <= initialGoroutines || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
 	t.Logf("Reconnect count: %d", reconnectCount)
 	t.Logf("Duration: %v", time.Since(startTime))
-	t.Logf("Final goroutines: %d", runtime.NumGoroutine())
+	t.Logf("Initial goroutines: %d, Final goroutines: %d", initialGoroutines, finalGoroutines)
 
-	finalGoroutines := runtime.NumGoroutine()
-	assert.Less(t, finalGoroutines, 50, "Possible goroutine leak: %d goroutines", finalGoroutines)
+	// 允许极小波动，但不应出现随重连次数增长的泄漏
+	assert.LessOrEqual(t, finalGoroutines, initialGoroutines+5,
+		"Possible goroutine leak: initial=%d final=%d", initialGoroutines, finalGoroutines)
 }
 
 // TestCalcWriteWait 测试 calcWriteWait 函数的计算逻辑（参考 NapCat/LLOneBot 实现）

@@ -101,8 +101,15 @@ func ConvMediaWithProxy(url, outputPath, proxyURL, mediaType string) error {
 	if proxyURL != "" {
 		cProxy := C.CString(proxyURL)
 		defer C.free(unsafe.Pointer(cProxy))
-		C.av_dict_set(&opts, C.CString("http_proxy"), cProxy, 0)
-		C.av_dict_set(&opts, C.CString("rw_timeout"), C.CString("30000000"), 0) // 30s
+		// av_dict_set 默认会复制 key/value，此处临时 CString 用完即释放，避免泄漏
+		cKey1 := C.CString("http_proxy")
+		defer C.free(unsafe.Pointer(cKey1))
+		cKey2 := C.CString("rw_timeout")
+		defer C.free(unsafe.Pointer(cKey2))
+		cVal2 := C.CString("30000000") // 30s
+		defer C.free(unsafe.Pointer(cVal2))
+		C.av_dict_set(&opts, cKey1, cProxy, 0)
+		C.av_dict_set(&opts, cKey2, cVal2, 0)
 	}
 
 	// Open input
@@ -328,12 +335,17 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 
 	outs := C.avfilter_inout_alloc()
 	ins := C.avfilter_inout_alloc()
-	outs.name = C.av_strdup(C.CString("src"))
+	// 内层 C.CString 需手动释放，避免每次转码泄漏
+	cTmp := C.CString("src")
+	outs.name = C.av_strdup(cTmp)
+	C.free(unsafe.Pointer(cTmp))
 	outs.filter_ctx = srcCtx
 	outs.pad_idx = 0
 	outs.next = nil
 
-	ins.name = C.av_strdup(C.CString("sink"))
+	cTmp = C.CString("sink")
+	ins.name = C.av_strdup(cTmp)
+	C.free(unsafe.Pointer(cTmp))
 	ins.filter_ctx = sinkCtx
 	ins.pad_idx = 0
 	ins.next = nil

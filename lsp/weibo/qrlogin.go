@@ -14,11 +14,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/mattn/go-colorable"
 )
 
@@ -509,18 +509,21 @@ func printQRCode(imgData []byte) {
 	_, _ = colorable.NewColorableStdout().Write(buf)
 }
 
-// writeBackConfigMu 保护配置文件写操作，防止并发 read-modify-write 导致丢失更新
-var writeBackConfigMu sync.Mutex
-
 // WriteBackConfig writes SUB into application.yaml, touching only weibo.sub.
-// Uses temp file + atomic rename to prevent corruption, preserving original file permissions.
+// Uses global config write lock and atomic rename to prevent corruption.
 func WriteBackConfig(sub string) error {
 	cfgFile := config.GlobalConfig.ConfigFileUsed()
 	if cfgFile == "" {
 		cfgFile = "application.yaml"
 	}
-	writeBackConfigMu.Lock()
-	defer writeBackConfigMu.Unlock()
+	// 使用全局配置写锁，防止与其他写操作并发
+	cfg.GetConfigWriteMutex().Lock()
+	defer cfg.GetConfigWriteMutex().Unlock()
+
+	// 标记正在写入，暂停热重载
+	cfg.MarkConfigWriteStart()
+	defer cfg.MarkConfigWriteEnd()
+
 	return writeBackConfigToPath(sub, cfgFile)
 }
 

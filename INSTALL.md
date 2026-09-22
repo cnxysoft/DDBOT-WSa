@@ -272,11 +272,12 @@ customCommandPrefix:
 logLevel: info # 日志等级
 
 # ws模式支持ws-server（正向）和ws-reverse（反向）
-# ws-server 默认监听全部请求，如需限制请修改为指定ip:端口
+# ws-server 默认只监听本机回环地址 127.0.0.1:15630；
+#   未配置 token 时仅允许监听回环地址，改为 0.0.0.0 或其他对外地址时必须配置 token
 # ws-reverse 需要配合反向ws服务器使用，默认为LLOneBot地址
 websocket:
   mode: ws-reverse 
-  ws-server: 0.0.0.0:15630
+  ws-server: 127.0.0.1:15630
   ws-reverse: ws://localhost:3001
 
 ```

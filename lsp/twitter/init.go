@@ -17,7 +17,7 @@ const (
 
 var (
 	BaseURL     = []string{"https://nitter.tiekoetter.com/", "https://nitter.catsarch.com/"}
-	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
+	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 	twitterAPI  *TwitterAPI
 	TwitterMode = ModeMirror
 )
@@ -91,7 +91,7 @@ func setCookies() {
 				for i := 0; i < maxRetries; i++ {
 					sn, mjUrl, err := twitterAPI.FetchInitialState()
 					if err == nil && sn != "" {
-						twitterAPI.screenName = sn
+						twitterAPI.SetScreenName(sn)
 						mainJsUrl = mjUrl
 						logger.Infof("Cookie验证成功！账号: %s", sn)
 						break
@@ -116,19 +116,19 @@ func setCookies() {
 					if err := RefreshAPIFromMainJS(); err != nil {
 						logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 					} else {
-						logger.Infof("成功获取 queryId: %s", twitterAPI.queryId)
+						logger.Infof("成功获取 queryId: %s", twitterAPI.GetQueryId())
 					}
 				}
 			} else {
 				logger.Infof("使用配置的screenName: %s", screenName)
-				twitterAPI.screenName = screenName
+				twitterAPI.SetScreenName(screenName)
 
 				// 从 sw.js 刷新 queryId 缓存
 				logger.Info("正在从 sw.js 刷新 queryId 缓存...")
 				if err := RefreshAPIFromMainJS(); err != nil {
 					logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 				} else {
-					logger.Infof("成功获取 queryId: %s", twitterAPI.queryId)
+					logger.Infof("成功获取 queryId: %s", twitterAPI.GetQueryId())
 				}
 			}
 		}
