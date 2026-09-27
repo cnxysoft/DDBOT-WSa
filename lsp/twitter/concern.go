@@ -603,6 +603,9 @@ func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan c
 				continue
 			}
 			if t.filterTweet(tweet) {
+				// fetch 阶段异步启动翻译，与 processHomeTimeline/freshNewsInfo 对齐；
+				// 推送渲染只读缓存，per_user 路径不启动预翻译会导致推送永远不带翻译
+				StartAsyncTranslate(tweet)
 				eventChan <- &NewsInfo{UserInfo: userInfo, Tweet: tweet}
 			}
 		}
