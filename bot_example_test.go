@@ -18,7 +18,7 @@ func TestExampleConfigValid(t *testing.T) {
 	// 抽查关键配置键存在且默认值正确
 	assert.Equal(t, "/", v.GetString("bot.commandPrefix"))
 	assert.Equal(t, "systemProxy", v.GetString("proxy.type"))
-	assert.Equal(t, "mirror", v.GetString("twitter.mode"))
+	assert.Equal(t, "api", v.GetString("twitter.mode"))
 	assert.False(t, v.GetBool("twitter.translate.enabled"))
 	assert.False(t, v.GetBool("twitter.retweetFullText"))
 	assert.Equal(t, "168h", v.GetString("twitter.queryIdRefreshInterval"))

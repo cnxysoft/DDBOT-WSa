@@ -143,14 +143,16 @@ func IsMirrorMode() bool {
 	return TwitterMode == ModeMirror
 }
 
-// resolveTwitterMode 解析twitter.mode配置。未配置或缺省时保持mirror，
-// 与历史版本兼容：存量用户配置里没有这个键时不应被静默切到API模式，
-// 要用API需显式配置 twitter.mode: api。
+// resolveTwitterMode 解析twitter.mode配置。
+// 仅显式配置 mirror 时使用 mirror，缺省与未知值一律回退 api：
+// mirror 依赖的 nitter 镜像生态已基本死亡（多环境实测全灭：TCP 不通/Anubis 拦截），
+// 默认 mirror 等于默认一个静默死模式；默认 api 会引导用户配置 cookie，
+// 未配置时进入自动恢复模式并私聊告警，而不是静默停摆。
 func resolveTwitterMode(mode string) string {
-	if mode == ModeAPI {
-		return ModeAPI
+	if mode == ModeMirror {
+		return ModeMirror
 	}
-	return ModeMirror
+	return ModeAPI
 }
 
 // verifyTwitterAPI 单次验证Cookie：拉取账号信息并刷新queryId缓存。
