@@ -314,7 +314,7 @@ weibo:
   snapcastURL: ""
 
   # Cookie 告警通知配置
-  disableCookieAlert: false  # 设为 true 可关闭 Cookie/SUB 失效告警通知
+  disableCookieAlert: true  # 设为 true 可关闭 Cookie/SUB 失效告警通知
   alertGroupId: 0            # Cookie 告警发送到指定群，0 表示不发群
   alertQQList: []            # Cookie 告警私聊发送给指定 QQ（可选，支持数组或逗号分隔字符串）
                              # 示例: [123456, 789012] 或 "123456,789012"
