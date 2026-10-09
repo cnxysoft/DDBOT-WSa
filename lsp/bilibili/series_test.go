@@ -6,6 +6,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestKeySetParseGroupConcernStateKey 状态键解析必须同时支持 int64（uid）与
+// 字符串（合集 <mid>/<series_id>）两种 id，否则整表枚举会失败，
+// 连带直播/动态刷新一起报错。
+func TestKeySetParseGroupConcernStateKey(t *testing.T) {
+	ks := NewKeySet()
+
+	groupCode, id, err := ks.ParseGroupConcernStateKey("ConcernState:1053858006:123895")
+	assert.NoError(t, err)
+	assert.EqualValues(t, 1053858006, groupCode)
+	assert.EqualValues(t, 123895, id)
+
+	groupCode, id, err = ks.ParseGroupConcernStateKey("ConcernState:685164226:123895/3945451")
+	assert.NoError(t, err)
+	assert.EqualValues(t, 685164226, groupCode)
+	assert.Equal(t, "123895/3945451", id)
+
+	_, _, err = ks.ParseGroupConcernStateKey("bad-key")
+	assert.Error(t, err)
+}
+
 func TestParseSeriesSubId(t *testing.T) {
 	tests := []struct {
 		name       string

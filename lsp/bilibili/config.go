@@ -96,6 +96,10 @@ func (g *GroupConcernConfig) FilterHook(notify concern.Notify) (hook *concern.Ho
 	case *ConcernLiveNotify:
 		hook.Pass = true
 		return
+	case *ConcernSeriesNotify:
+		// 合集推送不参与动态类型规则，交给基类实现处理文本过滤；
+		// 未配置过滤时基类直接返回 pass
+		return g.IConfig.FilterHook(n)
 	case *ConcernNewsNotify:
 		// 没设置过滤，pass
 		if g.GetGroupConcernFilter().Empty() {
