@@ -36,6 +36,30 @@ func (c *StateManager) GetUserInfo(mid int64) (*UserInfo, error) {
 	return userInfo, nil
 }
 
+// AddSeriesInfo 保存合集订阅状态（合集元信息 + 已推送的最新稿件 aid）
+func (c *StateManager) AddSeriesInfo(info *SeriesInfo) error {
+	if info == nil {
+		return errors.New("nil SeriesInfo")
+	}
+	return c.SetJson(c.SeriesInfoKey(info.GetUid()), info)
+}
+
+// GetSeriesInfo 读取合集订阅状态，id 形如 <mid>/<series_id>
+func (c *StateManager) GetSeriesInfo(id string) (*SeriesInfo, error) {
+	var info = &SeriesInfo{}
+	err := c.GetJson(c.SeriesInfoKey(id), info)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// DeleteSeriesInfo 删除合集订阅状态
+func (c *StateManager) DeleteSeriesInfo(id string) error {
+	_, err := c.Delete(c.SeriesInfoKey(id))
+	return err
+}
+
 func (c *StateManager) AddUserStat(userStat *UserStat, expire time.Duration) error {
 	if userStat == nil {
 		return errors.New("nil UserStat")

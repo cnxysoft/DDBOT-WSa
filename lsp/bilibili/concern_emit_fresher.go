@@ -9,7 +9,11 @@ import (
 func (c *Concern) emitQueueFresher() concern.FreshFunc {
 	return c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
 		c.SetLastFreshTime(time.Now().Unix())
-		mid := id.(int64)
+		// 合集订阅走独立的 freshSeries 轮询，不参与 emit 队列刷新
+		mid, ok := id.(int64)
+		if !ok {
+			return nil, nil
+		}
 		var result []concern.Event
 		for _, subType := range p.Split() {
 			if subType.ContainAny(Live) {

@@ -42,6 +42,10 @@ func (k *extraKey) CurrentNewsKey(keys ...interface{}) string {
 	return buntdb.BilibiliCurrentNewsKey(keys...)
 }
 
+func (k *extraKey) SeriesInfoKey(keys ...interface{}) string {
+	return buntdb.BilibiliSeriesInfoKey(keys...)
+}
+
 func (k *extraKey) DynamicIdKey(keys ...interface{}) string {
 	return buntdb.BilibiliDynamicIdKey(keys...)
 }
