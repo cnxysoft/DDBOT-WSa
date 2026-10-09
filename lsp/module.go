@@ -15,6 +15,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/image_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/local_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/authprompt"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
@@ -95,7 +96,7 @@ func (l *Lsp) Init() {
 		if CommitId == "UNKNOWN" {
 			logger.Infof("DDBOT版本：编译版本未知")
 		} else {
-			logger.Infof("DDBOT版本：编译版本【%v-%v】", BuildTime, CommitId)
+			logger.Infof("DDBOT版本：编译版本【%v-%v】", BuildTime, "-阿宇ayu 魔改版")
 		}
 	}
 
@@ -170,7 +171,7 @@ func (l *Lsp) Init() {
 			l.status.ImagePoolEnable = true
 		}
 	case "off":
-		log.Debug("关闭图片池")
+		log.Debug("未配置或已关闭图片池")
 	default:
 		log.Errorf("未知的图片池")
 	}
@@ -247,6 +248,9 @@ func (l *Lsp) DebugCheck(groupCode int64, uin int64, isGroupMessage bool) bool {
 func (l *Lsp) Serve(bot *bot.Bot) {
 	logger.Debugf("Lsp.Serve called: bot=%p, GroupMessageEvent=%p", bot, bot.GroupMessageEvent)
 	bot.GroupMemberJoinEvent.Subscribe(func(event *adapter.MemberJoinGroupEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.Group.Code) {
+			return
+		}
 		if err := localdb.Set(localdb.Key("OnGroupMemberJoined", event.Group.Code, event.Member.Uin, event.Member.JoinTime), "",
 			localdb.SetExpireOpt(time.Minute*2), localdb.SetNoOverWriteOpt()); err != nil {
 			return
@@ -270,6 +274,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 	})
 	bot.GroupMemberLeaveEvent.Subscribe(func(event *adapter.MemberLeaveGroupEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.Group.Code) {
+			return
+		}
 		if err := localdb.Set(localdb.Key("OnGroupMemberLeaved", event.Group.Code, event.Member.Uin, event.Member.JoinTime), "",
 			localdb.SetExpireOpt(time.Minute*2), localdb.SetNoOverWriteOpt()); err != nil {
 			return
@@ -294,6 +301,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMessageRecalledEvent.Subscribe(func(event *adapter.GroupMessageRecalledEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		data := map[string]interface{}{
 			"group_code":   event.GroupCode,
 			"author_uin":   event.AuthorUin,
@@ -555,6 +565,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	bot.GroupNotifyEvent.Subscribe(func(ievent adapter.NotifyEvent) {
 		switch event := ievent.(type) {
 		case *adapter.GroupPokeNotifyEvent:
+			if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+				return
+			}
 			data := map[string]interface{}{
 				"member_code":   event.Sender,
 				"receiver_code": event.Receiver,
@@ -595,6 +608,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMessageEvent.Subscribe(func(msg *adapter.GroupMessage) {
+		if l.PermissionStateManager.CheckGroupBlocked(msg.GroupCode) {
+			return
+		}
 		if len(msg.Elements) <= 0 {
 			return
 		}
@@ -604,6 +620,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if !l.started.Load() {
 			return
 		}
+		// 链接解析与命令响应并行处理，解析不阻塞消息事件
+		// 成品 handleGroupLinks(*adapter.GroupMessage)：群号/Sender/Elements 在函数内取
+		go l.handleGroupLinks(msg)
 		logger.Debugf("%+v\n", msg)
 		cmd := NewLspGroupCommand(l, msg)
 		if Debug {
@@ -660,6 +679,20 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		if len(msg.Elements) == 0 {
 			return
 		}
+		// 管理员对登录二维码提醒的私聊回复优先消费，命中后不再进入命令分发。
+		// 成品 lsp.(*Lsp).Serve.func14 @module.go:669：+0x80 call HandlePrivateReply，
+		// test al（消费否）→ 非消费走命令分发；test rcx（reply 长度）→ 非空则
+		// call 0xcbfec0 = (*Lsp).SendMsg 私聊发送并 return。
+		if consumed, reply := authprompt.HandlePrivateReply(msg.Sender.UserID, messageElementsText(msg.Elements)); consumed {
+			if reply != "" {
+				m := mmsg.NewMSG()
+				m.Text(reply)
+				l.SendMsg(m, mmsg.NewPrivateTarget(msg.Sender.UserID))
+			}
+			return
+		}
+		// 成品 handlePrivateLinks(*adapter.PrivateMessage)：UserID/Sender/Elements 在函数内取
+		go l.handlePrivateLinks(msg)
 		cmd := NewLspPrivateCommand(l, msg)
 		if Debug {
 			cmd.Debug()
@@ -688,6 +721,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.MemberCardUpdatedEvent.Subscribe(func(event *adapter.MemberCardUpdatedEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.Group.Code) {
+			return
+		}
 		groupName := event.Group.Name
 		memberName := event.Member.DisplayName()
 		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
@@ -713,6 +749,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupUploadNotifyEvent.Subscribe(func(event *adapter.GroupUploadNotifyEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		data := map[string]interface{}{
 			"member_code": event.Sender,
 			"group_code":  event.GroupCode,
@@ -735,6 +774,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMemberPermissionChangedEvent.Subscribe(func(event *adapter.MemberPermissionChangedEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.Group.Code) {
+			return
+		}
 		groupName := event.Group.Name
 		memberName := event.Member.DisplayName()
 		if gi := localutils.GetBot().FindGroup(event.Group.Code); gi != nil {
@@ -768,6 +810,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		}
 	})
 	bot.MemberSpecialTitleUpdatedEvent.Subscribe(func(event *adapter.MemberSpecialTitleUpdatedEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		groupName := ""
 		memberName := ""
 		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
@@ -790,6 +835,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupEssenceChangedEvent.Subscribe(func(event *adapter.GroupDigestEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		data := map[string]interface{}{
 			"group_code": event.GroupCode,
 		}
@@ -825,6 +873,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.GroupMsgEmojiLikeEvent.Subscribe(func(event *adapter.GroupMsgEmojiLikeEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		memberName := ""
 		if gi := localutils.GetBot().FindGroup(event.GroupCode); gi != nil {
 			if fi := gi.FindMember(event.UserId); fi != nil {
@@ -859,6 +910,9 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 	})
 
 	bot.PokeRecallEvent.Subscribe(func(event *adapter.PokeRecallEvent) {
+		if l.PermissionStateManager.CheckGroupBlocked(event.GroupCode) {
+			return
+		}
 		data := map[string]interface{}{
 			"member_code":   event.Sender,
 			"receiver_code": event.Receiver,

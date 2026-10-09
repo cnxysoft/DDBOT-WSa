@@ -172,21 +172,9 @@ func (s *JsonSegment) ToSendingMessage() *SendingMessage {
 	return &SendingMessage{Elements: []IMessageElement{s}}
 }
 
-// MarketFaceSegment represents a market face message element.
-type MarketFaceSegment struct {
-	Id   string
-	Name string
-}
-
-// DiceSegment represents a dice message element.
-type DiceSegment struct {
-	Value int32
-}
-
-// FingerGuessingSegment represents a finger guessing message element.
-type FingerGuessingSegment struct {
-	Value int32
-}
+// 成品 adapter 无 MarketFaceSegment/DiceSegment/FingerGuessingSegment 三种消息段
+// （证据：recovered/types/types-closure-x64.tsv 的 adapter 结构体列表不含它们），
+// 且本仓库全树除定义外无任何引用，按 Lite 范围删除。
 
 // endregion
 

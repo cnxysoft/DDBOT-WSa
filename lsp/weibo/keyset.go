@@ -23,4 +23,3 @@ func (*extraKeySet) CookieAlertKey(keys ...interface{}) string {
 func (*extraKeySet) SUBExpiredAlertKey(keys ...interface{}) string {
 	return localdb.WeiboSUBExpiredAlertKey(keys...)
 }
-

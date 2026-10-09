@@ -49,9 +49,6 @@ func (p *listProviderImpl) RunIList(msgContext any, groupCode int64, site string
 type ilistData struct {
 	Bilibili siteData `json:"Bilibili"`
 	Weibo    siteData `json:"Weibo"`
-	Youtube  siteData `json:"Youtube"`
-	Acfun    siteData `json:"Acfun"`
-	Twitter  siteData `json:"Twitter"`
 	Douyin   siteData `json:"Douyin"`
 }
 
@@ -147,12 +144,6 @@ func IList(c *MessageContext, groupCode int64, site string, opts ...any) []byte 
 						iList.Bilibili = tmpData
 					case "weibo":
 						iList.Weibo = tmpData
-					case "youtube":
-						iList.Youtube = tmpData
-					case "acfun":
-						iList.Acfun = tmpData
-					case "twitter":
-						iList.Twitter = tmpData
 					case "douyin":
 						iList.Douyin = tmpData
 					}
@@ -342,7 +333,8 @@ func IGrantRole(c *MessageContext, groupCode int64, grantRole permission.RoleTyp
 			c.NoPermissionReply()
 			return
 		}
-		if gi := utils.GetBot().FindGroup(groupCode); gi != nil && gi.FindMember(grantTo) != nil {
+		// 成品 IGrantRole (x64 0xca6381)：call utils.(*HackedBot).EnsureGroupMember，test rbx(err) 判成败。
+		if _, gerr := utils.GetBot().EnsureGroupMember(groupCode, grantTo); gerr == nil {
 			if del {
 				err = c.Lsp.PermissionStateManager.UngrantGroupRole(groupCode, grantTo, grantRole)
 			} else {
@@ -402,7 +394,8 @@ func IGrantCmd(c *MessageContext, groupCode int64, command string, grantTo int64
 		return
 	}
 
-	if gi := utils.GetBot().FindGroup(groupCode); gi != nil && gi.FindMember(grantTo) != nil {
+	// 成品 IGrantCmd (x64 0xca67d6)：call utils.(*HackedBot).EnsureGroupMember，test rbx(err) 判成败。
+	if _, gerr := utils.GetBot().EnsureGroupMember(groupCode, grantTo); gerr == nil {
 		if del {
 			err = c.Lsp.PermissionStateManager.UngrantPermission(groupCode, grantTo, command)
 		} else {
@@ -486,7 +479,8 @@ func IConfigAtCmd(c *MessageContext, groupCode int64, id string, site string, ct
 			return
 		}
 		if action == "add" {
-			g := utils.GetBot().FindGroup(groupCode)
+			// 成品 IConfigAtCmd (x64 0xca7098 call EnsureGroup)：用 EnsureGroup 取群资料。
+			g, _ := utils.GetBot().EnsureGroup(groupCode)
 			if g == nil {
 				c.TextReply("失败 - 无法找到这个群的信息，如果看到这个信息表示bot出现了一些问题")
 				// 可能没找到吗
@@ -495,6 +489,10 @@ func IConfigAtCmd(c *MessageContext, groupCode int64, id string, site string, ct
 			var failed []int64
 			for _, qq := range QQ {
 				member := g.FindMember(qq)
+				if member == nil {
+					// 成品 IConfigAtCmd (x64 0xca73eb call EnsureGroupMember)：缓存缺失时实时拉取。
+					member, _ = utils.GetBot().EnsureGroupMember(groupCode, qq)
+				}
 				if member == nil {
 					failed = append(failed, qq)
 				}
@@ -960,6 +958,14 @@ func IAbnormalConcernCheck(c *MessageContext) {
 		return
 	}
 
+	// 成品 x64 0xcac2c0 callees 含 HackedBot.ReloadGroupList（+0xda），
+	// 在读取群列表前实时刷新；失败则记录日志并回复后返回。
+	if err := utils.GetBot().ReloadGroupList(); err != nil {
+		c.GetLog().WithField("error", err).Error("检查异常订阅前实时刷新群列表失败")
+		c.TextReply("失败 - 实时查询QQ群列表失败，本次不会判断异常订阅")
+		return
+	}
+
 	var allGroups = make(map[int64]bool)
 	for _, groups := range utils.GetBot().GetGroupList() {
 		allGroups[groups.Code] = true
@@ -1050,6 +1056,14 @@ func ICleanConcern(c *MessageContext, abnormal bool, groupCodes []int64, rawSite
 
 	for _, code := range groupCodes {
 		cleanGroupCode[code] = true
+	}
+
+	// 成品 x64 0xcacc00 callees 含 HackedBot.ReloadGroupList（+0x328），
+	// 在读取群列表前实时刷新；失败则记录日志并回复后返回。
+	if err := utils.GetBot().ReloadGroupList(); err != nil {
+		log.WithField("error", err).Error("清理异常订阅前实时刷新群列表失败")
+		c.TextReply("失败 - 实时查询QQ群列表失败，本次未清理任何订阅")
+		return
 	}
 
 	for _, groups := range utils.GetBot().GetGroupList() {

@@ -10,7 +10,7 @@ func TestDbExtFuncs(t *testing.T) {
 	// 初始化测试数据库
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
-	
+
 	// 初始化模板数据库
 	err := InitTemplateDB(":memory:")
 	assert.Nil(t, err)
@@ -32,8 +32,8 @@ func TestDbExtFuncs(t *testing.T) {
 	t.Run("TestSetJsonAndGetJson", func(t *testing.T) {
 		// 测试JSON数据的存储和获取
 		data := map[string]interface{}{
-			"name": "test",
-			"value": 123,
+			"name":   "test",
+			"value":  123,
 			"active": true,
 		}
 

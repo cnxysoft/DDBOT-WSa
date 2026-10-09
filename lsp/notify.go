@@ -54,8 +54,14 @@ func (l *Lsp) ConcernNotify() {
 			// 注意notify可能会缓存MSG
 			var m = l.NotifyMessage(inotify).Clone()
 
-			if m == nil {
-				logger.Debug("the notification message is empty, skip this push.")
+			if m == nil || len(m.Elements()) == 0 {
+				// 成品 notify.go:63（Info）——模板中止/输出为空，连 @ 一起跳过本次推送。
+				nLogger.WithFields(logrus.Fields{
+					"notify_stage":     "template_filter",
+					"template_empty":   true,
+					"at_check_skipped": true,
+					"selected":         "none",
+				}).Info("模板已中止或输出为空，跳过本次推送（包括所有 @）")
 				continue
 			}
 
@@ -66,27 +72,140 @@ func (l *Lsp) ConcernNotify() {
 			}
 
 			// atConfig
+			//
+			// 成品 ConcernNotify @0xcc23c0 的 @全体 判定分层与日志（逐条取自反汇编）：
+			//
+			//	+0x851  checkAtAllGroupAdministrator(groupCode, uin)   -> (admin, role, err)
+			//	+0x10f8 checkAtAllRemaining(inotify)                   -> atAllRemainingDecision
+			//	+0x1c5a mmsg.(*MSG).AtAll     (newAtAllMsg 内联)
+			//	+0x2ac9 newAtIdsMsg
+			//
+			// 阶段字段 at_all_stage：before_hook / admin_check / eligibility /
+			// remaining_check / selection；模板空跳过用 notify_stage=template_filter。
 			var atBeforeHook = cfg.AtBeforeHook(inotify)
 			if !atBeforeHook.Pass {
-				nLogger.WithField("Reason", atBeforeHook.Reason).Debug("notify @at filtered by hook AtBeforeHook")
-			} else {
-				// 有@全体成员 或者 @Someone
-				var qqadmin = atBeforeHook.Pass &&
-					l.PermissionStateManager.CheckGroupAdministrator(inotify.GetGroupCode(), utils.GetBot().GetUin())
-				var checkAtAll = qqadmin &&
-					cfg.GetGroupConcernAt().CheckAtAll(inotify.Type())
-				var atAllMark = checkAtAll &&
-					c.GetStateManager().CheckAndSetAtAllMark(inotify.GetGroupCode(), inotify.GetUid())
+				// 成品 notify.go:82（Info）——AtBeforeHook 未通过，本次不添加任何 @。
 				nLogger.WithFields(logrus.Fields{
-					"qqAdmin":    qqadmin,
-					"checkAtAll": checkAtAll,
-					"atMark":     atAllMark,
-				}).Trace("at_all condition")
-				if atBeforeHook.Pass && qqadmin && checkAtAll && atAllMark {
+					"at_all_stage": "before_hook",
+					"pass":         atBeforeHook.Pass,
+					"reason":       atBeforeHook.Reason,
+					"selected":     "none",
+				}).Info("@全体逻辑：前置条件未通过，本次不添加任何 @")
+			} else {
+				var (
+					admin     bool
+					role      string
+					adminErr  error
+					decision  atAllRemainingDecision
+					ranCheck  bool
+					atAllMark bool
+				)
+				checkAtAll := cfg.GetGroupConcernAt().CheckAtAll(inotify.Type())
+				if checkAtAll {
+					// 成品 notify.go:88——实时查询 BOT 群角色；失败/完成分别记 Warn/Info。
+					admin, role, adminErr = checkAtAllGroupAdministrator(inotify.GetGroupCode(), utils.GetBot().GetUin())
+					adminFields := logrus.Fields{
+						"at_all_stage":          "admin_check",
+						"admin_api":             "get_group_member_info",
+						"admin_api_called":      true,
+						"admin_no_cache":        true,
+						"admin_check_source":    "onebot_realtime",
+						"bot_group_admin":       admin,
+						"bot_group_member_role": role,
+					}
+					if adminErr != nil {
+						// 成品 notify.go:100（Warn，entry.go:328）
+						nLogger.WithFields(adminFields).Warn("@全体逻辑：实时查询机器人群角色失败，禁止使用 @全体")
+					} else {
+						// 成品 notify.go:103（Info）
+						nLogger.WithFields(adminFields).Info("@全体逻辑：实时查询机器人群角色完成")
+					}
+				}
+
+				// 成品 notify.go:116（Info）——权限与订阅配置检查完成。
+				nLogger.WithFields(logrus.Fields{
+					"at_all_stage":          "eligibility",
+					"bot_group_admin":       admin,
+					"bot_group_member_role": role,
+					"at_all_configured":     checkAtAll,
+					"admin_api_called":      checkAtAll,
+					"admin_no_cache":        checkAtAll,
+					"will_run_at_all_check": checkAtAll && admin,
+				}).Info("@全体逻辑：检查机器人权限和订阅配置")
+
+				if checkAtAll && admin {
+					// 成品 notify.go:119——白名单与账号剩余次数判定。
+					decision = checkAtAllRemaining(inotify)
+					ranCheck = true
+					remainingFields := logrus.Fields{
+						"at_all_stage":              "remaining_check",
+						"remaining_limiter_enabled": decision.RemainingLimiterEnabled,
+						"remaining_api":             "get_group_at_all_remain",
+						"remaining_api_called":      decision.RemainingLimiterEnabled && !decision.Whitelisted,
+						"remaining_scope":           "account",
+						"allowed":                   decision.Allowed,
+						"whitelisted":               decision.Whitelisted,
+						"threshold":                 decision.Threshold,
+						"reason":                    decision.Reason,
+					}
+					if decision.Remaining != nil {
+						remainingFields["remaining"] = *decision.Remaining
+					}
+					switch {
+					case !decision.RemainingLimiterEnabled:
+						// 成品 notify.go:136（Info）——未配置 atAll，跳过账号剩余次数限制。
+						nLogger.WithFields(remainingFields).Info("@全体逻辑：未配置 atAll，跳过账号剩余次数限制")
+					case decision.Err == nil:
+						// 成品 notify.go:142（Info）——白名单及账号剩余次数判断完成。
+						nLogger.WithFields(remainingFields).Info("@全体逻辑：白名单及账号剩余次数判断完成")
+					default:
+						// 成品 notify.go:139（Warn）——查询失败，禁止 @全体。
+						remainingFields["error"] = decision.Err
+						nLogger.WithFields(remainingFields).Warn("@全体逻辑：腾讯剩余次数接口查询失败，禁止使用 @全体")
+					}
+					if decision.Allowed {
+						atAllMark = c.GetStateManager().CheckAndSetAtAllMark(inotify.GetGroupCode(), inotify.GetUid())
+					}
+				}
+
+				// 成品 notify.go:174-181——selection 阶段：给出 reason，选择 @全体 或 @指定成员。
+				// reason 字面量：at_all_not_configured @0x10b66fc / bot_admin_query_failed @0x10b7c86 /
+				// bot_not_group_admin @0x10b375c / two_hour_at_all_interval @0x10bac25。
+				var reason string
+				switch {
+				case !checkAtAll:
+					reason = "at_all_not_configured"
+				case adminErr != nil:
+					reason = "bot_admin_query_failed"
+				case !admin:
+					reason = "bot_not_group_admin"
+				case ranCheck && decision.Allowed && !atAllMark:
+					reason = "two_hour_at_all_interval"
+				case ranCheck:
+					reason = decision.Reason
+				}
+				if ranCheck && decision.Allowed && atAllMark {
+					// 成品 notify.go:154（Info）——最终选择 @全体成员。
+					nLogger.WithFields(logrus.Fields{
+						"at_all_stage":    "selection",
+						"at_all_mark":     atAllMark,
+						"at_all_cooldown": "2h",
+						"selected":        "at_all",
+						"reason":          reason,
+					}).Info("@全体逻辑：最终选择 @全体成员")
 					nLogger = nLogger.WithField("at_all", true)
 					newAtAllMsg(m)
 				} else {
 					ids := cfg.GetGroupConcernAt().GetAtSomeoneList(inotify.Type())
+					// 成品 notify.go:181（Info）——未使用 @全体，回退 @指定成员。
+					nLogger.WithFields(logrus.Fields{
+						"at_all_stage":    "selection",
+						"at_all_mark":     atAllMark,
+						"at_all_cooldown": "2h",
+						"selected":        "at_QQ",
+						"reason":          reason,
+						"at_QQ":           ids,
+					}).Info("@全体逻辑：未使用 @全体，执行回退方案")
 					nLogger = nLogger.WithField("at_QQ", ids)
 					newAtIdsMsg(m, ids)
 				}
@@ -158,10 +277,10 @@ func (l *Lsp) ConcernNotify() {
 						ids := cfg.GetGroupConcernAt().GetAtSomeoneList(inotify.Type())
 						if len(ids) != 0 {
 							nLogger = nLogger.WithField("at_QQ", ids)
-							nLogger.Debug("notify atAll failed, try at someone")
+							nLogger.Info("@全体逻辑：@全体发送失败，消息已去除 @全体后重发，并尝试 @指定成员")
 							l.SendMsg(newAtIdsMsg(mmsg.NewMSG(), ids), target)
 						} else {
-							nLogger.Debug("notify atAll failed, at someone not config")
+							nLogger.Info("@全体逻辑：@全体发送失败，消息已去除 @全体后重发，但没有配置 @指定成员")
 						}
 					}
 				}

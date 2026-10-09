@@ -1,38 +1,9 @@
-/.idea
-DDBOT
-/.coverage.out
-/coverage.html
-/qrcode.png
-/dist/
-/version*.json
-/debug
-ddbot.exe
-/ffmpeg/ffmpeg-static/
-
-# Build output
-/DDBOT-cgo
-
-# Test binaries
+/DDBOT
+/DDBOT-*
+/application.yaml
+/.lsp.db*
+/logs/
+/template/
+/.weibo-state/
 *.test
-*.test.exe
-
-# Node packages
-node_modules/
-package*.json
-
-# Agent framework
-.sisyphus/
-
-# AI Agent documentation (local)
-/AGENTS.md
-/CLAUDE.md
-
-# Claude Code configuration
-.claude/
-
-# Playwright MCP runtime data
-.playwright-mcp/
-
-# Runtime data - DO NOT COMMIT
-/res/
-/lsp/bilibili/res/bilibili_area_list.json
+*.out

@@ -2,10 +2,13 @@ package concern
 
 import (
 	"fmt"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 var globalCenter = newConcernCenter()
@@ -97,31 +100,135 @@ func (gc *center) Register(c Concern, opts ...OptFunc) {
 }
 
 func (gc *center) StartAll() {
+	// 成品 x64 0xaeec80：StartAll 直接调 resolveSiteStartupSelection(gc.concernList)，
+	// 返回值第一个即本次真正启动的 Concern 列表（成品该函数返回 5 个值），随后写回 concernList。
+	startList, _, _, unknown, configured := resolveSiteStartupSelection(gc.concernList)
+	gc.concernList = startList
+	switch {
+	case !configured:
+		logger.Info("未配置 sites.enabled，启动全部已注册站点")
+	case len(unknown) > 0:
+		logger.WithField("unknown", unknown).Warn("sites.enabled 包含不支持的站点名称")
+	default:
+		logger.Info("站点启动白名单已生效")
+	}
+	// 成品 0xaeec80 +0xb8：写回 concernList 后立即重建一次 cache；末尾 wg.Wait 后再调一次（+0x886）。
+	gc.freshCache()
 	var wg sync.WaitGroup
-	var errConcern = make([]int, len(gc.GetConcernList()))
-	for idx, c := range gc.concernList {
+	var errConcern = make([]int, len(startList))
+	for idx, c := range startList {
 		wg.Add(1)
 		go func(idx int, c Concern) {
 			defer wg.Done()
 			c.FreshIndex()
-			logger.Debugf("启动Concern %v模块", c.Site())
+			logger.WithField("site", c.Site()).Info("正在启动站点模块")
 			err := c.Start()
 			if err != nil {
 				logger.Errorf("启动Concern %v 失败 - %v", c.Site(), err)
 				errConcern[idx] = 1
+				return
 			}
+			logger.WithField("site", c.Site()).Info("站点模块启动成功")
 		}(idx, c)
 	}
 	wg.Wait()
+	logger.Info("站点模块启动完成")
 	var newConcern []Concern
 	for idx, v := range errConcern {
 		if v == 0 {
-			newConcern = append(newConcern, gc.concernList[idx])
+			newConcern = append(newConcern, startList[idx])
 		}
 	}
 	gc.concernList = newConcern
 	gc.freshCache()
 	return
+}
+
+// resolveSiteStartupSelection 解析 sites.enabled 配置得到本次启动的站点选集。
+//
+// 返回：本次启动的 Concern 列表、计划启动的站点名、已停用站点名、sites.enabled 中不支持的站点名，
+// 以及是否显式配置了 sites.enabled。
+// 兼容模式（未配置 sites.enabled）下 startList 为全部已注册 Concern，enabled 为全部站点名；
+// 显式配置 enabled: [] 时 startList/enabled 为空，表示一个站点都不启动。
+//
+// 证据（DDBOT-Lite x64 成品，concern.resolveSiteStartupSelection @ registry.go:148，1120B）：
+// callees = cfg.GetEnabledSites(+0x32)、filterConcernsBySite(+0xe0，本函数唯一调用者)、
+// strings.ToLower×2(+0x1d0/+0x339)、sort.Strings×2(+0x266/+0x3d2)；StartAll(+0x33)、
+// StartupSiteSelection(+0x2c) 调它，StartAll 把返回的第一个 slice 直接写回 gc.concernList。
+func resolveSiteStartupSelection(concerns []Concern) (startList []Concern, enabled, disabled, unknown []string, configured bool) {
+	selection, configured := cfg.GetEnabledSites()
+	if !configured {
+		// 兼容模式：全部 Concern 启动，enabled 为全部站点名（ToLower + 排序）。
+		startList = append([]Concern(nil), concerns...)
+		enabled = make([]string, 0, len(startList))
+		for _, c := range startList {
+			enabled = append(enabled, strings.ToLower(c.Site()))
+		}
+		sort.Strings(enabled)
+		return startList, enabled, nil, nil, false
+	}
+	startList, disabled, unknown = filterConcernsBySite(concerns, selection)
+	enabled = make([]string, 0, len(startList))
+	for _, c := range startList {
+		enabled = append(enabled, strings.ToLower(c.Site()))
+	}
+	sort.Strings(enabled)
+	return startList, enabled, disabled, unknown, true
+}
+
+// filterConcernsBySite 按 sites.enabled 选集过滤 Concern，返回命中的 Concern 列表、
+// 已注册但未选中的站点名（disabled）、选集里未注册的站点名（unknown）。
+// 匹配大小写不敏感（TrimSpace+ToLower），选集含 "*" 时全部命中。
+// 证据（成品 x64 0xaeffe0，2048B）：makemap + TrimSpace + ToLower + mapassign 建选集，
+// 逐 Concern 调 Site()+ToLower 比对，map 迭代求 unknown，末尾两次 sort.Strings 排序。
+func filterConcernsBySite(concerns []Concern, selection []string) (startList []Concern, disabled, unknown []string) {
+	selectionSet := make(map[string]struct{}, len(selection))
+	wildcard := false
+	for _, s := range selection {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "*" {
+			wildcard = true
+			continue
+		}
+		if s == "" {
+			continue
+		}
+		selectionSet[s] = struct{}{}
+	}
+	siteSet := make(map[string]struct{}, len(concerns))
+	for _, c := range concerns {
+		site := strings.ToLower(c.Site())
+		siteSet[site] = struct{}{}
+		if wildcard {
+			startList = append(startList, c)
+			continue
+		}
+		if _, ok := selectionSet[site]; ok {
+			startList = append(startList, c)
+		} else {
+			disabled = append(disabled, site)
+		}
+	}
+	if !wildcard {
+		for site := range selectionSet {
+			if _, ok := siteSet[site]; !ok {
+				unknown = append(unknown, site)
+			}
+		}
+	}
+	sort.Strings(disabled)
+	sort.Strings(unknown)
+	return startList, disabled, unknown
+}
+
+// containsSite 判断 name 是否存在于 list 中。
+func containsSite(list []string, name string) bool {
+	for _, item := range list {
+		if item == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (gc *center) StopAll() {
@@ -176,6 +283,21 @@ func GetConcernBySiteAndType(site string, ctype concern_type.Type) (Concern, err
 		return nil, err
 	}
 	return globalCenter.GetConcernBySite(site)
+}
+
+// StartupSiteSelection 返回 StartAll 时解析出的站点启动选集，供启动计划日志消费。
+//
+// 返回计划启动的站点、已停用的已注册站点、sites.enabled 中不支持的站点名称，
+// 以及是否显式配置了 sites.enabled。
+// 兼容模式（未配置 sites.enabled）下 enabled 为全部已注册站点。
+//
+// 证据（DDBOT-Lite x64 成品）：唯一调用方 bot.logSiteStartupPlan @ bot.go:142
+// 按 3 个 []string + 1 个 bool 消费（logrus 字段 enabled_sites/disabled_sites/unknown_sites）。
+func StartupSiteSelection() (enabled, disabled, unknown []string, configured bool) {
+	// 成品 x64 0xaf08c0：取 globalCenter.concernList 调 resolveSiteStartupSelection，
+	// 丢弃返回的 startList，只回传 3 个站点名 slice + configured（bot.logSiteStartupPlan 消费）。
+	_, enabled, disabled, unknown, configured = resolveSiteStartupSelection(globalCenter.concernList)
+	return
 }
 
 // ListSite 返回所有注册的 Concern 支持的site。

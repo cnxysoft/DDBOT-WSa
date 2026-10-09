@@ -9,17 +9,32 @@ import (
 )
 
 func TestReplaceAvifWithPng(t *testing.T) {
+	// 期望值按成品行为（funcs_request_ext.go:959 @0xb52a80）：补 "//" 协议、
+	// 把第一个 http:// 换成 https://、仅当后缀是 .avif/.webp 时替换为 .png，
+	// 不给其它后缀追加 .png。
 	tests := []struct {
 		input    string
 		expected string
 	}{
 		{
 			"//i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c",
-			"https://i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c.png",
+			"https://i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c",
 		},
 		{
 			"https://i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c",
-			"https://i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c.png",
+			"https://i0.hdslb.com/bfs/new_dyn/abc.png@128w_128h_1c",
+		},
+		{
+			"//i0.hdslb.com/bfs/new_dyn/abc.avif",
+			"https://i0.hdslb.com/bfs/new_dyn/abc.png",
+		},
+		{
+			"http://i0.hdslb.com/bfs/new_dyn/abc.webp",
+			"https://i0.hdslb.com/bfs/new_dyn/abc.png",
+		},
+		{
+			"//i0.hdslb.com/bfs/new_dyn/abc.jpg",
+			"https://i0.hdslb.com/bfs/new_dyn/abc.jpg",
 		},
 	}
 	for _, tt := range tests {
@@ -73,8 +88,10 @@ func TestParseBiliPostContent_MissingElements(t *testing.T) {
 	for _, e := range elements {
 		if e.Type == "dynamic-card" && e.Image != "" {
 			hasLinkCardImage = true
-			if !strings.HasSuffix(e.Image, ".png") {
-				t.Errorf("link-card image = %q, want ending with .png", e.Image)
+			// 成品 replaceAvifWithPng 只把 "//" 补成 https://，不给非 .avif/.webp
+			// 的地址追加 .png（funcs_request_ext.go:959 @0xb52a80）。
+			if !strings.HasPrefix(e.Image, "https://") || !strings.Contains(e.Image, "link.png") {
+				t.Errorf("link-card image = %q, want https://...link.png...", e.Image)
 			}
 			t.Logf("dynamic-card image: %s", e.Image)
 		}
@@ -111,6 +128,56 @@ func TestParseBiliPostContent_ImageCaption(t *testing.T) {
 	}
 	if elements[0].Desc != "这是鱼" {
 		t.Errorf("expected desc=这是鱼, got %s", elements[0].Desc)
+	}
+}
+
+// TestBiliJSONParagraphParsing 用合成页面验证 opus JSON 段落/链接卡片的解析：
+// biliParagraphsJSON 的 JSON 截取、biliTextAlignMap 的对齐映射，
+// 以及 biliLinkCardMetadataFromJSON 的字段与 json tag。
+func TestBiliJSONParagraphParsing(t *testing.T) {
+	page := `<html><head><script>window.__INITIAL_STATE__={};
+"module_content":{"paragraphs":[
+  {"para_type":1,"align":1,"format":{"align":2},"text":{"nodes":[{"word":{"words":"hello"}}]}},
+  {"para_type":4,"blockquote":{"children":[{"text":{"nodes":[{"word":{"words":"child"}}]}}]}},
+  {"link_card":{"card":{"type":"opus","eva3_opus":{"info":{
+      "opus_id":"123","title":"T","jump_url":"https://www.bilibili.com/opus/123",
+      "author_name":"A","view":"1.2万","reply":"3","badge":"b",
+      "pics":[{"src":"//i0.hdslb.com/x.avif"}]}}}}}
+]}`
+	raw := []byte(page)
+
+	paras := biliParagraphsJSON(raw)
+	if len(paras) == 0 || paras[0] != '[' || paras[len(paras)-1] != ']' {
+		t.Fatalf("biliParagraphsJSON = %q", string(paras))
+	}
+
+	aligns := biliTextAlignMap(raw)
+	if aligns["hello"] != "right" {
+		t.Errorf("align[hello] = %q, want right", aligns["hello"])
+	}
+	if v, ok := aligns["child"]; !ok || v != "" {
+		t.Errorf("align[child] = %q,%v want empty,true", v, ok)
+	}
+
+	metas := biliLinkCardMetadataFromJSON(raw)
+	if len(metas) != 1 {
+		t.Fatalf("metas = %d, want 1", len(metas))
+	}
+	m := metas[0]
+	if m.Type != "dynamic-card" || m.Identity != "opus:123" {
+		t.Errorf("type=%q identity=%q", m.Type, m.Identity)
+	}
+	if m.URL != "https://www.bilibili.com/opus/123" || m.Title != "T" || m.Author != "A" {
+		t.Errorf("url=%q title=%q author=%q", m.URL, m.Title, m.Author)
+	}
+	if m.Views != "1.2万" || m.Danmaku != "3" || m.CardTag != "b" {
+		t.Errorf("views=%q danmaku=%q cardtag=%q", m.Views, m.Danmaku, m.CardTag)
+	}
+	if m.Image != "https://i0.hdslb.com/x.png" {
+		t.Errorf("image=%q", m.Image)
+	}
+	if m.Duration != "" {
+		t.Errorf("duration=%q, want empty for single pic", m.Duration)
 	}
 }
 

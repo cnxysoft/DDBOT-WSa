@@ -89,14 +89,51 @@ func isRemoteURI(uri string) bool {
 		strings.HasPrefix(uri, "file://")
 }
 
+// containsMedia 检测消息参数是否包含媒体消息（图片/语音/视频/文件）。
+// 媒体消息即使不带远程 URI（如 base64/file 形式），OneBot 端转码上传也可能较慢，
+// 与包含 URI 一样需要给更长的超时时间。
+func containsMedia(params map[string]interface{}) bool {
+	msg, ok := params["message"]
+	if !ok {
+		return false
+	}
+
+	switch m := msg.(type) {
+	case string:
+		// CQ 码字符串形式：检查是否包含媒体 CQ 码
+		return containsCQMedia(m)
+	case []interface{}:
+		for _, seg := range m {
+			segment, ok := seg.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			segType, _ := segment["type"].(string)
+			switch segType {
+			case "image", "record", "video", "file":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// containsCQMedia 检测 CQ 码字符串是否包含媒体 CQ 码。
+func containsCQMedia(raw string) bool {
+	return strings.Contains(raw, "[CQ:image,") ||
+		strings.Contains(raw, "[CQ:record,") ||
+		strings.Contains(raw, "[CQ:video,") ||
+		strings.Contains(raw, "[CQ:file,")
+}
+
 // calcSendTimeout 根据消息内容计算合适的超时时间
-// 如果消息包含 URI，使用更长的超时（因为 NapCat/LLOneBot 需要先下载）
+// 如果消息包含 URI 或媒体内容，使用更长的超时（因为 NapCat/LLOneBot 需要先下载或转码）
 func (a *OneBotAdapter) calcSendTimeout(action string, params map[string]interface{}) time.Duration {
 	// 只有发送消息的动作才需要特殊处理
 	switch action {
 	case "send_msg", "send_group_msg", "send_private_msg",
 		"send_group_forward_msg", "send_private_forward_msg":
-		if containsURI(params) {
+		if containsURI(params) || containsMedia(params) {
 			return uriMessageTimeout
 		}
 	}
@@ -396,6 +433,23 @@ func (a *OneBotAdapter) parseGroupMessageEvent(msg map[string]interface{}) *adap
 		SelfID:     getInt64(msg["self_id"]),
 	}
 
+	// sender 对象还原发送者资料。成品证据：onebot-v11.(*OneBotAdapter).parseGroupMessageEvent
+	// @0xb63340，依次 mapaccess "sender"（+0x244），再取其中的 user_id（缺省回退 event.UserID）、
+	// nickname、card、role，写入新 SenderInfo 并挂到 event+0x50。
+	if sender, ok := msg["sender"].(map[string]interface{}); ok {
+		senderID := getInt64(sender["user_id"])
+		if senderID == 0 {
+			senderID = event.UserID
+		}
+		event.Sender = &adapter.SenderInfo{
+			UserID:   senderID,
+			Uin:      senderID,
+			Nickname: getString(sender["nickname"]),
+			Card:     getString(sender["card"]),
+			Role:     getString(sender["role"]),
+		}
+	}
+
 	if msg["message"] != nil {
 		event.Message = adapter.ParseMessageSegments(msg["message"])
 	} else if msg["raw_message"] != nil {
@@ -454,12 +508,15 @@ func (a *OneBotAdapter) handleMetaEvent(msg map[string]interface{}) {
 
 func (a *OneBotAdapter) handleNoticeEvent(msg map[string]interface{}) {
 	event := &adapter.NoticeEvent{
-		NoticeType:   getString(msg["notice_type"]),
-		Time:         getInt64(msg["time"]),
-		SelfID:       getInt64(msg["self_id"]),
-		GroupID:      getInt64(msg["group_id"]),
-		UserID:       getInt64(msg["user_id"]),
-		OperatorID:   getInt64(msg["operator_id"]),
+		NoticeType: getString(msg["notice_type"]),
+		Time:       getInt64(msg["time"]),
+		SelfID:     getInt64(msg["self_id"]),
+		GroupID:    getInt64(msg["group_id"]),
+		UserID:     getInt64(msg["user_id"]),
+		OperatorID: getInt64(msg["operator_id"]),
+		// 成品 @0xb63e00 依次读 target_id(+0x18b)/sender_id(+0x1c2) 写入 NoticeEvent+0x38/+0x40。
+		TargetID:     getInt64(msg["target_id"]),
+		SenderID:     getInt64(msg["sender_id"]),
 		Duration:     int32(getInt64(msg["duration"])),
 		SubType:      getString(msg["sub_type"]),
 		Title:        getString(msg["title"]),
@@ -469,6 +526,8 @@ func (a *OneBotAdapter) handleNoticeEvent(msg map[string]interface{}) {
 		Times:        getInt(msg["times"]),
 		CardNew:      getString(msg["card_new"]),
 		CardOld:      getString(msg["card_old"]),
+		// 成品 @0xb63e00 在 +0x273 读 is_add 键（0x109f622，len=6），0xb645b2 写入 event+0x180。
+		IsAdd: getBool(msg["is_add"]),
 	}
 
 	if likes, ok := msg["likes"].([]interface{}); ok && len(likes) > 0 {
@@ -500,6 +559,9 @@ func (a *OneBotAdapter) handleRequestEvent(msg map[string]interface{}) {
 		Comment:     getString(msg["comment"]),
 		Flag:        getString(msg["flag"]),
 		SubType:     getString(msg["sub_type"]),
+		// 成品 @0xb64880 在 +0x201 读 invitor_id、+0x239 读 source_group_id（均 getInt64）。
+		InvitorID:     getInt64(msg["invitor_id"]),
+		SourceGroupID: getInt64(msg["source_group_id"]),
 	}
 
 	a.handlersMu.RLock()
@@ -512,7 +574,11 @@ func (a *OneBotAdapter) handleRequestEvent(msg map[string]interface{}) {
 }
 
 func (a *OneBotAdapter) GetGroupList() ([]*adapter.GroupInfo, error) {
-	data, err := a.SendApi("get_group_list", nil)
+	// 成品证据：onebot-v11.(*OneBotAdapter).GetGroupList @0xb64cc0 +0x35（0xb64cf5）
+	// mapassign_faststr 键 0x10a48c6「no_cache」（8 字节），值为 bool true
+	// （类型 0xee7500、数据指针 0x115cc48），再以 14 字节 API 名 0x10ad86b
+	// "get_group_list" 调 SendApi。
+	data, err := a.SendApi("get_group_list", map[string]interface{}{"no_cache": true})
 	if err != nil {
 		return nil, err
 	}
@@ -521,22 +587,30 @@ func (a *OneBotAdapter) GetGroupList() ([]*adapter.GroupInfo, error) {
 	switch d := data.(type) {
 	case []interface{}:
 		for _, item := range d {
-			if groupMap, ok := item.(map[string]interface{}); ok {
-				groupID := getInt64(groupMap["group_id"])
-				group := &adapter.GroupInfo{
-					Uin:             groupID,
-					Code:            groupID,
-					GroupID:         groupID,
-					Name:            getString(groupMap["group_name"]),
-					GroupName:       getString(groupMap["group_name"]),
-					MemberCount:     getInt(groupMap["member_count"]),
-					MaxMemberCount:  getInt(groupMap["max_member_count"]),
-					GroupCreateTime: getInt64(groupMap["group_create_time"]),
-					GroupLevel:      getInt(groupMap["group_level"]),
-				}
-				groups = append(groups, group)
+			groupMap, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("get_group_list returned invalid item type %T", item)
 			}
+			groupID := getInt64(groupMap["group_id"])
+			if groupID <= 0 {
+				return nil, fmt.Errorf("get_group_list returned invalid group_id %d", groupID)
+			}
+			group := &adapter.GroupInfo{
+				Uin:             groupID,
+				Code:            groupID,
+				GroupID:         groupID,
+				Name:            getString(groupMap["group_name"]),
+				GroupName:       getString(groupMap["group_name"]),
+				MemberCount:     getInt(groupMap["member_count"]),
+				MaxMemberCount:  getInt(groupMap["max_member_count"]),
+				GroupCreateTime: getInt64(groupMap["group_create_time"]),
+				GroupLevel:      getInt(groupMap["group_level"]),
+				OwnerUin:        getInt64(groupMap["owner_id"]),
+			}
+			groups = append(groups, group)
 		}
+	default:
+		return nil, fmt.Errorf("get_group_list returned unexpected response type %T", data)
 	}
 
 	return groups, nil
@@ -554,30 +628,39 @@ func (a *OneBotAdapter) GetGroupMemberList(groupID int64) ([]*adapter.GroupMembe
 	switch d := data.(type) {
 	case []interface{}:
 		for _, item := range d {
-			if memberMap, ok := item.(map[string]interface{}); ok {
-				member := &adapter.GroupMemberInfo{
-					GroupID:         getInt64(memberMap["group_id"]),
-					UserID:          getInt64(memberMap["user_id"]),
-					Nickname:        getString(memberMap["nickname"]),
-					Card:            getString(memberMap["card"]),
-					Sex:             getString(memberMap["sex"]),
-					Age:             getInt(memberMap["age"]),
-					Area:            getString(memberMap["area"]),
-					Level:           getInt(memberMap["level"]),
-					QQLevel:         int16(getInt(memberMap["qq_level"])),
-					JoinTime:        getInt64(memberMap["join_time"]),
-					LastSentTime:    getInt64(memberMap["last_sent_time"]),
-					TitleExpireTime: getInt64(memberMap["title_expire_time"]),
-					Unfriendly:      getBool(memberMap["unfriendly"]),
-					CardChangeable:  getBool(memberMap["card_changeable"]),
-					IsRobot:         getBool(memberMap["is_robot"]),
-					ShutUpTimestamp: getInt64(memberMap["shut_up_timestamp"]),
-					Role:            getString(memberMap["role"]),
-					Title:           getString(memberMap["title"]),
-				}
-				members = append(members, member)
+			memberMap, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("get_group_member_list returned invalid item type %T", item)
 			}
+			memberGroupID := getInt64(memberMap["group_id"])
+			memberUserID := getInt64(memberMap["user_id"])
+			if memberGroupID != groupID {
+				return nil, fmt.Errorf("get_group_member_list returned invalid identity group_id=%d user_id=%d for group %d", memberGroupID, memberUserID, groupID)
+			}
+			member := &adapter.GroupMemberInfo{
+				GroupID:         memberGroupID,
+				UserID:          memberUserID,
+				Nickname:        getString(memberMap["nickname"]),
+				Card:            getString(memberMap["card"]),
+				Sex:             getString(memberMap["sex"]),
+				Age:             getInt(memberMap["age"]),
+				Area:            getString(memberMap["area"]),
+				Level:           getInt(memberMap["level"]),
+				QQLevel:         int16(getInt(memberMap["qq_level"])),
+				JoinTime:        getInt64(memberMap["join_time"]),
+				LastSentTime:    getInt64(memberMap["last_sent_time"]),
+				TitleExpireTime: getInt64(memberMap["title_expire_time"]),
+				Unfriendly:      getBool(memberMap["unfriendly"]),
+				CardChangeable:  getBool(memberMap["card_changeable"]),
+				IsRobot:         getBool(memberMap["is_robot"]),
+				ShutUpTimestamp: getInt64(memberMap["shut_up_timestamp"]),
+				Role:            getString(memberMap["role"]),
+				Title:           getString(memberMap["title"]),
+			}
+			members = append(members, member)
 		}
+	default:
+		return nil, fmt.Errorf("get_group_member_list returned unexpected response type %T", data)
 	}
 
 	return members, nil
@@ -619,6 +702,10 @@ func (a *OneBotAdapter) GetStrangerInfo(userID int64) (map[string]interface{}, e
 	}
 
 	if m, ok := data.(map[string]interface{}); ok {
+		returnedUserID := getInt64(m["user_id"])
+		if returnedUserID != userID {
+			return nil, fmt.Errorf("get_stranger_info returned invalid user_id %d for query %d", returnedUserID, userID)
+		}
 		return m, nil
 	}
 
@@ -635,11 +722,14 @@ func (a *OneBotAdapter) GetGroupInfo(groupID int64) (*adapter.GroupInfo, error) 
 	}
 
 	if groupMap, ok := data.(map[string]interface{}); ok {
-		groupID := getInt64(groupMap["group_id"])
+		returnedGroupID := getInt64(groupMap["group_id"])
+		if returnedGroupID != groupID {
+			return nil, fmt.Errorf("get_group_info returned invalid group_id %d for query %d", returnedGroupID, groupID)
+		}
 		return &adapter.GroupInfo{
-			Uin:             groupID,
-			Code:            groupID,
-			GroupID:         groupID,
+			Uin:             returnedGroupID,
+			Code:            returnedGroupID,
+			GroupID:         returnedGroupID,
 			Name:            getString(groupMap["group_name"]),
 			GroupName:       getString(groupMap["group_name"]),
 			MemberCount:     getInt(groupMap["member_count"]),
@@ -664,9 +754,14 @@ func (a *OneBotAdapter) GetGroupMemberInfo(groupID, userID int64) (*adapter.Grou
 	}
 
 	if memberMap, ok := data.(map[string]interface{}); ok {
+		returnedGroupID := getInt64(memberMap["group_id"])
+		returnedUserID := getInt64(memberMap["user_id"])
+		if returnedGroupID != groupID || returnedUserID != userID {
+			return nil, fmt.Errorf("get_group_member_info returned identity group_id=%d user_id=%d for query group_id=%d user_id=%d", returnedGroupID, returnedUserID, groupID, userID)
+		}
 		return &adapter.GroupMemberInfo{
-			GroupID:         getInt64(memberMap["group_id"]),
-			UserID:          getInt64(memberMap["user_id"]),
+			GroupID:         returnedGroupID,
+			UserID:          returnedUserID,
 			Nickname:        getString(memberMap["nickname"]),
 			Card:            getString(memberMap["card"]),
 			Sex:             getString(memberMap["sex"]),
@@ -686,7 +781,7 @@ func (a *OneBotAdapter) GetGroupMemberInfo(groupID, userID int64) (*adapter.Grou
 		}, nil
 	}
 
-	return nil, nil
+	return nil, fmt.Errorf("get_group_member_info returned unexpected response type %T", data)
 }
 
 func (a *OneBotAdapter) DownloadFile(url, base64, name string, headers []string) (string, error) {

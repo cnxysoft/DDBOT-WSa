@@ -937,17 +937,17 @@ func (a *SatoriAdapter) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
 		if nick, ok := member["nick"].(string); ok {
 			result.Sender.Nickname = nick
 		}
-// member 也可能包含 user 信息
-			if memberUser, ok := member["user"].(map[string]interface{}); ok {
-				if result.Sender.UserID == 0 {
-					if userID, ok := memberUser["id"].(string); ok {
-						if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
-							result.Sender.UserID = parsed
-							result.Sender.Uin = parsed
-							result.UserID = parsed
-						}
+		// member 也可能包含 user 信息
+		if memberUser, ok := member["user"].(map[string]interface{}); ok {
+			if result.Sender.UserID == 0 {
+				if userID, ok := memberUser["id"].(string); ok {
+					if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
+						result.Sender.UserID = parsed
+						result.Sender.Uin = parsed
+						result.UserID = parsed
 					}
 				}
+			}
 			if result.Sender.Nickname == "" {
 				if nickname, ok := memberUser["name"].(string); ok {
 					result.Sender.Nickname = nickname

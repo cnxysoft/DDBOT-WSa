@@ -70,6 +70,9 @@ type offlineQueueMsg struct {
 type Messenger struct {
 	Adapter Adapter
 
+	// retrySleep 允许注入重试等待实现（测试中替换为立即返回，避免真实休眠）
+	retrySleep func(time.Duration)
+
 	Uin    int64
 	Online atomic.Bool
 
@@ -77,6 +80,11 @@ type Messenger struct {
 	FriendList []*FriendInfo
 	groupMu    sync.RWMutex
 	friendMu   sync.RWMutex
+
+	// groupReloadMu 串行化实时群列表刷新，避免并发刷新互相覆盖成员缓存
+	groupReloadMu sync.Mutex
+	// provisionalGroupSync 记录正在异步补齐资料的群（群号为键），避免重复调度
+	provisionalGroupSync sync.Map
 
 	stopChan chan struct{}
 	wg       sync.WaitGroup
@@ -97,12 +105,16 @@ type Messenger struct {
 func NewMessenger(adapter Adapter) *Messenger {
 	m := &Messenger{
 		Adapter:    adapter,
+		retrySleep: time.Sleep,
 		stopChan:   make(chan struct{}),
 		GroupList:  make([]*GroupInfo, 0),
 		FriendList: make([]*FriendInfo, 0),
 	}
 
 	m.registerEventHandlers()
+
+	// 启动时输出图片发送方式配置，便于排查 OneBot 端兼容性问题
+	logConfiguredImageSendMode()
 
 	// 启动统计汇总定时器
 	go m.summaryTicker()
@@ -227,35 +239,19 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 
 	var lastResult SendResp
 	for i, chunk := range chunks {
-		chunkMsg := &SendingMessage{Elements: parseChunkToElements(chunk)}
-		messages := m.buildMessageSegments(chunkMsg)
-
 		// 分片之间添加延迟，避免发送过快
 		if i > 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
-
-		msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
-		m.groupSendCount.Add(1)
-		if err != nil {
-			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
-			lastResult = SendResp{
-				RetMSG: &GroupMessage{ID: -1},
-				Error:  err,
-			}
-		} else {
-			lastResult = SendResp{
-				RetMSG: &GroupMessage{
-					ID:        int64(msgID),
-					GroupCode: groupCode,
-					Sender: &SenderInfo{
-						UserID: m.Uin,
-						Uin:    m.Uin,
-					},
-					Elements: chunkMsg.Elements,
-				},
-				Error: nil,
-			}
+		chunkMsg := &SendingMessage{Elements: parseChunkToElements(chunk)}
+		// 单个分片带图片降级重发，避免图片失败导致整条通知丢失
+		// 成品证据：SendGroupMessage @0x895a23 传 rdi=i+1（0x8959fb inc %rdi）、
+		// rsi=len(chunks)（0x8957c5 存 buildMessageChunks 的 len 到 0x78(%rsp)），
+		// 即分片序号与分片总数；旧重建误传了 newstr。
+		lastResult = m.sendGroupChunkWithImageFallback(groupCode, chunkMsg, i+1, len(chunks))
+		if lastResult.Error != nil {
+			// 成品证据：SendGroupMessage @0x895620 +0x4c0 Error「Send group message failed (chunk %d/%d): %v」
+			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), lastResult.Error)
 		}
 	}
 
@@ -292,9 +288,23 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 
 	var lastMsgID int32 = -1
 	for i, chunk := range chunks {
-		// 构建新的 SendingMessage
-		chunkMsg := &SendingMessage{Elements: parseChunkToElements(chunk)}
-		messages := m.buildMessageSegments(chunkMsg)
+		// 构建新的 SendingMessage，按配置的图片发送方式准备媒体元素后再转为 OneBot 段。
+		// 成品证据：SendPrivateMessage @0x895c60 的 callees 同时含 +0x3c0
+		// prepareImageElements 与 +0x4e6 buildOutgoingMessageSegments；
+		// 重建原先只走 buildOutgoingMessageSegments，图片准备被包在里面。
+		elements, cleanup, prepErr := m.prepareImageElements(parseChunkToElements(chunk))
+		if prepErr != nil {
+			// 成品证据：SendPrivateMessage @0x895c60 在 +0x3c0 call
+			// prepareImageElements 后 0x896025 "test %rsi,%rsi"、0x896028
+			// "je 0x896116"；出错时记录 55 字节
+			// "Prepare private message images failed (chunk %d/%d): %v"
+			// （0x10e1b82），随后 0x896111 jmp 0x895fc1 直接进入循环自增，
+			// 跳过本次分片发送；错误路径返回空闭包（无临时文件需清理）。
+			messengerLogger.Errorf("Prepare private message images failed (chunk %d/%d): %v", i+1, len(chunks), prepErr)
+			continue
+		}
+		chunkMsg := &SendingMessage{Elements: elements}
+		messages := m.buildOutgoingMessageSegments(chunkMsg)
 
 		// 分片之间添加延迟，避免发送过快
 		if i > 0 {
@@ -307,6 +317,11 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
 		} else {
 			lastMsgID = msgID
+		}
+		// 成品证据：SendPrivateMessage @0x8961b3 调 Adapter.SendPrivateMessage 后
+		// 立即于 0x8961c6 call *%rsi 执行 prepareImageElements 返回的 cleanup。
+		if cleanup != nil {
+			cleanup()
 		}
 	}
 
@@ -416,6 +431,22 @@ func (m *Messenger) buildMessageSegments(msg *SendingMessage) []MessageSegment {
 		}
 	}
 
+	return segments
+}
+
+// buildOutgoingMessageSegments 把消息转换为 OneBot 段，并删除 image 段冗余的 url 字段。
+// 图片准备（prepareImageElements）由调用方在发送前完成。
+// 成品证据：adapter.(*Messenger).buildOutgoingMessageSegments @0x897680（192B）的 callees
+// 只有 buildMessageSegments 与 runtime.mapdelete_faststr；反汇编遍历段列表，对
+// type=="image"（0x8976c6 比较 5 字节 "image"）的段调用 mapdelete(Data, "url")
+// （key 常量 0x10987f4 长度 3 = "url"），不含 prepareImageElements。
+func (m *Messenger) buildOutgoingMessageSegments(msg *SendingMessage) []MessageSegment {
+	segments := m.buildMessageSegments(msg)
+	for i := range segments {
+		if segments[i].Type == "image" {
+			delete(segments[i].Data, "url")
+		}
+	}
 	return segments
 }
 
@@ -737,30 +768,35 @@ func (m *Messenger) FindGroup(code int64) *GroupInfo {
 	m.groupMu.RLock()
 	defer m.groupMu.RUnlock()
 
-	for _, g := range m.GroupList {
-		if g.Code == code {
-			return g
-		}
-	}
-	return nil
+	return m.FindGroupByUinLocked(code)
 }
 
 func (m *Messenger) FindGroupByUin(uin int64) *GroupInfo {
 	m.groupMu.RLock()
 	defer m.groupMu.RUnlock()
 
-	for _, g := range m.GroupList {
-		if g.Uin == uin {
-			return g
-		}
-	}
-	return nil
+	return m.FindGroupByUinLocked(uin)
 }
 
-// FindGroupByUinLocked assumes the caller holds the lock
+// FindGroupByUinLocked assumes the caller holds the lock.
+//
+// 成品证据（DDBOT-Lite）：
+//   - FindGroup @0x899e20 与 FindGroupByUin @0x899fa0 反汇编逐字节同构，都是 RLock
+//     后内联同一份循环；
+//   - FindGroupByUinLocked @0x89a120（64B，不加锁）循环体：
+//     test %rsi,%rsi; je   元素为 nil 跳过
+//     test %rbx,%rbx; jle  入参 <=0 跳过
+//     cmp %rbx,0x8(%rsi)   GroupInfo.Code
+//     cmp %rbx,(%rsi)      GroupInfo.Uin
+//     cmp %rbx,0x70(%rsi)  GroupInfo.GroupID
+//     recovered/types 的 adapter.GroupInfo{Uin int64; Code int64; ...; GroupID int64}
+//     对应 Uin@0x0、Code@0x8、GroupID@0x70。
 func (m *Messenger) FindGroupByUinLocked(uin int64) *GroupInfo {
 	for _, g := range m.GroupList {
-		if g.Uin == uin {
+		if g == nil {
+			continue
+		}
+		if uin > 0 && (g.Code == uin || g.Uin == uin || g.GroupID == uin) {
 			return g
 		}
 	}
@@ -787,6 +823,14 @@ func (m *Messenger) FindFriend(uin int64) *FriendInfo {
 }
 
 func (m *Messenger) ReloadGroupList() error {
+	m.groupReloadMu.Lock()
+	defer m.groupReloadMu.Unlock()
+	return m.reloadGroupListLocked()
+}
+
+// reloadGroupListLocked 实时拉取群列表并重建缓存，调用方需持有 groupReloadMu。
+// 已缓存的群保留成员列表，仅刷新群资料，避免刷新期间丢掉刚拉取的群成员。
+func (m *Messenger) reloadGroupListLocked() error {
 	groups, err := m.Adapter.GetGroupList()
 	if err != nil {
 		return err
@@ -795,9 +839,24 @@ func (m *Messenger) ReloadGroupList() error {
 	m.groupMu.Lock()
 	defer m.groupMu.Unlock()
 
-	m.GroupList = make([]*GroupInfo, 0, len(groups))
+	newList := make([]*GroupInfo, 0, len(groups))
 	for _, g := range groups {
-		m.GroupList = append(m.GroupList, &GroupInfo{
+		if g.GroupID == 0 {
+			// 成品证据：+0x61b Warn「get_group_list 返回了缺少群号的记录，已忽略」
+			messengerLogger.Warn("get_group_list 返回了缺少群号的记录，已忽略")
+			continue
+		}
+		cached := m.FindGroupByUinLocked(g.GroupID)
+		if cached != nil {
+			cached.Name = g.GroupName
+			cached.MemberCount = g.MemberCount
+			cached.MaxMemberCount = g.MaxMemberCount
+			cached.GroupCreateTime = g.GroupCreateTime
+			cached.GroupLevel = g.GroupLevel
+			newList = append(newList, cached)
+			continue
+		}
+		newList = append(newList, &GroupInfo{
 			Uin:             g.GroupID,
 			Code:            g.GroupID,
 			Name:            g.GroupName,
@@ -809,9 +868,162 @@ func (m *Messenger) ReloadGroupList() error {
 			Client:          m,
 		})
 	}
+	m.GroupList = newList
 
 	messengerLogger.Infof("Reloaded %d groups", len(m.GroupList))
 	return nil
+}
+
+// groupMetadataIncomplete 判断群资料是否缺失关键信息（名称为空或成员数未知）。
+func groupMetadataIncomplete(g *GroupInfo) bool {
+	return g == nil || g.Name == "" || g.MemberCount <= 0
+}
+
+// refreshSingleGroupFromList 从实时群列表补齐单个群的资料，成功返回缓存中的群，失败返回 nil。
+func (m *Messenger) refreshSingleGroupFromList(groupID int64) *GroupInfo {
+	m.groupReloadMu.Lock()
+	defer m.groupReloadMu.Unlock()
+
+	groups, err := m.Adapter.GetGroupList()
+	if err != nil {
+		messengerLogger.WithError(err).WithField("group", groupID).Warn("实时补查群资料失败")
+		return nil
+	}
+
+	m.groupMu.Lock()
+	defer m.groupMu.Unlock()
+
+	for _, g := range groups {
+		if g.GroupID != groupID {
+			continue
+		}
+		cached := m.FindGroupByUinLocked(groupID)
+		if cached == nil {
+			cached = &GroupInfo{
+				Uin:     g.GroupID,
+				Code:    g.GroupID,
+				Members: make([]*GroupMemberInfo, 0),
+				Client:  m,
+			}
+			m.GroupList = append(m.GroupList, cached)
+		}
+		cached.Name = g.GroupName
+		cached.MemberCount = g.MemberCount
+		cached.MaxMemberCount = g.MaxMemberCount
+		cached.GroupCreateTime = g.GroupCreateTime
+		cached.GroupLevel = g.GroupLevel
+		messengerLogger.WithFields(logrus.Fields{
+			"group": groupID,
+			"name":  g.GroupName,
+		}).Info("新群资料已通过实时群列表补齐")
+		return cached
+	}
+	messengerLogger.Warnf("group %d is not present in current OneBot group list", groupID)
+	return nil
+}
+
+// provisionalGroupRefreshMaxAttempts 是临时群资料异步补齐的最大尝试次数。
+// TODO(lite): 成品中的重试参数不可复原，这里取保守值。
+const provisionalGroupRefreshMaxAttempts = 3
+
+// provisionalGroupRefreshInterval 是临时群资料异步补齐的重试间隔。
+const provisionalGroupRefreshInterval = 2 * time.Second
+
+// scheduleProvisionalGroupRefresh 异步补齐临时群的资料；同一群并发去重，避免重复刷新。
+func (m *Messenger) scheduleProvisionalGroupRefresh(groupID int64) {
+	if _, loaded := m.provisionalGroupSync.LoadOrStore(groupID, struct{}{}); loaded {
+		return
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		defer m.provisionalGroupSync.Delete(groupID)
+		for attempt := 1; attempt <= provisionalGroupRefreshMaxAttempts; attempt++ {
+			if m.refreshSingleGroupFromList(groupID) != nil {
+				return
+			}
+			messengerLogger.WithFields(logrus.Fields{
+				"group":   groupID,
+				"attempt": attempt,
+			}).Info("新群资料暂未在实时群列表中出现，将继续重试")
+			if attempt == provisionalGroupRefreshMaxAttempts {
+				// 成品证据：+0x816 Warn「新群资料在有限重试后仍未同步；收到该群后续消息时会再次尝试」
+				messengerLogger.WithField("group", groupID).Warn("新群资料在有限重试后仍未同步；收到该群后续消息时会再次尝试")
+				return
+			}
+			if m.retrySleep != nil {
+				m.retrySleep(provisionalGroupRefreshInterval)
+			} else {
+				time.Sleep(provisionalGroupRefreshInterval)
+			}
+		}
+	}()
+}
+
+// EnsureGroupCached 确保群在缓存中；缓存未命中时重载完整群列表后再查。
+//
+// 成品三值签名 (*GroupInfo, bool, error) 的证据：
+//   - adapter.(*Messenger).EnsureGroupCached @0x89bbc0（messenger.go:1028）返回
+//     rax=*GroupInfo、rbx=bool、rcx:rdi=error；deferwrap1 @0x89c020 对应第 1043 行的
+//     defer Unlock。
+//   - 入口 0x89bc00 "test %rbx,%rbx; jg 0x89bcad"：groupID<=0 时走 0x89bc0f 用
+//     fmt.errorf 生成 19 字节 "invalid group id %d"，返回 (nil,false,err)。
+//   - 先 FindGroupByUin(+0x100)；命中且 groupMetadataIncomplete 时调
+//     scheduleProvisionalGroupRefresh(+0x1a8)，返回 (group,false,nil)。
+//   - 未命中则锁 m.groupReloadMu（0x89bcde "lock cmpxchg ... 0x88(%rcx)"；同偏移
+//     的锁在 ReloadGroupList @0x89a32f 处也出现，故 0x88 即 groupReloadMu）后复检；
+//     复检命中同上返回 (group,false,nil)。
+//   - 仍未命中才 reloadGroupListLocked(+0x1ef)；err 非 nil 时 0x89bdd3 以 22 字节
+//     "refresh group list: %w" 包装返回 (nil,false,err)。
+//   - 重载成功后第三次 FindGroupByUin(+0x2b8)：命中返回 (group,true,nil)（0x89bf42
+//     "movb $0x1,0x2e(%rsp)"，bool 唯一置位点）；仍为 nil 时 0x89beaf 以 44 字节
+//     "group %d is not present in OneBot group list" 返回 (nil,false,err)。
+//
+// 第二个返回值 [推断] 命名为 reloaded：true 仅表示「调用开始时群不在缓存中，
+// 本次通过重载完整群列表才发现」。缓存直接命中的两条路径分别在 0x89bf9e、0x89bd6d
+// 写 "movb $0x0,0x2e(%rsp)"，可排除「命中缓存/资料已刷新」等解释；调用方
+// bot.(*Bot).EnsureGroup @0xb7df15 "test %bl,%bl" 与 handleNoticeEvent @0x89e460
+// 也只在该值为 true 时追加实时成员刷新，与「刚发现、成员尚未加载」一致。
+func (m *Messenger) EnsureGroupCached(groupID int64) (*GroupInfo, bool, error) {
+	if groupID <= 0 {
+		return nil, false, fmt.Errorf("invalid group id %d", groupID)
+	}
+
+	if group := m.FindGroupByUin(groupID); group != nil {
+		if groupMetadataIncomplete(group) {
+			m.scheduleProvisionalGroupRefresh(groupID)
+		}
+		return group, false, nil
+	}
+
+	m.groupReloadMu.Lock()
+	defer m.groupReloadMu.Unlock()
+
+	if group := m.FindGroupByUin(groupID); group != nil {
+		if groupMetadataIncomplete(group) {
+			m.scheduleProvisionalGroupRefresh(groupID)
+		}
+		return group, false, nil
+	}
+
+	if err := m.reloadGroupListLocked(); err != nil {
+		return nil, false, fmt.Errorf("refresh group list: %w", err)
+	}
+
+	group := m.FindGroupByUin(groupID)
+	if group == nil {
+		return nil, false, fmt.Errorf("group %d is not present in OneBot group list", groupID)
+	}
+	return group, true, nil
+}
+
+// EnsureGroup 确保群信息在缓存中，缺失或资料不完整时实时拉取；
+// 拉取后仍无法取得群资料时返回错误。
+// [推断] 成品中该方法在 adapter.Messenger 上无独立 pclntab 符号（疑似被内联进
+// bot.(*Bot).EnsureGroup），此处按 EnsureGroupCached 的三值语义包装并透传 error。
+func (m *Messenger) EnsureGroup(groupID int64) (*GroupInfo, error) {
+	group, _, err := m.EnsureGroupCached(groupID)
+	return group, err
 }
 
 func (m *Messenger) ReloadFriendList() error {
@@ -842,6 +1054,18 @@ func (m *Messenger) GetGroupMembers(group *GroupInfo) ([]*GroupMemberInfo, error
 }
 
 func (m *Messenger) GetGroupMembersByID(groupID int64) ([]*GroupMemberInfo, error) {
+	// 成品证据：disasm adapter.(*Messenger).GetGroupMembersByID @0x89c480
+	// 入口 +0x2d call EnsureGroupCached（三值），+0x32 "test %rcx,%rcx" / "jne 0x89c521"
+	// 只处理 error（0x89c521 起 rax=rbx=rcx=0，把入参 error 原样返回，即 "return nil, err"）。
+	// 随后 0x89c4b7 "mov %rax,0x88(%rsp)" 直接保存群指针，+0x5a 调用 Adapter.GetGroupMemberList，
+	// 直到 0x89c887 取 groupMu.Lock（"add $0x58,%rax" 后 call sync.(*RWMutex).Lock）
+	// 并写 Members(0x40)/MembersLoaded(0x58) 为止，全程没有任何对群指针的判空分支——
+	// 三值签名下 error==nil 时群必非 nil，故不保留非成品原样的 nil 守卫。
+	group, _, err := m.EnsureGroupCached(groupID)
+	if err != nil {
+		return nil, err
+	}
+
 	members, err := m.Adapter.GetGroupMemberList(groupID)
 	if err != nil {
 		return nil, err
@@ -849,6 +1073,11 @@ func (m *Messenger) GetGroupMembersByID(groupID int64) ([]*GroupMemberInfo, erro
 
 	result := make([]*GroupMemberInfo, 0, len(members))
 	for _, mb := range members {
+		if mb.UserID == 0 {
+			// 成品证据：+0x3c2 Warn「get_group_member_list 返回了缺少用户号的记录，已忽略」
+			messengerLogger.Warn("get_group_member_list 返回了缺少用户号的记录，已忽略")
+			continue
+		}
 		perm := Member
 		switch mb.Role {
 		case "owner":
@@ -858,7 +1087,9 @@ func (m *Messenger) GetGroupMembersByID(groupID int64) ([]*GroupMemberInfo, erro
 		}
 
 		result = append(result, &GroupMemberInfo{
-			Group:           m.FindGroupByUin(mb.GroupID),
+			// 成品把入口处 EnsureGroupCached 返回的同一个群指针写入每个成员的 Group 字段
+			// （0x89c618 `mov %rdx,(%rax)`，rdx 即入口保存的群指针），不再逐个 FindGroupByUin。
+			Group:           group,
 			Uin:             mb.UserID,
 			Nickname:        mb.Nickname,
 			CardName:        mb.Card,
@@ -870,12 +1101,16 @@ func (m *Messenger) GetGroupMembersByID(groupID int64) ([]*GroupMemberInfo, erro
 		})
 	}
 
-	group := m.FindGroupByUin(groupID)
-	if group != nil {
-		m.groupMu.Lock()
-		group.Members = result
-		m.groupMu.Unlock()
-	}
+	m.groupMu.Lock()
+	group.Members = result
+	// 拿到完整成员列表后置位。证据：成品 disasm 0x89c8e8
+	// `movb $0x1,0x58(%rdx)`，0x58 正是 GroupInfo.MembersLoaded（Members 在 0x40），
+	// 紧随 Members 写入（0x89c8e4 `mov %rdi,0x40(%rdx)`）之后、
+	// Unlock（0x89c8f4 call sync.(*RWMutex).Unlock）之前。
+	// 锁块仅由成员循环出口 0x89c563 "jle 0x89c887" 进入，反汇编全程无 group==nil 分支；
+	// 三值签名保证 error==nil 时 group 必非 nil，故不再保留非成品原样的判空。
+	group.MembersLoaded = true
+	m.groupMu.Unlock()
 
 	return result, nil
 }
@@ -884,54 +1119,86 @@ func (m *Messenger) GetStrangerInfo(uin int64) (map[string]interface{}, error) {
 	return m.Adapter.GetStrangerInfo(uin)
 }
 
-// AddGroupMember adds a member to the group cache after receiving a group_increase event.
-// It calls GetGroupMemberInfo to fetch complete member info before saving.
+// AddGroupMember 是 RefreshGroupMember 的薄封装，入群事件后刷新成员缓存。
+// 成品证据：adapter.(*Messenger).AddGroupMember @0x89d400（96B）唯一 callees 是
+// RefreshGroupMember @0x89d1a0；反汇编 0x89d40e call 后 "mov %rbx,%rax; mov %rcx,%rbx"
+// 即丢弃返回的 *GroupMemberInfo、只把 error 作为返回值。
 func (m *Messenger) AddGroupMember(groupID, userID int64) error {
-	// Look up group BEFORE acquiring lock to avoid deadlock
-	group := m.FindGroupByUin(groupID)
+	_, err := m.RefreshGroupMember(groupID, userID)
+	return err
+}
+
+// cacheGroupMember 把一份成员资料写入群成员缓存，返回缓存中的成员。
+// 签名与行为对照成品 adapter.(*Messenger).cacheGroupMember @0x89c940（1760B）：
+//   - 入参 (rax=m, rbx=*GroupInfo, rcx=*GroupMemberInfo)；
+//   - rbx==0 -> "group is nil"（0x10aa8b4，12B）；rcx==0 -> "group member info is empty"
+//     （0x10be570，26B）；成员 ID 取 memberInfo.UserID(0x80)，为 0 时回退 Uin(0x8)，
+//     仍为 0 -> "group member info has no user id"（0x10c7961，32B）；
+//   - Permission 由 Role 推导（owner=1/admin=2/其余=3），Role 为空时回退
+//     memberInfo.Permission(0x60)；
+//   - 命中已缓存成员时逐字段刷新（CardName 先取 memberInfo.Card(0x88)、
+//     memberInfo.CardName(0x20) 非空再覆盖；SpecialTitle 同理），JoinTime/LastSentTime/
+//     ShutUpTimestamp 仅在非零时覆盖；未命中则 append 新成员。
+func (m *Messenger) cacheGroupMember(group *GroupInfo, memberInfo *GroupMemberInfo) (*GroupMemberInfo, error) {
 	if group == nil {
-		return fmt.Errorf("group %d not found", groupID)
+		return nil, fmt.Errorf("group is nil")
+	}
+	if memberInfo == nil {
+		return nil, fmt.Errorf("group member info is empty")
+	}
+	userID := memberInfo.UserID
+	if userID == 0 {
+		userID = memberInfo.Uin
+	}
+	if userID == 0 {
+		return nil, fmt.Errorf("group member info has no user id")
 	}
 
-	// Get complete member info from API
-	memberInfo, err := m.Adapter.GetGroupMemberInfo(groupID, userID)
-	if err != nil {
-		return err
+	perm := Member
+	if memberInfo.Role != "" {
+		switch memberInfo.Role {
+		case "owner":
+			perm = Owner
+		case "admin":
+			perm = Administrator
+		}
+	} else if memberInfo.Permission != 0 {
+		perm = memberInfo.Permission
 	}
 
 	m.groupMu.Lock()
 	defer m.groupMu.Unlock()
 
-	// Check if member already exists
-	for _, existing := range group.Members {
-		if existing.Uin == userID {
-			// Member already exists, update it with fresh info
-			existing.Nickname = memberInfo.Nickname
-			existing.CardName = memberInfo.Card
-			switch memberInfo.Role {
-			case "owner":
-				existing.Permission = Owner
-			case "admin":
-				existing.Permission = Administrator
-			default:
-				existing.Permission = Member
+	for _, member := range group.Members {
+		if member.Uin == userID {
+			member.Group = group
+			member.Nickname = memberInfo.Nickname
+			member.CardName = memberInfo.Card
+			if memberInfo.CardName != "" {
+				member.CardName = memberInfo.CardName
 			}
-			return nil
+			if memberInfo.JoinTime != 0 {
+				member.JoinTime = memberInfo.JoinTime
+			}
+			if memberInfo.LastSentTime != 0 {
+				member.LastSentTime = memberInfo.LastSentTime
+				member.LastSpeakTime = memberInfo.LastSentTime
+			}
+			member.SpecialTitle = memberInfo.Title
+			if memberInfo.SpecialTitle != "" {
+				member.SpecialTitle = memberInfo.SpecialTitle
+			}
+			if memberInfo.ShutUpTimestamp != 0 {
+				member.ShutUpTimestamp = memberInfo.ShutUpTimestamp
+			}
+			member.Permission = perm
+			return member, nil
 		}
 	}
 
-	// Add new member with full info from API
-	perm := Member
-	switch memberInfo.Role {
-	case "owner":
-		perm = Owner
-	case "admin":
-		perm = Administrator
-	}
-
-	newMember := &GroupMemberInfo{
+	member := &GroupMemberInfo{
 		Group:           group,
-		Uin:             memberInfo.UserID,
+		Uin:             userID,
 		Nickname:        memberInfo.Nickname,
 		CardName:        memberInfo.Card,
 		JoinTime:        memberInfo.JoinTime,
@@ -941,9 +1208,69 @@ func (m *Messenger) AddGroupMember(groupID, userID int64) error {
 		ShutUpTimestamp: memberInfo.ShutUpTimestamp,
 		Permission:      perm,
 	}
-	group.Members = append(group.Members, newMember)
-	messengerLogger.Debugf("AddGroupMember cache updated: group=%d member=%d", groupID, userID)
-	return nil
+	if memberInfo.CardName != "" {
+		member.CardName = memberInfo.CardName
+	}
+	if memberInfo.SpecialTitle != "" {
+		member.SpecialTitle = memberInfo.SpecialTitle
+	}
+	group.Members = append(group.Members, member)
+	return member, nil
+}
+
+// EnsureGroupMember 返回群成员缓存；缓存中没有该成员时走 RefreshGroupMember 实时拉取。
+// 成品证据：adapter.(*Messenger).EnsureGroupMember @0x89d060（320B）：
+//   - 入口 "test %rcx,%rcx; jg" 校验 userID>0，否则 fmt.errorf("invalid user id %d")
+//     （0x10b2c3e，18B）返回 (nil, err)；
+//   - +0xa0 call EnsureGroupCached @0x89bbc0；error 非空立即返回 (nil, err)；
+//   - 成功后在 group.Members(0x40/0x48) 内联扫描 member.Uin(0x8)==userID，
+//     命中返回 (member,nil)，未命中 +0x100 tail-call RefreshGroupMember @0x89d1a0。
+func (m *Messenger) EnsureGroupMember(groupID, userID int64) (*GroupMemberInfo, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("invalid user id %d", userID)
+	}
+	group, _, err := m.EnsureGroupCached(groupID)
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range group.Members {
+		if member.Uin == userID {
+			return member, nil
+		}
+	}
+	return m.RefreshGroupMember(groupID, userID)
+}
+
+// RefreshGroupMember 强制从 OneBot 拉取成员资料并刷新缓存。
+// 成品证据：adapter.(*Messenger).RefreshGroupMember @0x89d1a0（544B）：
+//   - 入口校验 userID>0，否则 fmt.errorf("invalid user id %d")；
+//   - +0xca call EnsureGroupCached @0x89bbc0，error 非空返回 (nil, err)；
+//   - +0x? itab 偏移 0x60 的 Adapter.GetGroupMemberInfo(groupID,userID)（间接调用，
+//     cg 只记录 E8 直调故不在 callees 中），error 非空返回 (nil, err)；
+//   - +0x120 call cacheGroupMember @0x89c940，error 非空时用 logrus.Logf
+//     （2 个字段：group/member）打印 "按需刷新群成员缓存: group=%d member=%d"
+//     （0x10db204，47B），并返回 (member, err)。
+func (m *Messenger) RefreshGroupMember(groupID, userID int64) (*GroupMemberInfo, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("invalid user id %d", userID)
+	}
+	group, _, err := m.EnsureGroupCached(groupID)
+	if err != nil {
+		return nil, err
+	}
+	memberInfo, err := m.Adapter.GetGroupMemberInfo(groupID, userID)
+	if err != nil {
+		return nil, err
+	}
+	member, err := m.cacheGroupMember(group, memberInfo)
+	if err != nil {
+		messengerLogger.WithFields(logrus.Fields{
+			"group":  groupID,
+			"member": userID,
+		}).Errorf("按需刷新群成员缓存: group=%d member=%d", groupID, userID)
+		return member, err
+	}
+	return member, nil
 }
 
 // RemoveGroupMember removes a member from the group cache after receiving a group_decrease event
@@ -964,11 +1291,16 @@ func (m *Messenger) RemoveGroupMember(groupID, userID int64) {
 	}
 }
 
-// UpdateGroupMember updates a member's info in the cache
-func (m *Messenger) UpdateGroupMember(groupID, userID int64, updateFunc func(*GroupMemberInfo)) {
+// UpdateGroupMember updates a member's info in the cache; 返回是否命中缓存中的成员。
+// 返回值证据：recovered/types/types-closure-x64.tsv:6436
+//
+//	func(int64, int64, func(*adapter.GroupMemberInfo)) bool；
+//	handleNoticeEvent @0x89e220 在 +0xdd0 等处以 "test %al,%al" 判断是否需要在
+//	RefreshGroupMember 之后再 Update 一次。
+func (m *Messenger) UpdateGroupMember(groupID, userID int64, updateFunc func(*GroupMemberInfo)) bool {
 	group := m.FindGroupByUin(groupID)
 	if group == nil {
-		return
+		return false
 	}
 	m.groupMu.Lock()
 	defer m.groupMu.Unlock()
@@ -976,58 +1308,70 @@ func (m *Messenger) UpdateGroupMember(groupID, userID int64, updateFunc func(*Gr
 		if member.Uin == userID {
 			updateFunc(member)
 			messengerLogger.Debugf("UpdateGroupMember cache updated: group=%d member=%d", groupID, userID)
-			return
+			return true
 		}
 	}
+	return false
 }
 
-// RefreshMemberInfo fetches fresh member info from API and updates cache
+// RefreshMemberInfo 是 RefreshGroupMember 的薄封装。
+// 成品证据：adapter.(*Messenger).RefreshMemberInfo @0x89d9a0（96B）与 AddGroupMember
+// 反汇编同构：唯一 callees RefreshGroupMember @0x89d1a0，call 后
+// "mov %rbx,%rax; mov %rcx,%rbx" 丢弃成员、只返回 error。
 func (m *Messenger) RefreshMemberInfo(groupID, userID int64) error {
-	members, err := m.Adapter.GetGroupMemberList(groupID)
-	if err != nil {
-		return err
-	}
-	for _, mb := range members {
-		if mb.UserID == userID {
-			perm := Member
-			switch mb.Role {
-			case "owner":
-				perm = Owner
-			case "admin":
-				perm = Administrator
-			}
-			group := m.FindGroupByUin(groupID)
-			if group == nil {
-				return fmt.Errorf("group %d not found", groupID)
-			}
-			m.groupMu.Lock()
-			defer m.groupMu.Unlock()
-			for _, member := range group.Members {
-				if member.Uin == userID {
-					member.Nickname = mb.Nickname
-					member.CardName = mb.Card
-					member.SpecialTitle = mb.Title
-					member.Permission = perm
-					messengerLogger.Debugf("RefreshMemberInfo cache updated: group=%d member=%d", groupID, userID)
-					return nil
-				}
-			}
-			return fmt.Errorf("member %d not found in group %d", userID, groupID)
-		}
-	}
-	return fmt.Errorf("member %d not found in group %d response", userID, groupID)
+	_, err := m.RefreshGroupMember(groupID, userID)
+	return err
 }
 
+// GetGroupInfo 校验群号并向 Adapter 查询完整群资料。
+// 成品证据：adapter.(*Messenger).GetGroupInfo @0x89da00
+//   - +0x20 "test %rbx,%rbx; jg"：groupCode<=0 时以 19 字节 "invalid group id %d" 返回；
+//   - 调用 Adapter.GetGroupInfo 后 error 非空原样返回（+0xcf）；
+//   - +0xe0 "test %rax,%rax; je"：返回 nil 时以 48 字节
+//     "get_group_info returned empty data for group %d" 报错；
+//   - 群号按 GroupID(0x70) → Code(0x8) → Uin(0x0) 依次回退，全为 0 时以 48 字节
+//     "get_group_info returned no group id for group %d" 报错；
+//   - 与查询群号不一致时以 59 字节
+//     "get_group_info returned mismatched group id %d for query %d" 报错；
+//   - 群名取 GroupName(0x78/0x80)，为空回退 Name(0x10/0x18)。
 func (m *Messenger) GetGroupInfo(groupCode int64) (*GroupInfo, error) {
+	if groupCode <= 0 {
+		return nil, fmt.Errorf("invalid group id %d", groupCode)
+	}
+
 	info, err := m.Adapter.GetGroupInfo(groupCode)
 	if err != nil {
 		return nil, err
 	}
+	if info == nil {
+		return nil, fmt.Errorf("get_group_info returned empty data for group %d", groupCode)
+	}
+
+	groupID := info.GroupID
+	if groupID == 0 {
+		groupID = info.Code
+	}
+	if groupID == 0 {
+		groupID = info.Uin
+	}
+	if groupID == 0 {
+		return nil, fmt.Errorf("get_group_info returned no group id for group %d", groupCode)
+	}
+	if groupID != groupCode {
+		return nil, fmt.Errorf("get_group_info returned mismatched group id %d for query %d", groupID, groupCode)
+	}
+
+	name := info.GroupName
+	if name == "" {
+		name = info.Name
+	}
 
 	return &GroupInfo{
-		Uin:             info.GroupID,
-		Code:            info.GroupID,
-		Name:            info.GroupName,
+		Uin:             groupID,
+		Code:            groupID,
+		GroupID:         groupID,
+		Name:            name,
+		GroupName:       name,
 		MemberCount:     info.MemberCount,
 		MaxMemberCount:  info.MaxMemberCount,
 		GroupCreateTime: info.GroupCreateTime,
@@ -1048,29 +1392,88 @@ func (m *Messenger) RefreshList() error {
 	}
 	messengerLogger.Infof("已加载 %d 个群组", len(m.GroupList))
 
-	var totalMembers int
-	for _, group := range m.GroupList {
-		members, err := m.GetGroupMembersByID(group.Code)
-		if err != nil {
-			messengerLogger.WithError(err).Errorf("unable to load group members for %d", group.Code)
-			continue
-		}
-		totalMembers += len(group.Members)
-		messengerLogger.Debugf("群[%d]加载成员[%d]个", group.Code, len(members))
-	}
-
-	messengerLogger.Infof("已加载 %d 个群成员", totalMembers)
+	// 成品证据：adapter.(*Messenger).RefreshList @0x89de00 的 callees 只有
+	// ReloadFriendList / ReloadGroupList 与 logrus 日志，不含 GetGroupMembersByID，
+	// 结尾以 87 字节串 0x11281e0{ptr=0x10ee7c6,len=0x57} Info：
+	// 启动时不逐群拉取成员，成员改由按需查询与事件增量缓存维护。
+	messengerLogger.Info("群成员采用按需查询与事件增量缓存，启动时不逐群拉取成员列表")
 
 	return nil
 }
 
 func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
+	messengerLogger.Debug("收到 OneBot 群事件")
 	if m.eventDispatcher == nil {
 		return
 	}
 
+	// 入口 effective self id 三级回退。成品证据：handleNoticeEvent @0x89e220
+	//   - +0x43 取 event.SelfID（event+0x18），非 0 直接使用；
+	//   - 为 0 时 +0x4c 调 m.Adapter.GetSelfID()（接口 itab 槽位 0x80）；
+	//   - 仍为 0 时 +0x77 取 m.Uin（m+0x18）。
+	// 该值用于 group_decrease（0x89fc91）与 group_increase（0x8a0209）的
+	// UserID==selfID 判定，两处都先判 selfID!=0。
+	selfID := event.SelfID
+	if selfID == 0 {
+		selfID = m.Adapter.GetSelfID()
+	}
+	if selfID == 0 {
+		selfID = m.Uin
+	}
+
+	// 入口公共前置分支。成品证据：handleNoticeEvent @0x89e220 全函数共 3 次
+	// EnsureGroupCached（+0x22c 入口、+0x2310 入群分支、+0x2519 成员增加分支），
+	// 入口这次在 switch 之前：notice_type 以 "group_" 开头或为 notify/essence
+	// （0x89e2a2..0x89e3e7 的 6/7 字节前缀比较）、GroupID>0（0x89e361 "test %r12,%r12"）、
+	// 不等于 group_increase（0x89e40d..0x89e436）且非机器人退群（0x89e440 "test %r11b"）
+	// 时才实时补查；失败时以 group_id/notice_type/sub_type 三字段（0x10a48be/0x10a921e/0x10a501e）
+	// Debug 66 字节串 0x10e6cc0「群事件对应群不在缓存，实时补查未取得群资料」（0x89e9dc）。
+	noticeType := event.NoticeType
+	groupNotice := strings.HasPrefix(noticeType, "group_") || noticeType == "notify" || noticeType == "essence"
+	// 成品 @0x89e340 的 botLeave 判定：group_decrease 且非 kick_me 时比较
+	// effective selfID(rdx) 与 event.UserID(0x28)，且 selfID!=0 才置位；
+	// 旧重建误用 event.OperatorID==m.Uin。
+	botLeave := noticeType == "group_dismiss" ||
+		(noticeType == "group_decrease" && (event.SubType == "kick_me" || (selfID != 0 && event.UserID == selfID)))
+	if groupNotice && event.GroupID > 0 && noticeType != "group_increase" && !botLeave {
+		group, reloaded, err := m.EnsureGroupCached(event.GroupID)
+		if err != nil {
+			messengerLogger.WithFields(logrus.Fields{
+				"group_id":    event.GroupID,
+				"notice_type": event.NoticeType,
+				"sub_type":    event.SubType,
+			}).Debug("群事件对应群不在缓存，实时补查未取得群资料")
+		} else if reloaded {
+			// 成品证据：0x89e460 "test %bl,%bl" 为真（reloaded）时走 0x89e468..0x89e6b8：
+			// 以 group_id（键 0x10a48be，值 event+0x20）/notice_type（0x10a921e，
+			// event+0x0）/sub_type（0x10a501e，event+0x50）三字段 Info 打印
+			// 72 字节串 0x1128200 -> 0x10ead86「进群事件可能遗漏，已通过后续群事件恢复群资料缓存」
+			// （0x89e648 logger.WithFields、0x89e67a level=4、0x89e68f Entry.Log），
+			// 随后 0x89e694 取 m.eventDispatcher(0xd8/0xe0)、0x89e6aa 取 itab+0x58
+			// （BotEventDispatcher 第 8 个方法 DispatchGroupJoin），0x89e6b6 call *%rcx 派发。
+			messengerLogger.WithFields(logrus.Fields{
+				"group_id":    event.GroupID,
+				"notice_type": event.NoticeType,
+				"sub_type":    event.SubType,
+			}).Info("进群事件可能遗漏，已通过后续群事件恢复群资料缓存")
+			m.eventDispatcher.DispatchGroupJoin(group)
+		}
+	}
+
 	switch event.NoticeType {
 	case "group_ban":
+		// 成品 @0x89f265..0x89f30f：先调 UpdateGroupMember(event.GroupID, event.UserID, closure)，
+		// 再派发 GroupMute。闭包 func1 @0x8a1980 把 member+0x58（ShutUpTimestamp）写为
+		// time.Now().Add(Duration*time.Second).Unix()（call time.Now @0x4f91a0、
+		// read internals、add Duration、add internalToUnix -62135596800），
+		// 且 Duration<=0 时显式置 0。旧重建漏掉了这次成员缓存刷新。
+		m.UpdateGroupMember(event.GroupID, event.UserID, func(member *GroupMemberInfo) {
+			if event.Duration > 0 {
+				member.ShutUpTimestamp = time.Now().Add(time.Duration(event.Duration) * time.Second).Unix()
+			} else {
+				member.ShutUpTimestamp = 0
+			}
+		})
 		m.eventDispatcher.DispatchGroupMute(&GroupMuteEvent{
 			GroupCode:   event.GroupID,
 			OperatorUin: event.OperatorID,
@@ -1078,55 +1481,69 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			Time:        event.Duration,
 		})
 	case "group_increase":
-		// Check if it's the bot joining the group
-		if event.UserID == event.SelfID {
-			// Bot joined the group - get full group info and member list
-			groupInfo, err := m.GetGroupInfo(event.GroupID)
+		// Check if it's the bot joining the group。成品 @0x8a0209：先 test selfID!=0，
+		// 再比较 effective selfID 与 event.UserID(0x28)。
+		if selfID != 0 && event.UserID == selfID {
+			// Bot joined the group.
+			// 成品证据：handleNoticeEvent @0x89e220 在 UserID==SelfID 时先以 5 字段
+			// （group_id/self_id/user_id/operator_id/sub_type）Info 打印串 0x1128220
+			// （0x8a02ad..0x8a0517），随即 EnsureGroupCached(event.GroupID)（0x8a0530）。
+			// 失败时 WithError.Warn 串 0x1128230（0x8a064f/0x8a0687），用群号建立临时
+			// GroupInfo（0x8a068c：Uin/Code/GroupID=event.GroupID、Client=m），持 groupMu
+			// 走 FindGroupByUinLocked 内联查找（0x8a1128：命中不入列、未命中 append），
+			// 解锁后 scheduleProvisionalGroupRefresh（0x8a1225）。两条路径汇合到
+			// RefreshGroupMember(event.GroupID, event.SelfID)（0x8a0dcd/0x8a0dee），
+			// 失败仅 WithError.Debug 串 0x1128240（0x8a0f47）。最后以
+			// group_name/member_count 两字段 Info 串 0x1128250（0x8a10f2）并
+			// DispatchGroupJoin(group)（itab +0x58，0x8a1119）。
+			// 成品该分支不调用 GetGroupInfo / GetGroupMembersByID / ReloadGroupList。
+			messengerLogger.WithFields(logrus.Fields{
+				"group_id":    event.GroupID,
+				"self_id":     event.SelfID,
+				"user_id":     event.UserID,
+				"operator_id": event.OperatorID,
+				"sub_type":    event.SubType,
+			}).Info("收到 OneBot 机器人入群事件，开始实时更新群列表")
+			group, _, err := m.EnsureGroupCached(event.GroupID)
 			if err != nil {
-				messengerLogger.WithError(err).Warnf("GetGroupInfo failed for %d", event.GroupID)
-				groupInfo = &GroupInfo{Uin: event.GroupID, Code: event.GroupID}
-			}
-			// Add group to GroupList first (needed for GetGroupMembersByID to set Members)
-			m.groupMu.Lock()
-			existingGroup := m.FindGroupByUinLocked(event.GroupID)
-			if existingGroup == nil {
-				m.GroupList = append(m.GroupList, groupInfo)
-			} else {
-				// Update existing group info
-				existingGroup.Name = groupInfo.Name
-				existingGroup.MemberCount = groupInfo.MemberCount
-				groupInfo = existingGroup
-			}
-			m.groupMu.Unlock()
-			// Fetch and cache all group members
-			members, err := m.GetGroupMembersByID(event.GroupID)
-			if err != nil {
-				messengerLogger.WithError(err).Warnf("GetGroupMembersByID failed for %d", event.GroupID)
-			} else {
-				messengerLogger.Debugf("Fetched %d members for group %d", len(members), event.GroupID)
-			}
-			// Build GroupInfo for dispatch
-			clientGroupInfo := &GroupInfo{
-				Uin:         groupInfo.Uin,
-				Code:        groupInfo.Code,
-				Name:        groupInfo.Name,
-				MemberCount: groupInfo.MemberCount,
-				OwnerUin:    groupInfo.OwnerUin,
-			}
-			// Also set Members for the GroupInfo
-			if members != nil {
-				clientGroupInfo.Members = make([]*GroupMemberInfo, len(members))
-				for i, mb := range members {
-					clientGroupInfo.Members[i] = &GroupMemberInfo{
-						Group:    clientGroupInfo,
-						Uin:      mb.Uin,
-						Nickname: mb.Nickname,
-					}
+				messengerLogger.WithError(err).Warn("进群后实时群资料接口尚未同步，先使用群号建立缓存")
+				group = &GroupInfo{
+					Uin:     event.GroupID,
+					Code:    event.GroupID,
+					GroupID: event.GroupID,
+					Client:  m,
 				}
+				m.groupMu.Lock()
+				if m.FindGroupByUinLocked(event.GroupID) == nil {
+					m.GroupList = append(m.GroupList, group)
+				}
+				m.groupMu.Unlock()
+				m.scheduleProvisionalGroupRefresh(event.GroupID)
 			}
-			m.eventDispatcher.DispatchGroupJoin(clientGroupInfo)
+			if _, err := m.RefreshGroupMember(event.GroupID, event.SelfID); err != nil {
+				messengerLogger.WithError(err).Debug("按需读取机器人自身群成员资料失败")
+			}
+			messengerLogger.WithFields(logrus.Fields{
+				"group_name":   group.Name,
+				"member_count": group.MemberCount,
+			}).Info("OneBot 新群已写入群列表缓存")
+			m.eventDispatcher.DispatchGroupJoin(group)
 		} else {
 			// Regular member joined
+			// 成品证据：member 分支 0x8a0735 call EnsureGroupCached；error 时
+			// WithError.Warnf 串 0x10df6f0（"群成员增加事件对应的群不在缓存中: %d"，
+			// 0x8a08d0）；found（0x8a0740 test %bl）为真时以 group_id 字段 Info 串
+			// 0x1128260 并 DispatchGroupJoin（itab +0x58，0x8a0a57）；随后
+			// AddGroupMember（源调用点 0x8a0a71，成品把 96B 薄封装内联成
+			// RefreshGroupMember）失败 Warnf "AddGroupMember failed for %d/%d"
+			// （0x10c602d，0x8a0c38）。
+			group, found, err := m.EnsureGroupCached(event.GroupID)
+			if err != nil {
+				messengerLogger.WithError(err).Warnf("群成员增加事件对应的群不在缓存中: %d", event.GroupID)
+			} else if found {
+				messengerLogger.WithField("group_id", event.GroupID).Info("进群事件可能遗漏，已通过群成员增加事件恢复群资料缓存")
+				m.eventDispatcher.DispatchGroupJoin(group)
+			}
 			if err := m.AddGroupMember(event.GroupID, event.UserID); err != nil {
 				messengerLogger.WithError(err).Warnf("AddGroupMember failed for %d/%d", event.GroupID, event.UserID)
 			}
@@ -1140,9 +1557,19 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 				},
 			})
 		}
-	case "group_decrease":
+	case "group_dismiss", "group_decrease":
 		// Check if it's the bot being kicked/leaving the group
-		if event.SubType == "kick_me" || event.OperatorID == m.Uin {
+		// 成品证据：入口用 r11 标志把 notice_type=="group_dismiss" 与
+		// group_decrease 的 kick_me / UserID==effective selfID 合并为同一「机器人离开该群」分支
+		// （0x89fc66..0x89fc95 与入口 0x89e340 同构）。
+		if botLeave {
+			// 成品证据：Warn/Info 消息 0x1128270（level=4 @0x89ff92），WithFields
+			// @0x89ff67：operator_id（0x10a8a15,11）= event+0x30；sub_type
+			// （0x10a501e,8）= event+0x50/0x58。
+			messengerLogger.WithFields(logrus.Fields{
+				"operator_id": event.OperatorID,
+				"sub_type":    event.SubType,
+			}).Info("收到 OneBot 机器人退群事件，开始移除群列表缓存")
 			// Bot was kicked or left the group - save group info before removing
 			group := m.FindGroupByUin(event.GroupID)
 			if group != nil {
@@ -1162,10 +1589,21 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 					}
 				}
 				m.groupMu.Unlock()
-				m.eventDispatcher.DispatchGroupLeave(&GroupLeaveEvent{
-					Group:    groupCopy,
-					Operator: &GroupMemberInfo{Uin: event.OperatorID},
-				})
+				if event.NoticeType == "group_dismiss" {
+					// 成品证据：+0x3521 Info「收到 LLBot 群解散事件，已移除群列表缓存」
+					messengerLogger.WithField("group_id", event.GroupID).Info("收到 LLBot 群解散事件，已移除群列表缓存")
+					m.eventDispatcher.DispatchGroupDisband(&GroupDisbandEvent{
+						Group:    groupCopy,
+						Operator: &GroupMemberInfo{Uin: event.OperatorID},
+					})
+				} else {
+					// 成品证据：+0x317d Info「OneBot 退群已从群列表缓存移除」
+					messengerLogger.WithField("group_id", event.GroupID).Info("OneBot 退群已从群列表缓存移除")
+					m.eventDispatcher.DispatchGroupLeave(&GroupLeaveEvent{
+						Group:    groupCopy,
+						Operator: &GroupMemberInfo{Uin: event.OperatorID},
+					})
+				}
 			}
 		} else {
 			// Regular member left
@@ -1190,9 +1628,16 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 		} else {
 			newPerm = Member
 		}
-		m.UpdateGroupMember(event.GroupID, event.UserID, func(member *GroupMemberInfo) {
+		updatePermission := func(member *GroupMemberInfo) {
 			member.Permission = newPerm
-		})
+		}
+		// 成品证据：UpdateGroupMember(+0xdd0) 未命中（al==0）时先 RefreshGroupMember
+		// (+0xdf1) 再派发。
+		if !m.UpdateGroupMember(event.GroupID, event.UserID, updatePermission) {
+			if _, err := m.RefreshGroupMember(event.GroupID, event.UserID); err != nil {
+				messengerLogger.WithError(err).Warnf("RefreshGroupMember failed for %d/%d", event.GroupID, event.UserID)
+			}
+		}
 		if event.SubType == "set" {
 			m.eventDispatcher.DispatchGroupMemberPermissionChanged(&MemberPermissionChangedEvent{
 				Group: &GroupInfo{
@@ -1221,9 +1666,15 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			})
 		}
 	case "group_card":
-		m.UpdateGroupMember(event.GroupID, event.UserID, func(member *GroupMemberInfo) {
+		updateCard := func(member *GroupMemberInfo) {
 			member.CardName = event.CardNew
-		})
+		}
+		// 成品证据：UpdateGroupMember(+0x1280) 未命中时 RefreshGroupMember(+0x12a1) 再派发。
+		if !m.UpdateGroupMember(event.GroupID, event.UserID, updateCard) {
+			if _, err := m.RefreshGroupMember(event.GroupID, event.UserID); err != nil {
+				messengerLogger.WithError(err).Warnf("RefreshGroupMember failed for %d/%d", event.GroupID, event.UserID)
+			}
+		}
 		m.eventDispatcher.DispatchMemberCardUpdated(&MemberCardUpdatedEvent{
 			Group:   &GroupInfo{Uin: event.GroupID, Code: event.GroupID},
 			Member:  &GroupMemberInfo{Uin: event.UserID},
@@ -1257,6 +1708,17 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 				Receiver:  event.OperatorID,
 			})
 		case "title":
+			updateTitle := func(member *GroupMemberInfo) {
+				member.SpecialTitle = event.Title
+			}
+			// 成品证据：UpdateGroupMember(+0xdd0) 未命中时 RefreshGroupMember(+0xdf1)，
+			// 之后再次 UpdateGroupMember(+0xe32) 再派发。
+			if !m.UpdateGroupMember(event.GroupID, event.UserID, updateTitle) {
+				if _, err := m.RefreshGroupMember(event.GroupID, event.UserID); err != nil {
+					messengerLogger.WithError(err).Warnf("RefreshGroupMember failed for %d/%d", event.GroupID, event.UserID)
+				}
+				m.UpdateGroupMember(event.GroupID, event.UserID, updateTitle)
+			}
 			m.eventDispatcher.DispatchMemberSpecialTitleUpdated(&MemberSpecialTitleUpdatedEvent{
 				GroupCode: event.GroupID,
 				Uin:       event.UserID,
@@ -1294,16 +1756,6 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 		})
 	case "bot_offline":
 		m.eventDispatcher.DispatchBotOffline(&BotOfflineEvent{})
-	case "group_dismiss":
-		m.eventDispatcher.DispatchGroupDisband(&GroupDisbandEvent{
-			Group: &GroupInfo{
-				Uin:  event.GroupID,
-				Code: event.GroupID,
-			},
-			Operator: &GroupMemberInfo{
-				Uin: event.UserID,
-			},
-		})
 	case "group_msg_emoji_like":
 		m.eventDispatcher.DispatchGroupMsgEmojiLike(&GroupMsgEmojiLikeEvent{
 			GroupCode:  event.GroupID,
@@ -1311,7 +1763,7 @@ func (m *Messenger) handleNoticeEvent(event *NoticeEvent) {
 			MessageId:  event.MessageID,
 			EmojiId:    event.EmojiId,
 			EmojiCount: event.EmojiCount,
-			IsAdd:      event.SubType == "add",
+			IsAdd:      event.IsAdd, // 成品 @0x8a0d8a 直接取 event+0x180（onebot 由 is_add 键解析）
 		})
 	}
 }
@@ -1360,10 +1812,56 @@ func (m *Messenger) handleGroupMessage(event *GroupMessageEvent) {
 		UserID: event.UserID,
 		Uin:    event.UserID,
 	}
+	// 成品证据：handleGroupMessage @0x8a1e40 先用 event.Sender(0x50) 复制填充本地 SenderInfo
+	// （UserID/Uin 为 0 时回退 event.UserID），再进入群缓存逻辑。
+	if event.Sender != nil {
+		*sender = *event.Sender
+		if sender.UserID == 0 {
+			sender.UserID = event.UserID
+		}
+		if sender.Uin == 0 {
+			sender.Uin = event.UserID
+		}
+	}
+
 	group := m.FindGroup(event.GroupID)
+	if group == nil {
+		// 群资料不在缓存：改用 EnsureGroupCached 实时补齐，避免事件遗漏。
+		// 成品证据：+0x1e0 call EnsureGroupCached @0x89bbc0；error 非空记录
+		// +0x41f Warn「收到未知群消息，但按需同步群资料失败」，补齐成功记录
+		// +0x575 Info「群事件可能遗漏，已通过群消息恢复群资料缓存」。
+		var err error
+		group, _, err = m.EnsureGroupCached(event.GroupID)
+		if err != nil {
+			messengerLogger.WithError(err).WithField("group", event.GroupID).Warn("收到未知群消息，但按需同步群资料失败")
+		} else {
+			messengerLogger.WithField("group_id", event.GroupID).Info("群事件可能遗漏，已通过群消息恢复群资料缓存")
+		}
+	}
 	if group != nil {
-		member := group.FindMember(event.UserID)
-		if member != nil {
+		// 资料不完整时调度异步补齐。成品证据：+0x5e0 call groupMetadataIncomplete，
+		// 返回真时 +0x600 call scheduleProvisionalGroupRefresh。
+		if groupMetadataIncomplete(group) {
+			m.scheduleProvisionalGroupRefresh(event.GroupID)
+		}
+		// 用事件自带的发送者资料写成员缓存。成品证据：+0x6d0 call cacheGroupMember
+		// @0x89c940，实参为 (m, group, &GroupMemberInfo{GroupID,UserID,Uin,Nickname,Card,Role})，
+		// 其中成员资料全部来自 event.Sender（成员资料为空时该调用被跳过）。
+		if event.Sender != nil {
+			if _, err := m.cacheGroupMember(group, &GroupMemberInfo{
+				GroupID:  event.GroupID,
+				UserID:   event.Sender.UserID,
+				Uin:      event.Sender.Uin,
+				Nickname: event.Sender.Nickname,
+				Card:     event.Sender.Card,
+				Role:     event.Sender.Role,
+			}); err != nil {
+				messengerLogger.WithError(err).Warn("写入发送者群成员缓存失败")
+			}
+		}
+		// 从群成员缓存回填发送者昵称/名片。成品证据：+0x251d 起内联循环比较
+		// member.Uin(0x8)==event.UserID，命中后复制 Nickname/CardName 到 SenderInfo。
+		if member := group.FindMember(event.UserID); member != nil {
 			sender.Nickname = member.Nickname
 			sender.Card = member.CardName
 		}
@@ -1614,6 +2112,9 @@ func (m *Messenger) flushOfflineQueue() {
 
 	for _, msg := range msgs {
 		if now.Sub(msg.CreatedAt) <= expire {
+			// 成品证据：adapter.(*Messenger).flushOfflineQueue 的 callees 含
+			// buildMessageSegments @messenger.go:354，但不含 prepareImageElements /
+			// buildOutgoingMessageSegments——离线重发走原始段转换。
 			messages := m.buildMessageSegments(msg.Message)
 			switch msg.TargetType {
 			case "group":

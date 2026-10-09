@@ -29,6 +29,21 @@ type XSpaceAccInfoRequest struct {
 
 var cj atomic.Pointer[cookiejar.Jar]
 
+// initCookieJar 初始化B站 CookieJar（供无 Cookie 请求复用）。
+// [推断] 成品证据只有 initCookieJar（XSpaceAccInfo.go:32，128 字节）调用
+// sync/atomic.StorePointer，构造细节未能从二进制复原；这里按 refreshCookieJar 的
+// Jar 构造方式做一次懒初始化。
+func initCookieJar() {
+	if cj.Load() != nil {
+		return
+	}
+	j, err := cookiejar.New(nil)
+	if err != nil {
+		return
+	}
+	cj.Store(j)
+}
+
 func refreshCookieJar() {
 	j, _ := cookiejar.New(nil)
 	err := requests.Get("https://www.bilibili.com/", nil, io.Discard,
@@ -58,6 +73,7 @@ func XSpaceAccInfo(mid int64) (*XSpaceAccInfoResponse, error) {
 	const headerBLsid = "5641F797_18F9E78EF04"
 	const headerUuid = "F1BD8FB10-9651-10596-DA37-1CEC9A469A5376746infoc"
 
+	initCookieJar()
 	accInfoUrl := BPath(PathXSpaceAccInfo)
 	params, err := utils.ToDatas(&XSpaceAccInfoRequest{
 		Mid:           mid,

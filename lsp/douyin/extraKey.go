@@ -32,6 +32,16 @@ func (k *ExtraKey) UidFirstTimestamp(keys ...interface{}) string {
 	return buntdb.DouyinUidFirstTimestampKey(keys...)
 }
 
+// NotLiveConfirmKey 下播连续确认计数的键。
+// 成品 ExtraKey.NotLiveConfirmKey（extraKey.go:16，416B）未走 buntdb 的具名封装，
+// 而是直接用通用 buntdb.Key 拼 "DouyinNotLiveConfirm:<uid>"（rodata 0x10b51d3）。
+func (k *ExtraKey) NotLiveConfirmKey(keys ...interface{}) string {
+	all := make([]interface{}, 0, len(keys)+1)
+	all = append(all, "DouyinNotLiveConfirm")
+	all = append(all, keys...)
+	return buntdb.Key(all...)
+}
+
 func NewExtraKey() *ExtraKey {
 	return &ExtraKey{}
 }

@@ -250,13 +250,6 @@ func (c *LspPrivateCommand) ResubscribeCommand() {
 	log.Infof("run %v command", c.CommandName())
 	defer func() { log.Infof("%v command end", c.CommandName()) }()
 
-	if !c.l.PermissionStateManager.RequireAny(
-		permission.AdminRoleRequireOption(c.uin()),
-	) {
-		c.noPermission()
-		return
-	}
-
 	var resubscribeCmd struct {
 		GroupCode int64 `required:"" short:"g" help:"要重新订阅的群号码"`
 	}
@@ -266,6 +259,13 @@ func (c *LspPrivateCommand) ResubscribeCommand() {
 		c.textReply(output)
 	}
 	if c.exit {
+		return
+	}
+
+	// 成品 x64 0xcc8560 callees 含 (*LspPrivateCommand).checkGroupCode（+0x2c0），
+	// 且没有 RequireAny/AdminRoleRequireOption；权限与群有效性统一由 checkGroupCode 负责。
+	if err := c.checkGroupCode(resubscribeCmd.GroupCode); err != nil {
+		c.textReply(err.Error())
 		return
 	}
 
@@ -717,6 +717,7 @@ func (c *LspPrivateCommand) BlockCommand() {
 		Uin    int64 `arg:"" required:"" help:"要block的qq号或者qq群"`
 		Days   int   `optional:"" help:"要block的天数，默认是永久"`
 		Delete bool  `optional:"" short:"d" help:"取消block"`
+		Force  bool  `optional:"" short:"f" help:"目标无法查询时仍强制block"`
 	}
 
 	_, output := c.parseCommandSyntax(&blockCmd, c.CommandName())
@@ -733,28 +734,42 @@ func (c *LspPrivateCommand) BlockCommand() {
 		return
 	}
 
+	if blockCmd.Uin <= 0 {
+		log.Errorf("invalid block target: %d", blockCmd.Uin)
+		c.textReply("失败 - QQ号或QQ群号必须是正整数")
+		return
+	}
+
+	if blockCmd.Days < 0 {
+		log.Errorf("invalid block days: %d", blockCmd.Days)
+		c.textReply("失败 - block天数不能小于0")
+		return
+	}
+
 	log = log.WithField("TargetUin", blockCmd.Uin).
 		WithField("Days", blockCmd.Days).
-		WithField("Delete", blockCmd.Delete)
+		WithField("Delete", blockCmd.Delete).
+		WithField("Force", blockCmd.Force)
 
-	var name string
-
-	if fi := localutils.GetBot().FindFriend(blockCmd.Uin); fi != nil {
-		name = fi.Nickname
-		log = log.WithField("TargetName", name)
+	name, targetType, err := c.resolveBlockTarget(blockCmd.Uin, !blockCmd.Delete)
+	if err != nil && !blockCmd.Delete && !blockCmd.Force {
+		log = log.WithField("TargetName", name).WithField("TargetType", targetType)
+		log.Errorf("block目标实时查询失败，拒绝写入无效记录 - %v", err)
+		c.textReplyF("失败 - 未找到QQ或QQ群<%v>；如需预先屏蔽尚不可查询的目标，请增加-f参数", blockCmd.Uin)
+		return
 	}
-
-	if gi := localutils.GetBot().FindGroup(blockCmd.Uin); gi != nil {
-		name = gi.Name
-		log = log.WithField("TargetGroupName", name)
-	}
-
 	if name == "" {
-		name = "未知目标"
+		name = fmt.Sprintf("目标 %d", blockCmd.Uin)
 	}
+	log = log.WithField("TargetName", name).WithField("TargetType", targetType)
 
 	if !blockCmd.Delete {
-		if err := c.l.PermissionStateManager.AddBlockList(blockCmd.Uin, time.Duration(blockCmd.Days)*time.Hour*24); err == nil {
+		if targetType == "group" {
+			err = c.l.PermissionStateManager.BlockGroup(blockCmd.Uin, time.Duration(blockCmd.Days)*time.Hour*24)
+		} else {
+			err = c.l.PermissionStateManager.AddBlockList(blockCmd.Uin, time.Duration(blockCmd.Days)*time.Hour*24)
+		}
+		if err == nil {
 			log.Info("blocked")
 			c.textReplyF("成功 - %v", name)
 		} else if err == localdb.ErrKeyExist {
@@ -765,7 +780,12 @@ func (c *LspPrivateCommand) BlockCommand() {
 			c.textReply("失败 - 内部错误")
 		}
 	} else {
-		if err := c.l.PermissionStateManager.DeleteBlockList(blockCmd.Uin); err == nil {
+		if targetType == "group" {
+			err = c.l.PermissionStateManager.UnblockGroup(blockCmd.Uin)
+		} else {
+			err = c.l.PermissionStateManager.DeleteBlockList(blockCmd.Uin)
+		}
+		if err == nil {
 			log.Info("unblocked")
 			c.textReplyF("成功 - %v", name)
 		} else if localdb.IsNotFound(err) {
@@ -776,6 +796,60 @@ func (c *LspPrivateCommand) BlockCommand() {
 			c.textReply("失败 - 内部错误")
 		}
 	}
+}
+
+// resolveBlockTarget 查询 block 目标，返回展示名与目标类型（"group" / "user"）。
+// reload 为 true 时先实时刷新群列表；查询失败时类型返回 "unknown"，
+// reload 失败返回 error，reload 成功但查不到目标也返回 error。
+func (c *LspPrivateCommand) resolveBlockTarget(code int64, reload bool) (string, string, error) {
+	if reload {
+		err := c.bot.ReloadGroupList()
+		if err == nil {
+			if gi := c.bot.FindGroup(code); gi != nil {
+				return blockGroupDisplayName(gi, code), "group", nil
+			}
+		}
+		if fi := c.bot.FindFriend(code); fi != nil {
+			return blockFriendDisplayName(fi, code), "user", nil
+		}
+		if err != nil {
+			return "", "unknown", fmt.Errorf("refresh group list: %w", err)
+		}
+		return "", "unknown", fmt.Errorf("target %d not found", code)
+	}
+	if gi := c.bot.FindGroup(code); gi != nil {
+		return blockGroupDisplayName(gi, code), "group", nil
+	}
+	if fi := c.bot.FindFriend(code); fi != nil {
+		return blockFriendDisplayName(fi, code), "user", nil
+	}
+	return "", "unknown", nil
+}
+
+// blockGroupDisplayName 返回群展示名：优先群名，其次群组名，都为空时退回群号。
+func blockGroupDisplayName(gi *adapter.GroupInfo, code int64) string {
+	if gi != nil {
+		if name := strings.TrimSpace(gi.Name); name != "" {
+			return name
+		}
+		if name := strings.TrimSpace(gi.GroupName); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("群 %d", code)
+}
+
+// blockFriendDisplayName 返回好友展示名：优先备注，其次昵称，都为空时退回QQ号。
+func blockFriendDisplayName(fi *adapter.FriendInfo, code int64) string {
+	if fi != nil {
+		if name := strings.TrimSpace(fi.Remark); name != "" {
+			return name
+		}
+		if name := strings.TrimSpace(fi.Nickname); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("QQ %d", code)
 }
 
 func (c *LspPrivateCommand) LogCommand() {
@@ -877,6 +951,16 @@ func (c *LspPrivateCommand) QuitCommand() {
 	}
 
 	log = log.WithField("TargetGroupCode", quitCmd.GroupCode).WithField("Force", quitCmd.Force)
+
+	// 成品 x64 0xcd0160：FindGroup 前调 HackedBot.ReloadGroupList（+0x4f5）；
+	// 失败且未指定 -f 时记录日志并提示后返回，不退出/清理任何数据。
+	if err := c.bot.ReloadGroupList(); err != nil {
+		if !quitCmd.Force {
+			log.WithField("error", err).Error("退出群前实时刷新群列表失败")
+			c.textSend("实时查询QQ群列表失败，本次不会退出或清理数据；如确认需要强制清理，请增加-f参数")
+			return
+		}
+	}
 
 	gi := c.bot.FindGroup(quitCmd.GroupCode)
 	var displayName string
@@ -1279,30 +1363,37 @@ func (c *LspPrivateCommand) AdminCommand() {
 			m.Textf("\n%v %v", id, name)
 		}
 	} else {
+		// 成品 AdminCommand x64 0xcd5ce1 call ReloadGroupList；失败走 0xcd5e4d textReply。
+		if err := c.bot.ReloadGroupList(); err != nil {
+			log.WithError(err).Error("查询GroupAdmin前实时刷新群列表失败")
+			c.textReply("实时查询QQ群列表失败，请稍后重试")
+			return
+		}
 		gi := c.bot.FindGroup(adminCmd.Group)
 		if gi == nil {
-			m.Textf("注意：没有找到这个群\n")
+			// 成品 x64 0xcd5fee textReplyF("没有找到QQ群<%v>，请确认bot是否在群内") 后 return。
+			c.textReplyF("没有找到QQ群<%v>，请确认bot是否在群内", adminCmd.Group)
+			return
 		}
 		ids := c.l.PermissionStateManager.ListGroupAdmin(adminCmd.Group)
 		if len(ids) == 0 {
 			m.Text("未查询到GroupAdmin，如果bot刚刚启动，请稍后重试。")
 		} else {
 			m.Textf("当前GroupAdmin：")
-			if gi == nil {
-				for _, id := range ids {
-					m.Textf("\n%v", id)
+			var name string
+			for _, id := range ids {
+				// 成品 AdminCommand (x64 0xcd615a 先查群缓存、0xcd61b7 call EnsureGroupMember)：缓存缺失时实时拉取。
+				fi := gi.FindMember(id)
+				if fi == nil {
+					fi, _ = c.bot.EnsureGroupMember(adminCmd.Group, id)
 				}
-			} else {
-				var name string
-				for _, id := range ids {
-					fi := gi.FindMember(id)
-					if fi != nil {
-						name = fi.Nickname
-					} else {
-						name = "未知"
-					}
-					m.Textf("\n%v %v", id, name)
+				if fi != nil {
+					// 成品 x64 0xcd61e6 取 0x28/0x20(CardName) 非空则 0x10/0x18(Nickname)，即 DisplayName()。
+					name = fi.DisplayName()
+				} else {
+					name = "未知"
 				}
+				m.Textf("\n%v %v", id, name)
 			}
 		}
 	}
@@ -1565,25 +1656,33 @@ func (c *LspPrivateCommand) NewMessageContext(log *logrus.Entry) *MessageContext
 	return ctx
 }
 
+// checkGroupCode 校验群号并做操作前的群/成员前置检查。
+//
+// 成品 x64 0xcd9c40 callees：HackedBot.ReloadGroupList(+0x158)、FindGroup(+0x40e)、
+// permission.(*StateManager).CheckRole(+0x440)、CheckGroupBlocked(+0x469)、
+// HackedBot.RefreshGroupMember(+0x4cc)。重建原先缺 ReloadGroupList / RefreshGroupMember，
+// 且在非管理员分支先取缓存 FindMember；按成品改为实时刷新后再取成员。
 func (c *LspPrivateCommand) checkGroupCode(groupCode int64) error {
-	if groupCode == 0 {
+	if groupCode <= 0 {
 		return fmt.Errorf("没有指定QQ群号码，请使用-g参数指定QQ群，例如对QQ群123456进行操作：%v %v %v", c.GetCmd(), "-g 123456", strings.Join(c.GetArgs(), " "))
 	}
+	// 成品：ReloadGroupList 失败时 Warn 一条带 error/GroupCode 字段的日志，
+	// 并返回常量错误「实时查询QQ群列表失败，请稍后重试」。
+	if err := c.bot.ReloadGroupList(); err != nil {
+		logger.WithField("error", err).WithField("GroupCode", groupCode).Warn("校验群号前实时刷新群列表失败")
+		return fmt.Errorf("实时查询QQ群列表失败，请稍后重试")
+	}
 	group := c.bot.FindGroup(groupCode)
+	if group == nil {
+		return fmt.Errorf("没有找到QQ群<%v>，请确认bot是否在群内", groupCode)
+	}
 	if !c.l.PermissionStateManager.CheckRole(c.uin(), permission.Admin) {
-		if c.l.PermissionStateManager.CheckBlockList(groupCode) {
+		if c.l.PermissionStateManager.CheckGroupBlocked(groupCode) {
 			return fmt.Errorf("")
 		}
-		if group == nil {
-			return fmt.Errorf("没有找到QQ群<%v>，请确认bot是否在群内", groupCode)
-		}
-		member := group.FindMember(c.uin())
-		if member == nil {
+		member, err := c.bot.RefreshGroupMember(groupCode, c.uin())
+		if err != nil || member == nil {
 			return fmt.Errorf("没有在QQ群<%v>内找到您，请确认您是否在群内", groupCode)
-		}
-	} else {
-		if group == nil {
-			c.textReplyF("请注意未找到QQ群<%v>，如果bot刚刚启动，有可能是尚未刷新完毕，将继续查询数据", groupCode)
 		}
 	}
 	return nil

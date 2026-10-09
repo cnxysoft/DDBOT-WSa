@@ -21,6 +21,11 @@ type UserInfo struct {
 	DisplayId string `json:"display_id"`
 	Signature string `json:"signature"`
 	WebRoomId string `json:"web_rid"`
+	// 成品 reflect 元数据（types-closure-x64.tsv:10735）size=152：
+	// LastLiveTitle string `json:"last_live_title,omitempty"` @+120、
+	// LastLiveCover string `json:"last_live_cover,omitempty"` @+136。
+	LastLiveTitle string `json:"last_live_title,omitempty"`
+	LastLiveCover string `json:"last_live_cover,omitempty"`
 }
 
 func (u *UserInfo) GetUid() interface{} {
@@ -228,7 +233,7 @@ func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *Concern) []*Co
 		result = append(result, &ConcernNewsNotify{
 			GroupCode: groupCode,
 			UserInfo:  &newsInfo.UserInfo,
-			Card:      NewCacheCard(card),
+			Card:      NewCacheCard(card, newsInfo.SecUid),
 			concern:   c,
 		})
 	}
@@ -238,22 +243,46 @@ func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *Concern) []*Co
 type CacheCard struct {
 	*UserPostsResponse_AwemeList
 	GroupCode int64
-	once      sync.Once
-	msgCache  *mmsg.MSG
-	orgMsg    *adapter.GroupMessage
+	// 成品 reflect 元数据（types-closure-x64.tsv:11057）size=64：
+	// FallbackSecUID string @+16（在 GroupCode@8 与 once@32 之间）。
+	FallbackSecUID string
+	once           sync.Once
+	msgCache       *mmsg.MSG
+	orgMsg         *adapter.GroupMessage
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
 	c.once.Do(func() {
+		// 图集/图片扩展元数据（成品 (*CacheCard).GetMSG.func1 调用
+		// douyinPostImages / douyinPostGalleryItems，模板消费 .pictures/.gallery/.live_photos）。
+		pictures := douyinPostImages(c.AwemeId)
+		gallery := douyinPostGalleryItems(c.AwemeId)
+		livePhotos := make([]string, 0, len(gallery))
+		for _, item := range gallery {
+			if item.VideoURL != "" {
+				livePhotos = append(livePhotos, item.VideoURL)
+			}
+		}
+		// 成品 (*CacheCard).GetMSG.func1 @0xd93108-d93120：取 c.Author.SecUid
+		// （Author 结构 SecUid 位于 +0x30/+0x38），长度为零时回退到 CacheCard.FallbackSecUID
+		// （c+0x10/+0x18，@0xd92ca2 的 test %r15,%r15; jne 后 mov 0x18(%r11)/0x10(%r11)），
+		// 再调用 DynamicUrl(secUid, c.AwemeId)。
+		secUid := c.GetAuthor().GetSecUid()
+		if secUid == "" {
+			secUid = c.FallbackSecUID
+		}
 		var data = map[string]interface{}{
-			"dynamic":    c,
-			"msg":        c.orgMsg,
-			"name":       c.GetAuthor().GetNickname(),
-			"desc":       c.GetDesc(),
-			"date":       localutils.TimestampFormat(int64(c.GetCreateTime())),
-			"cover":      c.GetVideo().GetCover().GetUrlList()[0],
-			"url":        DynamicUrl(c.Author.SecUid, c.AwemeId),
-			"group_code": c.GroupCode,
+			"dynamic":     c,
+			"msg":         c.orgMsg,
+			"name":        c.GetAuthor().GetNickname(),
+			"desc":        c.GetDesc(),
+			"date":        localutils.TimestampFormat(int64(c.GetCreateTime())),
+			"cover":       c.GetVideo().GetCover().GetUrlList()[0],
+			"pictures":    pictures,
+			"gallery":     gallery,
+			"live_photos": livePhotos,
+			"url":         DynamicUrl(secUid, c.AwemeId),
+			"group_code":  c.GroupCode,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.douyin.news.tmpl", data)
@@ -265,9 +294,14 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 	return c.msgCache
 }
 
-func NewCacheCard(card *UserPostsResponse_AwemeList) *CacheCard {
+// NewCacheCard 构造 CacheCard。
+// 成品 NewCacheCard 无独立符号（被内联进 NewConcernNewsNotify @0xd924e0），
+// 构造时写入 FallbackSecUID = newsInfo.UserInfo.SecUid
+// （@0xd9260b/d92614：newsInfo+0x18/+0x10 → CacheCard+0x18/+0x10）。
+func NewCacheCard(card *UserPostsResponse_AwemeList, fallbackSecUID string) *CacheCard {
 	cacheCard := new(CacheCard)
 	cacheCard.UserPostsResponse_AwemeList = card
+	cacheCard.FallbackSecUID = fallbackSecUID
 	return cacheCard
 }
 

@@ -40,6 +40,7 @@ type Bot struct {
 	GroupMemberJoinEvent              *EventHandle[*adapter.MemberJoinGroupEvent]
 	GroupMemberLeaveEvent             *EventHandle[*adapter.MemberLeaveGroupEvent]
 	GroupInvitedEvent                 *EventHandle[*adapter.GroupInvitedRequest]
+	UserJoinGroupRequestEvent         *EventHandle[*adapter.UserJoinGroupRequest]
 	NewFriendRequestEvent             *EventHandle[*adapter.NewFriendRequest]
 	NewFriendEvent                    *EventHandle[*adapter.NewFriendEvent]
 	GroupJoinEvent                    *EventHandle[*adapter.GroupInfo]
@@ -82,6 +83,64 @@ func (bot *Bot) FindGroupByUin(uin int64) *adapter.GroupInfo {
 		return bot.Messenger.FindGroupByUin(uin)
 	}
 	return nil
+}
+
+// EnsureGroup 确保群信息在缓存中，并在缓存命中时刷新自身群成员、派发 GroupJoinEvent。
+//
+// 成品 bot.(*Bot).EnsureGroup @0xb7dee0（bot/bot.go:91，320B）逐条对应：
+//   - 0xb7def2: bot.Messenger == nil -> 0xb7df94 以 25 字节串 "messenger not initialized"
+//     走 fmt.Errorf（0x10bcd78，callees 含 fmt.errorf/runtime.newobject）；
+//   - 0xb7df0b: 调 adapter.(*Messenger).EnsureGroupCached(code)（@0x89bbc0，三值
+//     group/exist/err）；0xb7df10 test %rcx,%rcx；jne 0xb7df86 将 err 原样透传；
+//   - 0xb7df15 test %bl,%bl；je 0xb7df7c：exist==false 直接返回 group；
+//   - exist==true 时内联 bot.GetUin()（0xb7df1e-0xb7df2d：Messenger+0x18 / bot+0x10），
+//     0xb7df36 test %rdi,%rdi；je 跳过（守卫为 selfUin != 0）；
+//   - 0xb7df46 call 0x89d1a0 = adapter.(*Messenger).RefreshGroupMember(code, selfUin)；
+//   - 0xb7df55 mov 0xe8(%rdx) = bot.GroupJoinEvent（与 DispatchGroupJoin @0xb80a40 读取的
+//     同一偏移），非 nil 时经 EventHandle.Dispatch（0xb7df72 -> 0xb81e80，字典 0x113d4a0）派发；
+//   - 0xb7df7c 返回 (group, nil)（rax=group, rbx=err.type, rcx=err.data，即二值签名）。
+func (bot *Bot) EnsureGroup(code int64) (*adapter.GroupInfo, error) {
+	if bot.Messenger == nil {
+		return nil, fmt.Errorf("messenger not initialized")
+	}
+	group, exist, err := bot.Messenger.EnsureGroupCached(code)
+	if err != nil {
+		return nil, err
+	}
+	if exist {
+		if selfUin := bot.GetUin(); selfUin != 0 {
+			// 成品 0xb7df46 直接调 adapter.(*Messenger).RefreshGroupMember，未经过 bot 包装。
+			bot.Messenger.RefreshGroupMember(code, selfUin)
+		}
+		if bot.GroupJoinEvent != nil {
+			bot.GroupJoinEvent.Dispatch(group)
+		}
+	}
+	return group, nil
+}
+
+// EnsureGroupMember 确保指定群成员在缓存中。
+//
+// 成品 bot.(*Bot).EnsureGroupMember @0xb7e020（bot/bot.go:108，192B）：
+// Messenger==nil 以同一 25 字节串走 fmt.Errorf；否则 0xb7e08f 尾调
+// adapter.(*Messenger).EnsureGroupMember @0x89d060，无其它逻辑。
+func (bot *Bot) EnsureGroupMember(code int64, uin int64) (*adapter.GroupMemberInfo, error) {
+	if bot.Messenger == nil {
+		return nil, fmt.Errorf("messenger not initialized")
+	}
+	return bot.Messenger.EnsureGroupMember(code, uin)
+}
+
+// RefreshGroupMember 强制从 OneBot 拉取成员资料并刷新缓存。
+//
+// 成品 bot.(*Bot).RefreshGroupMember @0xb7e0e0（bot/bot.go:116，192B）：
+// Messenger==nil 以同一 25 字节串走 fmt.Errorf；否则 0xb7e14f 尾调
+// adapter.(*Messenger).RefreshGroupMember @0x89d1a0。
+func (bot *Bot) RefreshGroupMember(code int64, uin int64) (*adapter.GroupMemberInfo, error) {
+	if bot.Messenger == nil {
+		return nil, fmt.Errorf("messenger not initialized")
+	}
+	return bot.Messenger.RefreshGroupMember(code, uin)
 }
 
 func (bot *Bot) FindFriend(uin int64) *adapter.FriendInfo {
@@ -288,6 +347,7 @@ func Init() {
 		GroupMemberJoinEvent:              &EventHandle[*adapter.MemberJoinGroupEvent]{},
 		GroupMemberLeaveEvent:             &EventHandle[*adapter.MemberLeaveGroupEvent]{},
 		GroupInvitedEvent:                 &EventHandle[*adapter.GroupInvitedRequest]{},
+		UserJoinGroupRequestEvent:         &EventHandle[*adapter.UserJoinGroupRequest]{},
 		NewFriendRequestEvent:             &EventHandle[*adapter.NewFriendRequest]{},
 		NewFriendEvent:                    &EventHandle[*adapter.NewFriendEvent]{},
 		GroupJoinEvent:                    &EventHandle[*adapter.GroupInfo]{},
@@ -562,12 +622,21 @@ func (bot *Bot) DispatchNewFriend(event *adapter.NewFriendEvent) {
 	}
 }
 
+// DispatchUserJoinGroupRequest 直接派发 UserJoinGroupRequestEvent。
+//
+// 成品 bot.(*Bot).DispatchUserJoinGroupRequest @0xb80f60（bot/bot.go:594，96B）：
+//
+//	0xb80f6e mov 0xd0(%rax),%rax  = bot.UserJoinGroupRequestEvent，与 Init 中
+//	        0xb7f3a0-0xb7f3b3 mov %rax,0xd0(%rcx) 写入的是同一 8B 槽位；
+//	0xb80f75 test %rax,%rax; je 0xb80f89 为 nil 守卫；
+//	0xb80f7d lea 0x113d5c0,%rbx   = EventHandle[*adapter.UserJoinGroupRequest] 类型字典；
+//	0xb80f84 call 0xb81e80        = EventHandle[go.shape.*uint8].Dispatch（events.go:22），
+//	        参数为原始 event 指针（%rbx -> %rcx）。
+//
+// 全程无 GroupJoinEvent 合成路径。
 func (bot *Bot) DispatchUserJoinGroupRequest(event *adapter.UserJoinGroupRequest) {
-	if bot.GroupJoinEvent != nil {
-		info := &adapter.GroupInfo{
-			Uin: event.GroupCode,
-		}
-		bot.GroupJoinEvent.Dispatch(info)
+	if bot.UserJoinGroupRequestEvent != nil {
+		bot.UserJoinGroupRequestEvent.Dispatch(event)
 	}
 }
 

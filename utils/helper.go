@@ -484,7 +484,7 @@ func execWithPowerShell(cmdPath string, args []string, wait bool) ([]byte, error
 	if wait {
 		psWait = "$true"
 	}
-	
+
 	psCommand := fmt.Sprintf(`
 		$ErrorActionPreference = "Stop"
 		try {

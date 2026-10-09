@@ -3,7 +3,6 @@ package bilibili
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/sirupsen/logrus"
 	"go.uber.org/atomic"
 )
 
@@ -52,11 +52,19 @@ var BasePath = map[string]string{
 	PathWebAreaList:                     BaseLiveHost,
 	PathWebDynamicDetail:                BaseHost,
 	PathWebDynamicDetailPic:             BaseHost,
+	PathWebDynamicFeedAll:               BaseHost,
+	PathWebDynamicFeedAllUpdate:         BaseHost,
 }
 
+// VerifyInfo 是登录凭据快照。
+// 成品类型元数据（recovered/types/types-closure-x64.tsv）：
+// struct 88B = SESSDATA/BiliJct/DedeUserID/Buvid3 4 个 string + VerifyOpts []requests.Option，
+// 没有 ac_time_value 字段；ac_time_value 只作为配置键 bilibili.ac_time_value 存在。
 type VerifyInfo struct {
 	SESSDATA   string
 	BiliJct    string
+	DedeUserID string
+	Buvid3     string
 	VerifyOpts []requests.Option
 }
 
@@ -95,54 +103,88 @@ func Init() {
 	var (
 		SESSDATA   = config.GlobalConfig.GetString("bilibili.SESSDATA")
 		biliJct    = config.GlobalConfig.GetString("bilibili.bili_jct")
-		useQRLogin = config.GlobalConfig.GetBool("bilibili.QRLogin")
+		dedeUserID = config.GlobalConfig.GetString("bilibili.DedeUserID")
+		buvid3     = config.GlobalConfig.GetString("bilibili.buvid3")
+		// 成品 Init @0xcee485 调 cfg.GetBilibiliQRLoginEnabled（键 bilibili.qrlogin，
+		// 未配置时默认 true），不是裸 GetBool（未配置会得到 false）。
+		useQRLogin = cfg.GetBilibiliQRLoginEnabled()
 	)
+	// 成品 Init(bilibili.go:94) 的三条模式文案（funcstr @0xcee3c0，level 由
+	// logrus.(*Entry).Log 的 ebx 实证）：客户端启动 Info、"扫码（默认）" Info、
+	// 未知模式 Warn 并回退扫码。
+	if isBilibiliCookieCloudMode() {
+		// 成品 Init(bilibili.go:94, @0xcee3c0) 该分支 @0xcee557 先做 SESSDATA/verify 段：
+		// @0xcee50b 判 SESSDATA/bili_jct 两个 len 非空 → newVerifyInfoWithCookies +
+		// atomic.StorePointer，@0xcee582 打 "CookieCloud 首次获取成功前，将临时使用配置文件
+		// 中的B站Cookie"(len 79)，@0xcee5ab FreshSelfInfo，之后才 load。loader 失败会直接
+		// return（@0xcee7b4），故 SESSDATA 段必须先于 load，否则会被 return 吞掉。
+		if len(SESSDATA) != 0 && len(biliJct) != 0 {
+			atomicVerifyInfo.Store(newVerifyInfoWithCookies(SESSDATA, biliJct, dedeUserID, buvid3))
+			logger.Info("CookieCloud 首次获取成功前，将临时使用配置文件中的B站Cookie")
+			FreshSelfInfo()
+		}
+		cloudConfig, err := loadCookieCloudConfig()
+		if err != nil {
+			// 成品 Init @0xcee651..@0xcee7b4：loader 出错时
+			// logrus.(*Entry).WithFields(error).Log(level=2=Error,
+			//   "B站 Cookie来源已设为 CookieCloud，但配置不完整" @0x1125210,len 59)
+			// 随后直接 return（@0xcee7b4）。SESSDATA 段已在上方完成，此 return 不吞扫码段。
+			logger.WithError(err).Error("B站 Cookie来源已设为 CookieCloud，但配置不完整")
+			return
+		}
+		// 成品 Init @0xceea07 WithFields({cookie_source,server_host,refresh_interval,crypto_type})
+		// .Log(level=4=Info, "B站 CookieCloud 客户端已启动，将立即获取并定时刷新Cookie" @0x1125230)；
+		// refresh_interval=config.Interval，crypto_type=config.CryptoType。
+		logger.WithFields(logrus.Fields{
+			"cookie_source":    cookieModeCookieCloud,
+			"server_host":      cookieCloudServerHost(cloudConfig.Endpoint),
+			"refresh_interval": cloudConfig.Interval,
+			"crypto_type":      cloudConfig.CryptoType,
+		}).Info("B站 CookieCloud 客户端已启动，将立即获取并定时刷新Cookie")
+		// 成品 Init @0xceea80 call refreshCookieFromCookieCloud(config)（config 只 load 一次，
+		// 同一份 config 在 @0xceeda0 再传 startCookieCloudRefresh）；失败按 level=2=Error 记
+		// "CookieCloud 首次获取B站Cookie失败，将按配置间隔继续重试"（@0x1125240,len 73）。
+		if err := refreshCookieFromCookieCloud(cloudConfig); err != nil {
+			// 成品 Init @0xcee847 WithFields({cookie_source,server_host})，
+			// @0xcee968 再并入 error（内联 WithError），
+			// Log(level=2=Error, "CookieCloud 首次获取B站Cookie失败，将按配置间隔继续重试" @0x1125240)。
+			logger.WithFields(logrus.Fields{
+				"cookie_source": cookieModeCookieCloud,
+				"server_host":   cookieCloudServerHost(cloudConfig.Endpoint),
+			}).WithError(err).Error("CookieCloud 首次获取B站Cookie失败，将按配置间隔继续重试")
+		}
+		startCookieCloudRefresh(cloudConfig)
+		return
+	}
+	// 成品 Init @0xceedae：按 cookieMode 分派（getCookieMode 已把空值规整为 "qrcode"）。
+	// 未知模式 @0xceeec1 WithFields({cookie_mode:<mode>}).Log(level=3=Warn
+	// "未知的B站 Cookie来源模式，已回退到默认扫码模式" @0x1125250)，
+	// 随后与 qrcode 分支共同落到 @0xceefd9 WithFields({cookie_source:"qrcode"})
+	// .Log(level=4=Info "B站 Cookie来源模式：扫码（默认）" @0x1125270)——未知模式也会补打 Info。
+	switch mode := strings.ToLower(strings.TrimSpace(cfg.GetBilibiliCookieMode())); mode {
+	case "", cookieModeQrcode:
+	default:
+		logger.WithFields(logrus.Fields{"cookie_mode": mode}).
+			Warn("未知的B站 Cookie来源模式，已回退到默认扫码模式")
+	}
+	logger.WithFields(logrus.Fields{"cookie_source": cookieModeQrcode}).
+		Info("B站 Cookie来源模式：扫码（默认）")
 	if len(SESSDATA) != 0 && len(biliJct) != 0 {
-		SetVerify(SESSDATA, biliJct)
+		// 成品 Init(bilibili.go:94, @0xcee3c0) 的 GetString 序列（@0xcee3e7/@0xcee412/
+		// @0xcee43f/@0xcee467，长度 0x11/0x11/0x13/0xf）依次读 bilibili.SESSDATA /
+		// bilibili.bili_jct / bilibili.DedeUserID / bilibili.buvid3；@0xcef016 处只以
+		// 两个 len 判断就绪；@0xcef060 直接把 4 个 cookie 传给 newVerifyInfoWithCookies
+		// 并 atomic.StorePointer（未经过 SetVerify——SetVerify @0xcef100 第 3、4 参为空串，
+		// 仅用于其它登录路径）。
+		atomicVerifyInfo.Store(newVerifyInfoWithCookies(SESSDATA, biliJct, dedeUserID, buvid3))
 		FreshSelfInfo()
-	} else if useQRLogin {
+	} else if !isBilibiliCookieCloudMode() && useQRLogin {
+		// Lite：扫码登录由管理员私聊确认后触发（authprompt），不再自动轮询
 		logger.Info("B站扫码登陆已开启")
-		go func() {
-			for {
-				GetQRResp, err := GetQRCode()
-				if err != nil {
-					logger.Errorf("生成登陆二维码失败 - %v", err)
-					time.Sleep(time.Second * 5)
-					continue
-				}
-				logger.Info("已生成二维码，请扫码登陆~")
-				for {
-					time.Sleep(time.Second * 5)
-					CheckResp, err := QRLoginCheck(GetQRResp.Data.QrcodeKey)
-					if err != nil {
-						if err.Error() == "二维码已失效" {
-							logger.Warnf("%v - 重新生成二维码", err)
-							break
-						}
-						continue
-					}
-					cookies, err := GetCookies(CheckResp.Data.Url)
-					if err != nil {
-						logger.Errorf("解析Cookies失败 - %v", err)
-						continue
-					}
-					config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
-					config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
-					if err := cfg.WriteConfigKeyValue("bilibili.SESSDATA", cookies.SESSDATA); err != nil {
-						logger.Errorf("保存 SESSDATA 到配置文件失败 - %v", err)
-					}
-					if err := cfg.WriteConfigKeyValue("bilibili.bili_jct", cookies.BILI_JCT); err != nil {
-						logger.Errorf("保存 bili_jct 到配置文件失败 - %v", err)
-					}
-					SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
-					FreshSelfInfo()
-					logger.Info("B站扫码登陆成功，请重启DDBOT-WSa")
-					logger.Info("正在退出...")
-					time.Sleep(time.Second * 5)
-					os.Exit(0)
-				}
-			}
-		}()
+		// 成品 Init @0xcef07c：SESSDATA/bili_jct 任一为空且 QRLogin 开启时，
+		// @0xcef085 取常量 0x10ac8ff(len 0xe="missing_cookie") 调
+		// markBilibiliCookieUnhealthy(@0xd10460)，由 authprompt 私聊提醒管理员。
+		markBilibiliCookieUnhealthy("missing_cookie")
 	}
 	SetAccount(config.GlobalConfig.GetString("bilibili.account"), config.GlobalConfig.GetString("bilibili.password"))
 }
@@ -164,11 +206,31 @@ func DynamicUrl(dynamicIdStr string) string {
 }
 
 func SetVerify(_SESSDATA string, _biliJct string) {
-	atomicVerifyInfo.Store(&VerifyInfo{
-		SESSDATA:   _SESSDATA,
-		BiliJct:    _biliJct,
-		VerifyOpts: []requests.Option{requests.CookieOption("SESSDATA", _SESSDATA), requests.CookieOption("bili_jct", _biliJct)},
-	})
+	// 成品 SetVerify(bilibili.go:164, 128B, @0xcef100) 反汇编：
+	//   xor esi,esi / xor r8d,r8d / mov rsi,r9 / mov r8,r10 → 第 3、4 个 cookie 参数为空串
+	//   call newVerifyInfoWithCookies(SESSDATA, biliJct, "", "")
+	//   mov rax,rbx; lea 0x1bcc298(%rip),rax; call sync/atomic.StorePointer
+	// 全程无 config 读取（无 cfg.GetString("bilibili.buvid3") 调用点）。
+	// Buvid3 字段保留，值由 live_websocket 侧 fetchBilibiliBuvid3 补取后写回。
+	info := newVerifyInfoWithCookies(_SESSDATA, _biliJct, "", "")
+	atomicVerifyInfo.Store(info)
+}
+
+// bilibiliLoginReady 判断登录凭据是否就绪（纯内存检查，无网络访问）。
+// 成品 bilibili.go:201 实现：verify != nil && TrimSpace(SESSDATA) != "" &&
+// TrimSpace(BiliJct) != "" && accountUid > 0，共两次 strings.TrimSpace 调用。
+func bilibiliLoginReady() bool {
+	verify := getVerify()
+	if verify == nil {
+		return false
+	}
+	if strings.TrimSpace(verify.SESSDATA) == "" {
+		return false
+	}
+	if strings.TrimSpace(verify.BiliJct) == "" {
+		return false
+	}
+	return accountUid.Load() > 0
 }
 
 func getVerify() *VerifyInfo {
@@ -272,28 +334,39 @@ func FreshSelfInfo() {
 	navResp, err := XWebInterfaceNav(true)
 	if err != nil {
 		logger.Errorf("获取个人信息失败 - %v，b站功能可能无法使用", err)
+		// 成品 bilibili.go:302 在 nav 失败时调用 markBilibiliCookieUnhealthy("nav_api_not_logged_in")
+		markBilibiliCookieUnhealthy("nav_api_not_logged_in")
+	} else if navResp.GetCode() != 0 {
+		logger.Errorf("获取个人信息失败 - %v %v", navResp.GetCode(), navResp.GetMessage())
+		markBilibiliCookieUnhealthy("nav_api_not_logged_in")
+	} else if navResp.GetData().GetIsLogin() {
+		acceptBilibiliSelfInfo(navResp)
+		return
 	} else {
-		if navResp.GetCode() != 0 {
-			logger.Errorf("获取个人信息失败 - %v %v", navResp.GetCode(), navResp.GetMessage())
-		} else {
-			if navResp.GetData().GetIsLogin() {
-				logger.Infof("B站启动成功，当前使用账号：UID:%v %v LV%v %v",
-					navResp.GetData().GetMid(),
-					navResp.GetData().GetVipLabel().GetText(),
-					navResp.GetData().GetLevelInfo().GetCurrentLevel(),
-					navResp.GetData().GetUname())
-				if navResp.GetData().GetLevelInfo().GetCurrentLevel() >= 5 {
-					logger.Warnf("注意：当前使用的B站账号为5级或以上，请注意使用b站订阅时，该账号会自动关注订阅的目标用户！" +
-						"如果不想新增关注，请使用小号。")
-				}
-				accountUid.Store(navResp.GetData().GetMid())
-				return
-			} else {
-				logger.Errorf("账号未登陆")
-			}
-		}
+		logger.Errorf("账号未登陆")
+		markBilibiliCookieUnhealthy("nav_login_false")
 	}
 	accountUid.Store(0)
+}
+
+// acceptBilibiliSelfInfo 接受已登录的 nav 响应：打印账号信息、更新 UID、标记 Cookie 健康。
+// 成品 bilibili.go:329 证据：两次 logrus Logf（成功信息 + LV>=5 提醒）、
+// convT64/convTstring/convT32/convTstring 四个日志参数、并调用 markBilibiliCookieHealthy。
+func acceptBilibiliSelfInfo(navResp *WebInterfaceNavResponse) {
+	if navResp == nil {
+		return
+	}
+	data := navResp.GetData()
+	logger.Infof("B站启动成功，当前使用账号：UID:%v %v LV%v %v",
+		data.GetMid(),
+		data.GetVipLabel().GetText(),
+		data.GetLevelInfo().GetCurrentLevel(),
+		data.GetUname())
+	if data.GetLevelInfo().GetCurrentLevel() >= 5 {
+		logger.Warnf("注意：当前使用的B站账号为5级或以上，请注意使用b站订阅时，该账号会自动关注订阅的目标用户！如果不想新增关注，请使用小号。")
+	}
+	accountUid.Store(data.GetMid())
+	markBilibiliCookieHealthy()
 }
 
 func AddUAOption() requests.Option {

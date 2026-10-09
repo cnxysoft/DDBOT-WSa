@@ -39,6 +39,12 @@ type GroupMessageEvent struct {
 	Message    []MessageSegment
 	Time       int64
 	SelfID     int64
+	// Sender 是 OneBot 事件 sender 对象还原出的发送者资料，可为 nil。
+	// 成品证据：recovered/types/types-closure-x64.tsv:10576
+	//   adapter.GroupMessageEvent struct{ ...; SelfID int64; Sender *adapter.SenderInfo }（88 字节），
+	//   Sender 位于偏移 0x50；handleGroupMessage @0x8a1e40 在 +0x6d0 用该字段
+	//   （event+0x50 非空时）构造 GroupMemberInfo 并调用 cacheGroupMember。
+	Sender *SenderInfo
 }
 
 type PrivateMessageEvent struct {
@@ -65,12 +71,19 @@ type MetaEvent struct {
 }
 
 type NoticeEvent struct {
-	NoticeType   string
-	Time         int64
-	SelfID       int64
-	GroupID      int64
-	UserID       int64
-	OperatorID   int64
+	NoticeType string
+	Time       int64
+	SelfID     int64
+	GroupID    int64
+	UserID     int64
+	OperatorID int64
+	// TargetID/SenderID 是成品 NoticeEvent 字段（偏移 +56/+64）。
+	// 证据：recovered/types/types-closure-x64.tsv:11099 adapter.NoticeEvent size=392，
+	// 字段序 NoticeType..OperatorID,TargetID,SenderID,Duration...；
+	// onebot-v11.(*OneBotAdapter).handleNoticeEvent @0xb63e00 依次读取 target_id(+0x18b)、
+	// sender_id(+0x1c2) 并以 getInt64 写入这两个字段。
+	TargetID     int64
+	SenderID     int64
 	Duration     int32
 	SubType      string
 	Title        string
@@ -82,6 +95,12 @@ type NoticeEvent struct {
 	Times        int
 	CardNew      string
 	CardOld      string
+	// IsAdd 是成品 NoticeEvent 末字段（偏移 +384，struct size 392）。
+	// 证据：types-closure-x64.tsv:11099；onebot handleNoticeEvent @0xb63e00 在 +0x273 读
+	// is_add 键（0x109f622，len=6），并写入 event+0x180。
+	// 消费点：messenger.handleNoticeEvent 的 group_msg_emoji_like 分支，成品 @0x8a0d8a
+	// movzbl 0x180(%rcx) 直接取该字段派发，而非用 SubType=="add" 现算。
+	IsAdd bool
 }
 
 type RequestEvent struct {
@@ -93,6 +112,13 @@ type RequestEvent struct {
 	Comment     string
 	Flag        string
 	SubType     string
+	// InvitorID/SourceGroupID 是成品 RequestEvent 的末两字段（偏移 +96/+104，size 112）。
+	// 证据：recovered/types/types-closure-x64.tsv:10745
+	//   struct{ RequestType; Time; SelfID; GroupID; UserID; Comment; Flag; SubType; InvitorID; SourceGroupID }；
+	// onebot-v11.(*OneBotAdapter).handleRequestEvent @0xb64880 在 +0x201 读 invitor_id、
+	// +0x239 读 source_group_id，均以 getInt64 写入（来源端 LLOB/NapCat 邀请请求携带这两个键）。
+	InvitorID     int64
+	SourceGroupID int64
 }
 
 type GroupFile struct {
@@ -176,7 +202,13 @@ type GroupInfo struct {
 	GroupCreateTime int64
 	GroupLevel      int
 	Members         []*GroupMemberInfo
-	Client          interface{}
+	// MembersLoaded 表示 Members 是否是完整的群成员列表。
+	// 仅在成功拉到整份群成员列表（GetGroupMembersByID）后置 true；
+	// 只创建空 GroupInfo 或仅缓存单个成员的路径保持零值 false。
+	// 证据：成品类型元数据 recovered/types/types-closure-x64.tsv:11029，
+	// 字段顺序为 Members; MembersLoaded bool; Client interface{}。
+	MembersLoaded bool
+	Client        interface{}
 
 	GroupID          int64
 	GroupName        string
@@ -288,11 +320,6 @@ func (ed *EventDispatcher) Dispatch(eventType string, event interface{}) {
 			callback(event)
 		}
 	}
-}
-
-type SendResponse struct {
-	MessageID int32
-	Error     error
 }
 
 type GetMsgResult struct {
@@ -475,6 +502,18 @@ func BuildMessageParams(message interface{}) map[string]interface{} {
 type BotCaller interface {
 	FindFriend(uin int64) *FriendInfo
 	FindGroup(code int64) *GroupInfo
+	// EnsureGroup 确保群信息在缓存中，缺失或资料不完整时实时拉取
+	EnsureGroup(groupID int64) (*GroupInfo, error)
+	// EnsureGroupMember 返回群成员缓存，缺失时实时拉取
+	EnsureGroupMember(groupID, userID int64) (*GroupMemberInfo, error)
+	// RefreshGroupMember 强制从实现端拉取群成员资料并刷新缓存
+	RefreshGroupMember(groupID, userID int64) (*GroupMemberInfo, error)
+	// GetGroupMembersByID 返回群成员列表
+	GetGroupMembersByID(groupID int64) ([]*GroupMemberInfo, error)
+	// GetStrangerInfo 查询陌生人资料
+	GetStrangerInfo(uin int64) (map[string]interface{}, error)
+	// ReloadGroupList 实时刷新群列表缓存
+	ReloadGroupList() error
 	GetGroupList() []*GroupInfo
 	GetFriendList() []*FriendInfo
 	GetUin() int64

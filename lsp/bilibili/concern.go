@@ -1,6 +1,8 @@
 package bilibili
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,6 +35,7 @@ var online bool
 type Concern struct {
 	*StateManager
 	attentionListExpirable *expirable.Expirable
+	dynamicLite            *dynamicLitePoller
 	unsafeStart            atomic.Bool
 	notify                 chan<- concern.Notify
 	stop                   chan interface{}
@@ -89,6 +92,7 @@ func (c *Concern) Stop() {
 	if c.stop != nil {
 		close(c.stop)
 	}
+	stopLiveWebsocket()
 	logger.Trace("正在停止bilibili StateManager")
 	c.StateManager.Stop()
 	logger.Trace("bilibili StateManager已停止")
@@ -98,6 +102,8 @@ func (c *Concern) Stop() {
 
 func (c *Concern) Start() error {
 	Init()
+	// 放行 init 中等待的后台刷新协程（成品 Concern.Start 紧随 Init 调用 startBackgroundRefresh）
+	startBackgroundRefresh()
 	lastFresh, _ := c.GetLastFreshTime()
 	if lastFresh > 0 && time.Now().Sub(time.Unix(lastFresh, 0)) > time.Minute*30 {
 		logger.Debug("Unsafe Start Mode")
@@ -107,27 +113,36 @@ func (c *Concern) Start() error {
 		})
 	}
 	c.UseNotifyGeneratorFunc(c.notifyGenerator())
-	if !IsVerifyGiven() {
-		logger.Warnf("未设置B站账户，将使用慢速模式，推荐订阅数量不超过5个，否则推送将出现较长延迟，如需更多订阅，推荐您配置使用B站账号，最高可支持2000订阅。")
-		c.UseEmitQueue()
-		c.UseFreshFunc(c.emitQueueFresher())
+	// Lite：动态走网页增量探测、直播走登录 WebSocket，事件经 Lite 事件桥分发；
+	// emitQueue 兜底通道保持开启，登录校验通过后自动启动监听
+	c.UseEmitQueue()
+	c.UseFreshFunc(c.emitQueueFresher())
+	c.dynamicLite = newDynamicLitePoller(loadDynamicLiteConfig(), bilibiliDynamicLiteAPI{})
+	if bilibiliLoginReady() {
+		logger.Info("B站登录验证已通过，开始直播和动态监听")
+		c.startLiteMonitors()
 	} else {
-		c.UseFreshFunc(c.fresh())
+		logger.Warn("未检测到已验证的B站登录凭据，直播和动态监听已暂停；请使用扫码或 CookieCloud 登录，登录成功后将自动启动")
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.SyncSub()
-			tick := time.Tick(time.Hour)
-			for {
+			// 与成品 waitForBilibiliLogin 相同的 5s 轮询，但尊重 c.stop 以便 Stop 不挂起
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for !bilibiliLoginReady() {
 				select {
-				case <-tick:
-					c.SyncSub()
 				case <-c.stop:
 					return
+				case <-ticker.C:
 				}
 			}
+			logger.Info("B站登录验证已通过，开始直播和动态监听")
+			c.startLiteMonitors()
 		}()
 	}
+	// 登录态后台同步：成品 concern.go:124 gowrap1 -> (*Concern).runAuthenticatedSubscriptionSync
+	c.wg.Add(1)
+	go c.runAuthenticatedSubscriptionSync()
 	go func() {
 		for msg := range eventbus.BusObj.Subscribe("bot_online") {
 			if m, ok := msg.(bool); ok {
@@ -146,6 +161,9 @@ func (c *Concern) Start() error {
 func (c *Concern) Add(ctx mmsg.IMsgCtx,
 	groupCode int64, _id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
 	mid := _id.(int64)
+	if accountUid.Load() == 0 {
+		return nil, errors.New("B站尚未登录，无法订阅；请先使用扫码或 CookieCloud 完成登录")
+	}
 	selfUid := accountUid.Load()
 	var watchSelf = selfUid != 0 && selfUid == mid
 	var err error
@@ -259,8 +277,7 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx,
 				defer c.GroupWatchNotify(groupCode, mid)
 			}
 			if ctx.GetTarget().TargetType().IsPrivate() {
-				defer ctx.Send(mmsg.NewText("检测到该用户正在直播，但由于您目前处于私聊模式，" +
-					"因此不会在群内推送本次直播，将在该用户下次直播时推送"))
+				defer ctx.Send(mmsg.NewText("检测到该用户正在直播，但由于您目前处于私聊模式，因此不会在群内推送本次直播，将在该用户下次直播时推送"))
 			}
 		}
 	}
@@ -268,8 +285,7 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx,
 		userInfo.UserStat != nil &&
 		ctype.ContainAny(Live) &&
 		userInfo.UserStat.Follower < followerNotifyCap {
-		ctx.Send(mmsg.NewTextf("注意：检测到用户【%v】粉丝数少于%v，"+
-			"请确认您的订阅目标是否正确，注意使用UID而非直播间ID", userInfo.Name, followerNotifyCap))
+		ctx.Send(mmsg.NewTextf("注意：检测到用户【%v】粉丝数少于%v，请确认您的订阅目标是否正确，注意使用UID而非直播间ID", userInfo.Name, followerNotifyCap))
 	}
 
 	return userInfo, nil
@@ -548,6 +564,44 @@ func (c *Concern) FindUserNews(mid int64, load bool) (*NewsInfo, error) {
 	return c.StateManager.GetNewsInfo(mid)
 }
 
+// runAuthenticatedSubscriptionSync 是登录态就绪后的后台同步循环（成品 concern.go:535）。
+// 成品反汇编证据：三个 ticker 周期分别为 5s(0x12a05f200) / 1min(0xdf8475800) /
+// 1h(0x34630b8a000)；循环顶部复查 bilibiliLoginReady，登录由“未就绪”变“就绪”时补一次
+// SyncSub；1min tick 在未就绪且已配置 Cookie 时调用 FreshSelfInfo 确认账号；1h tick 同步订阅。
+// 四个 defer：c.wg.Done + 三个 ticker.Stop（deferwrap1..4 @ concern.go:536/538/540/542）。
+func (c *Concern) runAuthenticatedSubscriptionSync() {
+	defer c.wg.Done()
+	fastTicker := time.NewTicker(5 * time.Second)
+	defer fastTicker.Stop()
+	minuteTicker := time.NewTicker(time.Minute)
+	defer minuteTicker.Stop()
+	hourTicker := time.NewTicker(time.Hour)
+	defer hourTicker.Stop()
+	wasReady := false
+	for {
+		ready := bilibiliLoginReady()
+		if ready && !wasReady {
+			c.SyncSub()
+		}
+		wasReady = ready
+		select {
+		case <-c.stop:
+			return
+		case <-hourTicker.C:
+			if bilibiliLoginReady() {
+				c.SyncSub()
+			}
+		case <-minuteTicker.C:
+			if !bilibiliLoginReady() {
+				if verify := getVerify(); verify != nil && len(verify.VerifyOpts) > 0 {
+					FreshSelfInfo()
+				}
+			}
+		case <-fastTicker.C:
+		}
+	}
+}
+
 func (c *Concern) GroupWatchNotify(groupCode, mid int64) {
 	liveInfo, _ := c.GetLiveInfo(mid)
 	if liveInfo.Living() {
@@ -661,4 +715,67 @@ func (c *Concern) filterCard(card *Card) bool {
 		return false
 	}
 	return true
+}
+
+// bilibiliLiteEventChan 汇聚 Lite 层（动态增量探测/直播 WebSocket）产生的事件，
+// 由框架 Dispatch 泵接入 Notify 管线；进程退出前不关闭，避免生产者 panic。
+var bilibiliLiteEventChan = make(chan concern.Event, 64)
+
+// emitBilibiliLiteEvent 非阻塞投递 Lite 事件。
+func emitBilibiliLiteEvent(event concern.Event) {
+	if event == nil {
+		return
+	}
+	select {
+	case bilibiliLiteEventChan <- event:
+	default:
+		logger.Warn("B站Lite事件队列已满，丢弃本次事件")
+	}
+}
+
+// startLiteMonitors 启动网页增量探测与直播 WebSocket 监听。
+func (c *Concern) startLiteMonitors() {
+	logger.Info("B站动态刷新模式：网页新版增量探测")
+	// ctx 与动态增量探测共用同一可取消会话（绑定 c.stop）；成品中该 ctx 由
+	// (*Concern).fresh 闭包经 run(ctx) → reconcile(ctx) → runAccountLiveWebsocket 下传。
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		select {
+		case <-c.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	startLiveWebsocket(ctx, c)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.runDynamicLitePoller(ctx)
+	}()
+	// 框架分发泵：Lite 事件桥 → Notify（进程退出时随通道自然结束）
+	go c.StateManager.Dispatch(new(sync.WaitGroup), bilibiliLiteEventChan, c.notify)
+}
+
+// runDynamicLitePoller 驱动增量探测循环：探测 → 转卡片 → 桥接事件；
+// 凭据失效时暂停并告警，恢复后自动继续。
+func (c *Concern) runDynamicLitePoller(ctx context.Context) {
+	for {
+		if !bilibiliLoginReady() {
+			logger.Warn("B站登录凭据已失效，直播和动态监听已暂停；凭据恢复后将自动重新建立监听")
+			markBilibiliCookieUnhealthy("B站 Cookie 状态异常")
+			if waitContext(ctx, time.Minute) != nil {
+				return
+			}
+			continue
+		}
+		items := c.dynamicLite.poll(ctx)
+		if len(items) > 0 {
+			for _, news := range c.newsFromWebDynamicItems(items) {
+				emitBilibiliLiteEvent(news)
+			}
+		}
+		if waitContext(ctx, c.dynamicLite.nextDelay()) != nil {
+			return
+		}
+	}
 }

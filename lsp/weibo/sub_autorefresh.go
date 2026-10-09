@@ -25,7 +25,7 @@ func StartSubAutoRefresh() {
 	// 仅在 login 模式下启用
 	mode := cfg.GetWeiboMode()
 	if mode != "login" {
-		logger.Debug("非 login 模式，不启动 SUB 自动刷新")
+		logger.Debug("非 login 模式，不启动微博登录 Cookie 心跳")
 		return
 	}
 
@@ -58,8 +58,9 @@ func StartSubAutoRefresh() {
 			return
 		}
 
-		// 每小时刷新一次
-		ticker := time.NewTicker(1 * time.Hour)
+		// 刷新间隔由 weibo.loginRefreshInterval 控制（成品：StartSubAutoRefresh
+		// 调用 cfg.GetWeiboLoginRefreshInterval()，默认30m，钳制 [5m,24h]）。
+		ticker := time.NewTicker(cfg.GetWeiboLoginRefreshInterval())
 		defer ticker.Stop()
 
 		for {

@@ -2,43 +2,22 @@ package logging
 
 import (
 	"io"
-	"os"
 	"path"
 	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/logging/logstyle"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
 
 	"github.com/Sora233/MiraiGo-Template/bot"
 )
-
-// levelWriter 根据日志级别将输出分流到 stdout 或 stderr
-type levelWriter struct {
-	stdout io.Writer
-	stderr io.Writer
-}
-
-func (w *levelWriter) Write(p []byte) (n int, err error) {
-	// logrus 在写入前会在消息前添加 "level=\"warn\" " 这样的前缀
-	// 通过检测前缀判断级别
-	if len(p) >= 7 && string(p[0:7]) == `level="` {
-		// 提取级别标识
-		rest := p[7:]
-		if len(rest) >= 4 {
-			level := string(rest[0:4])
-			if level == "warn" || level == "erro" || level == "fata" {
-				return w.stderr.Write(p)
-			}
-		}
-	}
-	return w.stdout.Write(p)
-}
 
 const moduleId = "ddbot.logging"
 
@@ -54,23 +33,24 @@ var instance *logging
 
 var logger *logrus.Entry
 
+// MiraiGoModule 返回模块信息，供 MiraiGo-Template 框架在 init 时注册。
+// [推断] 本处注释与单行 return 形式按行号缺口推断复原，
+// 成品二进制不保留注释文本，仅函数起始行有 pclntab 证据。
 func (m *logging) MiraiGoModule() bot.ModuleInfo {
-	return bot.ModuleInfo{
-		ID:       moduleId,
-		Instance: instance,
-	}
+	return bot.ModuleInfo{ID: moduleId, Instance: instance}
 }
 
 func (m *logging) Init() {
 	qqLogger := logrus.New()
 
+	// qq-logs.enabled 为新配置项，qq-logs.enable 为旧配置项，二者任一开启即视为启用
 	if !config.GlobalConfig.GetBool("qq-logs.enabled") && !config.GlobalConfig.GetBool("qq-logs.enable") {
-		// 未启用时丢弃所有输出
+		// 未启用时丢弃所有输出，并标记 qqlog 不可用
 		qqLogger.Out = io.Discard
 		qqlog.Enabled = false
 	} else {
 		qqlog.Enabled = true
-		// 创建文件 writer
+		// 创建文件 writer：日志按天切割写入 qq-logs/，保留 7 天
 		writer, err := rotatelogs.New(
 			path.Join("qq-logs", "%Y-%m-%d.log"),
 			rotatelogs.WithMaxAge(7*24*time.Hour),
@@ -80,38 +60,48 @@ func (m *logging) Init() {
 			logrus.WithError(err).Error("unable to write logs")
 			return
 		}
-		// 使用 levelWriter 根据日志级别分流到 stdout/stderr，同时写入文件
-		lvWriter := &levelWriter{stdout: os.Stdout, stderr: os.Stderr}
-		qqLogger.SetOutput(io.MultiWriter(writer, lvWriter))
-		// 不再使用 lfshook，因为 SetOutput 的 MultiWriter 已经包含了文件写入
-		// lfshook 会导致同一日志被写入文件两次（MultiWriter 一份 + lfshook 一份）
+		// 文件输出：rotatelogs 直接作为 Out，保证每条日志都落盘
+		qqLogger.SetOutput(writer)
+		// 文件格式器：无颜色、强制引号、完整时间戳
+		qqLogger.SetFormatter(logstyle.NewFileFormatter())
+		// 控制台输出：通过 lfshook 按 level 分流——info 及以下写 stdout，
+		// warn 及以上写 stderr；控制台与文件各走一路，不会重复写文件。
+		// 写出前由 consoleFormatter 把 level 字段替换为带 ANSI 颜色的版本
+		qqLogger.AddHook(lfshook.NewHook(lfshook.WriterMap{
+			logrus.TraceLevel: logstyle.NewConsoleStdout(),
+			logrus.DebugLevel: logstyle.NewConsoleStdout(),
+			logrus.InfoLevel:  logstyle.NewConsoleStdout(),
+			logrus.WarnLevel:  logstyle.NewConsoleStderr(),
+			logrus.ErrorLevel: logstyle.NewConsoleStderr(),
+			logrus.FatalLevel: logstyle.NewConsoleStderr(),
+			logrus.PanicLevel: logstyle.NewConsoleStderr(),
+		}, logstyle.NewConsoleFormatter()))
 	}
+
+	// 日志级别固定为 Debug，不在此处过滤；
+	// 由各输出端（文件/控制台）自行决定显示与过滤策略
 	qqLogger.SetLevel(logrus.DebugLevel)
 	logger = qqLogger.WithField("module", moduleId)
 	qqlog.Init(logger)
 }
 
 func (m *logging) PostInit() {
-	// 第二次初始化
-	// 再次过程中可以进行跨Module的动作
-	// 如通用数据库等等
 }
-
 func (m *logging) Serve(b *bot.Bot) {
 	// 注册服务函数部分
 	registerLog(b)
 }
 
+// Start 会新开协程进行调用：
+//
+//	go exampleModule.Start()
+//
+// 可以利用此部分进行后台操作，例如启动 http 服务器等常驻任务；
+// 当前模块没有后台任务，实现为空。
+//
+// [推断] 本注释按基底文件复原，位置有行号证据、文本为推断。
 func (m *logging) Start(b *bot.Bot) {
-	// 此函数会新开携程进行调用
-	// ```go
-	// 		go exampleModule.Start()
-	// ```
-
-	// 可以利用此部分进行后台操作
-	// 如http服务器等等
 }
-
 func (m *logging) Stop(b *bot.Bot, wg *sync.WaitGroup) {
 	// 别忘了解锁
 	defer wg.Done()

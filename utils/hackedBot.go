@@ -40,6 +40,78 @@ func (h *HackedBot) FindGroup(code int64) *adapter.GroupInfo {
 	return h.Bot.FindGroup(code)
 }
 
+// 说明：成品 adapter.BotCaller 声明了下列 6 个群/成员实时查询方法，HackedBot 直接按接口转发；
+// 仅在 Bot 无效（测试模式）时退化为本地缓存查找。
+
+// ReloadGroupList 实时刷新群列表缓存，转发到 Bot 的 ReloadGroupList。
+func (h *HackedBot) ReloadGroupList() error {
+	if !h.valid() {
+		// 测试模式下没有真实 Bot，群列表即内存中的测试缓存，视为已刷新成功；
+		// 与 EnsureGroup/GetGroupMembersByID 的测试回退保持一致。
+		if h != nil && h.testMode {
+			return nil
+		}
+		return fmt.Errorf("bot not valid")
+	}
+	return h.Bot.ReloadGroupList()
+}
+
+// EnsureGroup 返回群资料（缺失时实时拉取），转发到 Bot 的 EnsureGroup。
+func (h *HackedBot) EnsureGroup(groupID int64) (*adapter.GroupInfo, error) {
+	if !h.valid() {
+		if gi := h.FindGroup(groupID); gi != nil {
+			return gi, nil
+		}
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.EnsureGroup(groupID)
+}
+
+// EnsureGroupMember 返回群成员缓存（缺失时实时拉取），转发到 Bot 的 EnsureGroupMember。
+func (h *HackedBot) EnsureGroupMember(groupID, userID int64) (*adapter.GroupMemberInfo, error) {
+	if !h.valid() {
+		if gi := h.FindGroup(groupID); gi != nil {
+			if m := gi.FindMember(userID); m != nil {
+				return m, nil
+			}
+		}
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.EnsureGroupMember(groupID, userID)
+}
+
+// RefreshGroupMember 强制刷新群成员资料，转发到 Bot 的 RefreshGroupMember。
+func (h *HackedBot) RefreshGroupMember(groupID, userID int64) (*adapter.GroupMemberInfo, error) {
+	if !h.valid() {
+		if gi := h.FindGroup(groupID); gi != nil {
+			if m := gi.FindMember(userID); m != nil {
+				return m, nil
+			}
+		}
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.RefreshGroupMember(groupID, userID)
+}
+
+// GetGroupMembersByID 返回群成员列表，转发到 Bot 的 GetGroupMembersByID。
+func (h *HackedBot) GetGroupMembersByID(groupID int64) ([]*adapter.GroupMemberInfo, error) {
+	if !h.valid() {
+		if gi := h.FindGroup(groupID); gi != nil {
+			return gi.Members, nil
+		}
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.GetGroupMembersByID(groupID)
+}
+
+// GetStrangerInfo 查询陌生人资料，转发到 Bot 的 GetStrangerInfo。
+func (h *HackedBot) GetStrangerInfo(uin int64) (map[string]interface{}, error) {
+	if !h.valid() {
+		return nil, fmt.Errorf("bot not valid")
+	}
+	return h.Bot.GetStrangerInfo(uin)
+}
+
 func (h *HackedBot) SolveFriendRequest(flag string, accept bool) error {
 	if !h.valid() {
 		return fmt.Errorf("bot not valid")

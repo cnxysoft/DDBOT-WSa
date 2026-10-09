@@ -2,23 +2,19 @@ package weibo
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
-	"image"
-	"image/png"
-	"io"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strings"
+	"runtime"
 	"time"
 
-	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/mattn/go-colorable"
+	"github.com/sirupsen/logrus"
+	"github.com/skip2/go-qrcode"
 )
 
 // QRLoginOption controls the QR login helper behavior.
@@ -27,35 +23,21 @@ type QRLoginOption struct {
 	AutoOpen  bool
 }
 
-type qrImageResp struct {
-	Retcode int64 `json:"retcode"`
-	Data    struct {
-		Qrid  string `json:"qrid"`
-		Image string `json:"image"`
-	} `json:"data"`
-	Msg string `json:"msg"`
-}
+var qrLogger = utils.GetModuleLogger("weibo-qr")
 
-type qrCheckResp struct {
-	Retcode int64                  `json:"retcode"`
-	Data    map[string]interface{} `json:"data"`
-	Msg     string                 `json:"msg"`
-}
-
-var (
-	qrLogger      = utils.GetModuleLogger("weibo-qr")
-	jsonpRegex    = regexp.MustCompile(`\((.*)\)`)
-	altRegex      = regexp.MustCompile(`(ALT-[\w-]+)`)
-	defaultUA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-	defaultRefer  = "https://weibo.com/newlogin?tabtype=weibo&gid=102803&url=https%3A%2F%2Fweibo.com%2F"
-	qrImageURL    = "https://login.sina.com.cn/sso/qrcode/image"
-	qrCheckURL    = "https://passport.weibo.com/sso/v2/qrcode/check"
-	qrLoginURL    = "https://passport.weibo.com/sso/v2/login"
-	qrLoginTarget = "https://weibo.com/newlogin?tabtype=weibo&gid=102803&openLoginLayer=0&url=https%3A%2F%2Fweibo.com%2F"
-)
-
-// RunQRLogin downloads a QR code, waits for scan, exchanges ALT for cookies, and returns SUB.
-// It also saves the QR image to outputDir/weibo_debug.png and SUB to outputDir/weibo_sub.txt.
+// RunQRLogin 扫码登录入口：访客态初始化 → 生成二维码 → 终端展示 → 轮询扫码
+// → 完成 SSO 登录并激活 Cookie，返回 SUB。
+//
+// 成品调用图证据（lsp/weibo/qrlogin.go:30）：
+//
+//	RunQRLogin -> currentWeiboStatePaths/loadCookieState/snapshot/newWeiboProtocol/loadCookieMeta
+//	           -> createVisitor -> createQRCode -> printQRToConsole -> openQRImage
+//	           -> waitForQRCode -> completeQRLogin -> refreshLoginCookies
+//	           -> saveCookieState/writePrivateJSON -> activateCookieJar
+//	           -> cookieValueForURL/cookieNamesForURL
+//
+// 调用方：concern.go 启动时 SUB 为空，以及 reportWeiboCookieFailure 的 GenerateQR 闭包
+// （管理员私聊回复“生成 微博”后触发）。
 func RunQRLogin(opt QRLoginOption) (string, error) {
 	if opt.OutputDir == "" {
 		opt.OutputDir = "."
@@ -64,319 +46,186 @@ func RunQRLogin(opt QRLoginOption) (string, error) {
 		return "", err
 	}
 	if !filepath.IsAbs(opt.OutputDir) {
-		abs, err := filepath.Abs(opt.OutputDir)
-		if err == nil {
+		if abs, err := filepath.Abs(opt.OutputDir); err == nil {
 			opt.OutputDir = abs
 		}
 	}
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Jar:     jar,
-		Timeout: 15 * time.Second,
+
+	_, loginPath := currentWeiboStatePaths()
+	stateDir := filepath.Dir(loginPath)
+	jar := newPersistentCookieJar()
+	if state, err := loadCookieState(loginPath); err == nil && state != nil && len(state.Cookies) > 0 {
+		jar.importRecords(state.Cookies)
+	}
+	jar.setConfiguredSUB()
+	p := newWeiboProtocol(jar)
+	meta, metaErr := loadCookieMeta(stateDir)
+	if metaErr != nil {
+		return "", metaErr
 	}
 
-	qrid, err := fetchQRCode(client, opt)
+	// 成品证据：RunQRLogin(qrlogin.go:30) 两次调用 cfg.GetWeiboProtocolTimeout()
+	// 为协议步骤构造独立 context；扫码等待本身由 weibo.qrloginTimeout 控制。
+	visitCtx, visitCancel := weiboProtocolContext()
+	defer visitCancel()
+
+	// 访客态初始化：失败不致命，仅记录后继续生成登录二维码。
+	// 成品证据：RunQRLogin +0x34b 调 createVisitor(ctx, meta.VisitorTID)，
+	// 返回值 7 词聚合 + error，调用点分别消费 error(r10/r11) 与 bool(0xa58)。
+	spaOnly, visitorTID, visitorNewTID, _, err := p.createVisitor(visitCtx, meta.VisitorTID)
+	if err != nil {
+		qrLogger.Warnf("微博扫码前访客态初始化失败，将继续生成登录二维码: %v", err)
+	} else if !spaOnly {
+		// 成品 disasm 证据（RunQRLogin @0xc60d00，非 spaOnly 成功路径 +0x3e5 分支）：
+		//   +0x1673 / +0x16f3 两次内联 firstNonEmpty：
+		//       meta.VisitorTID    = firstNonEmpty(s1, meta.VisitorTID)
+		//       meta.VisitorNewTID = firstNonEmpty(s2, meta.VisitorNewTID)
+		//   +0x172b time.Now -> meta.VisitorUpdatedAt；
+		//   +0x17ce writePrivateJSON（内联 saveCookieMeta(stateDir, meta)）。
+		// 这里**不** saveCookieState：createVisitor 写入的访客 Cookie 仍在 p.jar 中，
+		// 随后的登录 saveCookieState(+0x106f) 会 snapshot 整个 jar 一并落盘。
+		meta.VisitorTID = firstNonEmpty(visitorTID, meta.VisitorTID)
+		meta.VisitorNewTID = firstNonEmpty(visitorNewTID, meta.VisitorNewTID)
+		meta.VisitorUpdatedAt = time.Now()
+		if err := saveCookieMeta(stateDir, meta); err != nil {
+			qrLogger.Warnf("写入微博访客 Cookie 元信息失败: %v", err)
+		}
+	}
+	qrLogger.Debugf("微博访客态初始化完成: spaOnly=%v visitorTID=%s visitorNewTID=%s", spaOnly, maskSensitive(visitorTID), maskSensitive(visitorNewTID))
+
+	// 生成二维码：createQRCode 返回 weiboQRCode{Qrid, ImageURL, Data, Interval} + error。
+	// 成品 RunQRLogin(@qrlogin.go:30) 用 go-qrcode.WriteFile 把 data 渲染成 PNG：
+	// +0x6a0 createQRCode、+0x7b3 WriteFile(data, level=1(Medium), size=0x168=360, qrPath)、
+	// 失败报 "保存微博二维码失败: %w"(@0x10c56f9 len31)、成功 +0x88a os.Chmod(qrPath,0o600)、
+	// +0x920 printQRToConsole(data)（传入 data，不是 PNG 字节）。
+	qrCtx, qrCancel := weiboRequestContext()
+	defer qrCancel()
+	qr, err := p.createQRCode(qrCtx)
 	if err != nil {
 		return "", err
 	}
-	qrLogger.Infof("QRCode ready, qrid=%s", qrid)
-
-	rawCheck, err := pollQRCode(client, qrid)
-	if err != nil {
-		return "", err
+	qrPath := filepath.Join(stateDir, "weibo-qr.png")
+	if err := qrcode.WriteFile(qr.Data, qrcode.Medium, 360, qrPath); err != nil {
+		return "", fmt.Errorf("保存微博二维码失败: %w", err)
 	}
-
-	sub, err := finalizeLogin(client, rawCheck, opt.OutputDir)
-	if err != nil {
-		return "", err
-	}
-	return sub, nil
-}
-
-func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
-	cb := fmt.Sprintf("STK_%d", time.Now().UnixMilli())
-	params := url.Values{}
-	params.Set("entry", "miniblog")
-	params.Set("size", "180")
-	params.Set("callback", cb)
-
-	reqURL := qrImageURL + "?" + params.Encode()
-	req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
-	req.Header.Set("User-Agent", defaultUA)
-	req.Header.Set("Referer", defaultRefer)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-	m := jsonpRegex.FindStringSubmatch(string(body))
-	if len(m) < 2 {
-		return "", fmt.Errorf("unexpected response: %s", string(body))
-	}
-	var qrResp qrImageResp
-	if err := json.Unmarshal([]byte(m[1]), &qrResp); err != nil {
-		return "", err
-	}
-	if qrResp.Retcode != 20000000 {
-		return "", fmt.Errorf("qr image retcode=%d msg=%s", qrResp.Retcode, qrResp.Msg)
-	}
-	imageURL := qrResp.Data.Image
-	if !strings.HasPrefix(imageURL, "http") {
-		imageURL = "https:" + imageURL
-	}
-	// download image
-	imgReq, _ := http.NewRequest(http.MethodGet, imageURL, nil)
-	imgReq.Header.Set("User-Agent", defaultUA)
-	imgReq.Header.Set("Referer", defaultRefer)
-	imgResp, err := client.Do(imgReq)
-	if err != nil {
-		return "", err
-	}
-	defer imgResp.Body.Close()
-	imgData, _ := io.ReadAll(imgResp.Body)
-
-	imgPath := filepath.Join(opt.OutputDir, "weibo_debug.png")
-	if err := os.WriteFile(imgPath, imgData, 0o644); err != nil {
-		return "", err
-	}
-	printQRCode(imgData)
-	qrLogger.Infof("二维码已保存: %s (如控制台无法扫，请用此文件)", imgPath)
+	_ = os.Chmod(qrPath, 0o600)
+	defer func() {
+		if err := os.Remove(qrPath); err != nil && !os.IsNotExist(err) {
+			qrLogger.Debug("清理微博登录二维码失败")
+		}
+	}()
+	printQRToConsole(qr.Data)
 	if opt.AutoOpen {
-		_ = exec.Command("cmd", "/C", "start", imgPath).Start()
-	}
-	return qrResp.Data.Qrid, nil
-}
-
-func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
-	params := url.Values{}
-	params.Set("entry", "miniblog")
-	params.Set("source", "miniblog")
-	params.Set("url", qrLoginTarget)
-	params.Set("qrid", qrid)
-	params.Set("disp", "popup")
-	params.Set("rid", "")
-	params.Set("ver", "20250520")
-
-	for {
-		time.Sleep(2 * time.Second)
-		reqURL := qrCheckURL + "?" + params.Encode()
-		req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
-		req.Header.Set("User-Agent", defaultUA)
-		req.Header.Set("Referer", defaultRefer)
-		resp, err := client.Do(req)
-		if err != nil {
-			qrLogger.Debugf("轮询异常: %v", err)
-			continue
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		var c qrCheckResp
-		if err := json.Unmarshal(body, &c); err != nil {
-			qrLogger.Debugf("轮询解析失败: %v - %s", err, string(body))
-			continue
-		}
-
-		if rid, ok := c.Data["rid"].(string); ok && rid != "" {
-			params.Set("rid", rid)
-		}
-
-		switch c.Retcode {
-		case 20000000:
-			qrLogger.Info("扫码成功，等待登录完成")
-			return &c, nil
-		case 50114002:
-			// 静音轮询，避免刷屏
-		case 50114001:
-			// 静音轮询，避免刷屏
-		case 50114004:
-			return nil, fmt.Errorf("二维码已过期，请重试")
-		default:
-			qrLogger.Debugf("轮询状态: ret=%d msg=%s", c.Retcode, c.Msg)
+		if openErr := openQRImage(qrPath); openErr != nil {
+			qrLogger.Warnf("自动打开微博二维码失败，请手动打开二维码文件: %v", openErr)
 		}
 	}
-}
 
-func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (string, error) {
-	alt := extractALT(raw)
-	if alt == "" {
-		return "", fmt.Errorf("未能从响应中提取ALT/ticket")
+	// 轮询等待扫码确认：成品在 +0xcc5 用独立的 context.WithTimeout(cfg.GetWeiboQRLoginTimeout())
+	// 计时（不能用 protocolTimeout，否则扫码较慢时会被提前取消）；waitForQRCode 本身不读配置。
+	waitCtx, waitCancel := weiboQRLoginContext()
+	defer waitCancel()
+	// 成品 RunQRLogin.func2 @0xc69cc0 的回调只在内部由 retcode 算文本：
+	//   对 20000000 / 50114001 / 50114002 / 50114003 / 50114004 / 50114013-15 / 50114018
+	//   做与 qrStatusMessage 完全相同的 switch（c69dc8 起），convTstring 结果写入 "status" 字段；
+	//   回调第二参（waitForQRCode c5f102 传入的 rbx/rcx，即 checkQRCode 的 msg）从未被读取
+	//   （func2 只把 retcode 存到 0x28(%rsp)，rbx/rdi 存下后再无引用），
+	//   文本不来自服务端 msg。字段为 "retcode"(int64) + "status"(string)，
+	//   经 WithFields 后按 InfoLevel(0x4) 输出 "微博二维码轮询状态变化"(@0x10c8be7 len 33)。
+	onStatus := func(retcode int64, msg string) {
+		qrLogger.WithFields(logrus.Fields{
+			"retcode": retcode,
+			"status":  qrStatusMessage(retcode),
+		}).Info("微博二维码轮询状态变化")
 	}
-	qrLogger.Infof("提取到票据 ALT: %s", alt)
-
-	params := url.Values{}
-	params.Set("entry", "miniblog")
-	params.Set("source", "miniblog")
-	params.Set("type", "3")
-	params.Set("alt", alt)
-	params.Set("url", qrLoginTarget)
-	params.Set("disp", "popup")
-	params.Set("ver", "20250520")
-
-	loginURL := qrLoginURL + "?" + params.Encode()
-	req, _ := http.NewRequest(http.MethodGet, loginURL, nil)
-	req.Header.Set("User-Agent", defaultUA)
-	req.Header.Set("Referer", defaultRefer)
-
-	resp, err := client.Do(req)
+	checkResp, err := p.waitForQRCode(waitCtx, onStatus, qr)
 	if err != nil {
 		return "", err
 	}
-	resp.Body.Close()
-	qrLogger.Infof("登录完成，跳转: %s", resp.Request.URL.String())
+	// 成品 RunQRLogin +0xcb2：mapaccess1_faststr(@0x416400, Data @0x308(%rsp), "alt" @0x1098896 len3)
+	// 后做 string 类型断言（cmp @0xee7100）；只用 "alt"、无 ticket 回退。取不到即空串，
+	// 由 completeQRLogin 首行报 "微博扫码成功响应未包含 alt"。
+	alt, _ := checkResp.Data["alt"].(string)
 
-	sub := pickSUB(client, resp.Request.URL)
+	// 完成 SSO 登录并落盘状态（重新起算 protocolTimeout，避免扫码耗时计入）。
+	loginCtx, loginCancel := weiboProtocolContext()
+	defer loginCancel()
+	if _, err := p.completeQRLogin(loginCtx, alt); err != nil {
+		return "", err
+	}
+	refreshCtx, refreshCancel := weiboProtocolContext()
+	defer refreshCancel()
+	if err := p.refreshLoginCookies(refreshCtx); err != nil {
+		qrLogger.Error("微博 SSO 已执行但登录状态验证失败")
+	}
+	if err := saveCookieState(loginPath, p.userAgent, p.jar.snapshot()); err != nil {
+		qrLogger.Warnf("写入微博登录 Cookie 状态失败: %v", err)
+	}
+	meta, metaErr = loadCookieMeta(stateDir)
+	if metaErr != nil {
+		return "", metaErr
+	}
+	meta.LoginUpdatedAt = time.Now()
+	if err := saveCookieMeta(stateDir, meta); err != nil {
+		qrLogger.Warnf("写入微博登录 Cookie 元信息失败: %v", err)
+	}
+
+	weiboURL, _ := url.Parse("https://weibo.com/")
+	sub := cookieValueForURL(p.jar, weiboURL.String(), "SUB")
 	if sub == "" {
-		return "", fmt.Errorf("未找到SUB cookie")
+		return "", errors.New("未找到SUB cookie")
 	}
-	subPath := filepath.Join(outputDir, "weibo_sub.txt")
-	_ = os.WriteFile(subPath, []byte(sub), 0o644)
-	qrLogger.Infof("SUB 已保存到: %s", subPath)
-	if err := writeBackConfig(sub); err != nil {
-		qrLogger.Warnf("SUB 已获取，但写回配置失败: %v (请手动写入 application.yaml weibo.sub)", err)
-	} else {
-		qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
+	if !activateCookieJar(cookieModeLogin, p.jar, p.userAgent) {
+		return "", fmt.Errorf("微博 %s Cookie Jar 中没有可用 Cookie", cookieModeLogin)
 	}
+	qrLogger.Info("微博扫码登录成功，完整 Cookie Jar 已安全保存")
+	qrLogger.Infof("微博登录二维码已生成，请使用微博官方 App 扫码并确认")
+	qrLogger.Debugf("微博登录 Cookie 名称: %v", cookieNamesForURL(p.jar, weiboURL.String()))
 	return sub, nil
 }
 
-func extractALT(raw *qrCheckResp) string {
-	if raw == nil || raw.Data == nil {
-		return ""
-	}
-	if v, ok := raw.Data["alt"].(string); ok {
-		return v
-	}
-	if v, ok := raw.Data["ticket"].(string); ok {
-		return v
-	}
-	str := fmt.Sprintf("%v", raw.Data)
-	if m := altRegex.FindStringSubmatch(str); len(m) > 1 {
-		return m[1]
-	}
-	return ""
-}
-
-func pickSUB(client *http.Client, u *url.URL) string {
-	if client == nil || client.Jar == nil {
-		return ""
-	}
-	targets := []*url.URL{u}
-	if base, err := url.Parse("https://weibo.com"); err == nil {
-		targets = append(targets, base)
-	}
-	for _, t := range targets {
-		for _, c := range client.Jar.Cookies(t) {
-			if c.Name == "SUB" && c.Value != "" {
-				return c.Value
-			}
-		}
-	}
-	return ""
-}
-
-// printQRCode renders PNG QR to console; falls back silently on error.
-func printQRCode(imgData []byte) {
+// printQRToConsole 把二维码内容渲染到终端；失败时静默降级。
+// 成品符号证据：printQRToConsole(qrlogin.go:155, 1056 字节)，唯一调用方为 RunQRLogin。
+// 成品 callees：go-qrcode.New(content, level=1(Medium))、(*QRCode).Bitmap；
+// 每个 cell：true(黑块) 输出白底转义 "\x1b[48;5;7m  \x1b[0m"，
+// false(白块) 输出黑底转义 "\x1b[48;5;0m  \x1b[0m"，每行追加 '\n'（+0x29cc/+0x2a3d）。
+func printQRToConsole(content string) {
 	const (
 		black = "\033[48;5;0m  \033[0m"
 		white = "\033[48;5;7m  \033[0m"
 	)
-	img, err := png.Decode(bytes.NewReader(imgData))
+	q, err := qrcode.New(content, qrcode.Medium)
 	if err != nil {
-		qrLogger.Debugf("二维码控制台打印失败: %v", err)
+		qrLogger.Debug("生成微博终端二维码失败")
 		return
 	}
-	gray, ok := img.(*image.Gray)
-	if !ok {
-		qrLogger.Debug("二维码控制台打印失败: 非灰度图")
-		return
-	}
-	data := gray.Pix
-	bound := img.Bounds().Max.X
-	buf := make([]byte, 0, (bound*4+1)*bound)
-	i := 0
-	for y := 0; y < bound; y++ {
-		i = y * bound
-		for x := 0; x < bound; x++ {
-			if data[i] != 255 {
-				buf = append(buf, white...)
+	bitmap := q.Bitmap()
+	var buf bytes.Buffer
+	for _, row := range bitmap {
+		for _, cell := range row {
+			if cell {
+				buf.WriteString(white)
 			} else {
-				buf = append(buf, black...)
+				buf.WriteString(black)
 			}
-			i++
 		}
-		buf = append(buf, '\n')
+		buf.WriteByte('\n')
 	}
-	_, _ = colorable.NewColorableStdout().Write(buf)
+	_, _ = colorable.NewColorableStdout().Write(buf.Bytes())
 }
 
-// writeBackConfig writes SUB into application.yaml, touching only weibo.sub.
-func writeBackConfig(sub string) error {
-	cfgFile := config.GlobalConfig.ConfigFileUsed()
-	if cfgFile == "" {
-		cfgFile = "application.yaml"
+// openQRImage 用系统默认程序打开二维码图片。
+// 成品符号证据：openQRImage(qrlogin.go:180, 128 字节)，唯一调用方为 RunQRLogin。
+// [推断] 128 字节只够一次 exec.Command(...).Start()，这里按平台选择打开命令。
+func openQRImage(imgPath string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd", "/C", "start", "", imgPath)
+	case "darwin":
+		cmd = exec.Command("open", imgPath)
+	default:
+		cmd = exec.Command("xdg-open", imgPath)
 	}
-	data, err := os.ReadFile(cfgFile)
-	if err != nil {
-		return err
-	}
-
-	content := string(data)
-	lines := strings.Split(content, "\n")
-
-	// Line-by-line rewrite to avoid touching其他块
-	var out []string
-	inWeibo := false
-	indentWeibo := ""
-	inserted := false
-
-	for i, line := range lines {
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "weibo:") && !inWeibo {
-			inWeibo = true
-			indentWeibo = line[:strings.Index(line, "weibo:")]
-			out = append(out, line)
-			continue
-		}
-
-		if inWeibo {
-			// 退出 weibo 块：遇到非缩进行或空缩进变化
-			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
-				// 退出前若未插入sub则补一行
-				if !inserted {
-					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-					inserted = true
-				}
-				inWeibo = false
-			} else {
-				// 在 weibo 块内
-				subLineRe := regexp.MustCompile(`^\s*sub:\s*`)
-				if subLineRe.MatchString(line) {
-					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-					inserted = true
-					continue
-				}
-			}
-		}
-		out = append(out, line)
-
-		// 最后一行且在weibo块且未插入
-		if i == len(lines)-1 && inWeibo && !inserted {
-			out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-			inserted = true
-		}
-	}
-
-	if !inserted {
-		// 未找到 weibo 块，追加新块
-		if len(out) > 0 && out[len(out)-1] != "" {
-			out = append(out, "")
-		}
-		out = append(out, "weibo:")
-		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub))
-	}
-
-	return os.WriteFile(cfgFile, []byte(strings.Join(out, "\n")), 0o644)
+	return cmd.Start()
 }

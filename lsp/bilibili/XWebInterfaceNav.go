@@ -72,10 +72,46 @@ func signWbi(params map[string]string) map[string]string {
 	return params
 }
 
+// XWebInterfaceNav 请求 x/web-interface/nav。
+// login 为 true 时要求已配置 cookie 凭据，并把当前 VerifyInfo 一起下传。
+// 成品 XWebInterfaceNav(XWebInterfaceNav.go:75, @0xcedcc0) 反汇编（@0xcedcce..0xcedcf0）：
+//
+//	test al,al（@0xcedcce）→ 未登录直接走 verify=nil；
+//	登录时只读全局 0x1bcc298（atomicVerifyInfo.Load()）：rdx==nil（@0xcedce0）
+//	  或 cmpq $0x0,0x48(%rdx)（len(VerifyOpts)==0，@0xcedce5）→ 返回 (nil, ErrVerifyRequired)
+//	  （0x1b90e30/0x1b90e38 全局 error 接口，@0xcedcf0）；
+//	末尾 rax=login、rbx=verify 调 xWebInterfaceNav（@0xcedd18）。
+//
+// 即只判 cookie（VerifyOpts），不读 IsAccountGiven()；账号登录路径在 GetVerifyInfo 里先
+// SetVerify→newVerifyInfoWithCookies 写入 VerifyOpts 后才调 FreshSelfInfo，故不受影响。
 func XWebInterfaceNav(login bool) (*WebInterfaceNavResponse, error) {
-	if login && !IsVerifyGiven() {
+	if login && !IsCookieGiven() {
 		return nil, ErrVerifyRequired
 	}
+	var verify *VerifyInfo
+	if login {
+		verify = getVerify()
+	}
+	return xWebInterfaceNav(login, verify)
+}
+
+// xWebInterfaceNavWithVerify 带 verify 参数的 nav 请求。
+// 成品 xWebInterfaceNavWithVerify(XWebInterfaceNav.go:86, @0xcedd40) 反汇编：
+//
+//	test rax,rax / cmpq $0,0x48(rax) → nil 或 VerifyOpts 为空即 ErrVerifyRequired；
+//	否则 mov rax,rbx; mov $1,eax; call xWebInterfaceNav（login=true, verify=入参）。
+func xWebInterfaceNavWithVerify(verify *VerifyInfo) (*WebInterfaceNavResponse, error) {
+	if verify == nil || len(verify.VerifyOpts) == 0 {
+		return nil, ErrVerifyRequired
+	}
+	return xWebInterfaceNav(true, verify)
+}
+
+// xWebInterfaceNav 是 nav 请求的公共实现：login 为 true 且 verify 非空时附带其 VerifyOpts。
+// 成品 xWebInterfaceNav(:93, @0xcedda0) 反汇编：入参 al=login、rbx=verify；
+// movzbl 0x120(%rsp),%eax / test al,al → 非登录跳过；再 test verify,verify → nil 跳过；
+// 仅两者同时成立才追加 verify.VerifyOpts（+0x40 ptr/+0x48 len append）。
+func xWebInterfaceNav(login bool, verify *VerifyInfo) (*WebInterfaceNavResponse, error) {
 	st := time.Now()
 	defer func() {
 		ed := time.Now()
@@ -88,8 +124,8 @@ func XWebInterfaceNav(login bool) (*WebInterfaceNavResponse, error) {
 		AddUAOption(),
 		delete412ProxyOption,
 	}
-	if login && getVerify() != nil {
-		opts = append(opts, getVerify().VerifyOpts...)
+	if login && verify != nil {
+		opts = append(opts, verify.VerifyOpts...)
 	}
 	xwin := new(WebInterfaceNavResponse)
 	err := requests.Get(path, nil, xwin, opts...)

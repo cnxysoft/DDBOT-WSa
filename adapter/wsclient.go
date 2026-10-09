@@ -52,8 +52,8 @@ const (
 	// 动态写入超时计算参数（参考 NapCat/LLOneBot 实现）
 	// 公式: baseTimeout + (dataSizeBytes / 1024 / speedKBps * 1000)
 	writeWaitBase    = 10 * time.Second // 基础超时 10s
-	writeWaitSpeedKB = 256             // 假设传输速率 256 KB/s（与 NapCat 一致）
-	writeWaitMax      = 30 * time.Minute // 最大超时 30min（与 NapCat 一致）
+	writeWaitSpeedKB = 256              // 假设传输速率 256 KB/s（与 NapCat 一致）
+	writeWaitMax     = 30 * time.Minute // 最大超时 30min（与 NapCat 一致）
 )
 
 type WSResponse struct {

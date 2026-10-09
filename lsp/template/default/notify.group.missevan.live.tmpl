@@ -1,0 +1,10 @@
+{{ if .living -}}
+{{ .name }}正在猫耳FM直播【{{ .title }}】
+{{ pic .cover "[封面]" -}}
+{{ .url -}}
+{{- else -}}
+{{ .name }}的猫耳FM直播结束了
+{{ pic .cover "[封面]" -}}
+{{ .url -}}
+{{- end -}}
+

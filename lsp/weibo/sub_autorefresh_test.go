@@ -13,8 +13,8 @@ func TestGetWeiboAutoRefresh(t *testing.T) {
 	resetConfig := useTestConfigForAutoRefresh(t)
 	defer resetConfig()
 
-	// 默认应该是 false
-	assert.False(t, cfg.GetWeiboAutoRefresh())
+	// 成品 cfg.GetWeiboAutoRefresh @0xae8d60：未配置 weibo.autorefresh 时默认 true
+	assert.True(t, cfg.GetWeiboAutoRefresh())
 
 	// 设置为 true
 	miraiConfig.GlobalConfig.Set("weibo.autorefresh", true)

@@ -530,8 +530,8 @@ func (n *CookieAlertNotify) ToMessage() *mmsg.MSG {
 	if n.IsRecovery {
 		m.Textf("\n✓ Cookie已自动恢复，订阅推送将正常工作")
 	} else {
-		m.Textf("\n⚠ Cookie获取失败，微博订阅可能无法正常推送")
-		m.Textf("\nBot会继续自动重试，无需手动操作")
+		m.Textf("\nCookie获取失败，微博订阅可能无法正常推送")
+		m.Textf("\nBot会继续自动重试；登录态彻底失效时需要重新扫码确认")
 	}
 	return m
 }
@@ -579,12 +579,11 @@ func (n *SUBExpiredNotify) Logger() *logrus.Entry {
 func (n *SUBExpiredNotify) ToMessage() *mmsg.MSG {
 	m := mmsg.NewMSG()
 	m.Textf("[微博SUB过期告警]")
-	m.Textf("\n⚠ 检测到微博 SUB（登录凭证）可能已过期")
+	m.Textf("\n检测到微博 SUB（登录凭证）可能已过期")
 	m.Textf("\n微博订阅推送可能无法正常工作")
-	m.Textf("\n请管理员手动重新登录获取新的 SUB")
-	m.Textf("\n可通过以下方式获取：")
-	m.Textf("\n1. 启用 weibo.qrlogin 扫码登录")
-	m.Textf("\n2. 手动配置 weibo.sub")
+	m.Textf("\n当前协议没有可在登录彻底失效后静默重建会话的刷新令牌")
+	m.Textf("\n请启用 weibo.qrlogin，重启后使用微博官方 App 重新扫码确认")
+	m.Textf("\nDDBOT 会保存完整 Cookie Jar，不需要把 Cookie 写回 application.yaml")
 	return m
 }
 

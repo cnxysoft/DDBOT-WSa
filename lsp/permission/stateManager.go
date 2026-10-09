@@ -8,6 +8,7 @@ import (
 
 	"github.com/Sora233/MiraiGo-Template/utils"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
@@ -36,6 +37,40 @@ func (c *StateManager) AddBlockList(caller int64, d time.Duration) error {
 func (c *StateManager) DeleteBlockList(caller int64) error {
 	_, err := c.Delete(c.BlockListKey(caller))
 	return err
+}
+
+// CheckGroupBlocked 判断群是否处于屏蔽状态。
+// 显式加入 BlockList 的群一定被屏蔽；否则当配置 bot.defaultBlockAllGroups 为 true 时，
+// 未出现在 GroupUnblocked 放行名单里的群都视为屏蔽。
+func (c *StateManager) CheckGroupBlocked(groupCode int64) bool {
+	if groupCode <= 0 {
+		return false
+	}
+	if c.CheckBlockList(groupCode) {
+		return true
+	}
+	if !cfg.GetDefaultBlockAllGroups() {
+		return false
+	}
+	return !c.Exist(c.GroupUnblockedKey(groupCode))
+}
+
+// BlockGroup 屏蔽群，d 为屏蔽时长（0 表示永久）。
+func (c *StateManager) BlockGroup(groupCode int64, d time.Duration) error {
+	return c.AddBlockList(groupCode, d)
+}
+
+// UnblockGroup 解除群屏蔽：清除显式 BlockList 记录并把群加入放行名单。
+// 群不处于屏蔽状态时返回 buntdb.ErrNotFound。
+func (c *StateManager) UnblockGroup(groupCode int64) error {
+	if !c.CheckGroupBlocked(groupCode) {
+		return buntdb.ErrNotFound
+	}
+	_, err := c.Delete(c.BlockListKey(groupCode), localdb.IgnoreNotFoundOpt())
+	if err != nil {
+		return err
+	}
+	return c.Set(c.GroupUnblockedKey(groupCode), "")
 }
 
 func (c *StateManager) CheckRole(caller int64, role RoleType) bool {
@@ -201,16 +236,33 @@ func (c *StateManager) CheckGroupAdministrator(groupCode int64, caller int64) bo
 		"GroupCode": groupCode,
 		"Caller":    caller,
 	})
-	groupInfo := localutils.GetBot().FindGroup(groupCode)
+	if groupCode <= 0 || caller <= 0 {
+		// 成品 x64 0xb8ba60：先判 groupCode/caller 有效性，无效直接 Error 返回 false。
+		log.Error("invalid group or member id")
+		return false
+	}
+	// 成品 x64 0xb8ba60 callees 含 utils.(*HackedBot).EnsureGroup（+0x200），
+	// 不是 FindGroup；EnsureGroup 缺失时会实时拉取群资料。
+	groupInfo, err := localutils.GetBot().EnsureGroup(groupCode)
 	log.Debugf("获取到的groupInfo: %v\n", groupInfo)
-	if groupInfo == nil {
+	if err != nil || groupInfo == nil {
+		if err != nil {
+			// 成品 x64 0xb8bcdc：WithField("error", err) + Error("query group info failed")。
+			log = log.WithField("error", err)
+			log.Error("query group info failed")
+		}
 		log.Errorf("nil group info")
 		return false
 	}
 	log = log.WithField("GroupName", groupInfo.Name)
-	groupMemberInfo := groupInfo.FindMember(caller)
-	if groupMemberInfo == nil {
-		//没有找到群成员信息
+	// 成品 x64 0xb8cda0 callees 含 RefreshGroupMember（+0x4f6），
+	// 强制刷新群成员资料后再判断角色，而不是读本地缓存 FindMember。
+	groupMemberInfo, err := localutils.GetBot().RefreshGroupMember(groupCode, caller)
+	if err != nil || groupMemberInfo == nil {
+		if err != nil {
+			log = log.WithField("error", err)
+			log.Error("realtime member role query failed")
+		}
 		log.Errorf("nil member info")
 		return false
 	}
@@ -385,18 +437,20 @@ func (c *StateManager) RemoveAllByGroupCode(groupCode int64) ([]string, error) {
 		c.GroupPermissionKey(),
 		c.PermissionKey(),
 		c.GroupEnabledKey(),
+		c.GroupUnblockedKey(),
 	}
 	var prefixKey = []string{
 		c.GroupPermissionKey(groupCode),
 		c.PermissionKey(groupCode),
 		c.GroupEnabledKey(groupCode),
+		c.GroupUnblockedKey(groupCode),
 	}
 	return localdb.RemoveByPrefixAndIndex(prefixKey, indexKey)
 }
 
 func (c *StateManager) FreshIndex() {
 	// Build indices for the namespace this StateManager is configured with
-	for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
+	for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey, c.GroupUnblockedKey} {
 		c.CreatePatternIndex(pattern, nil)
 	}
 	for _, group := range localutils.GetBot().GetGroupList() {

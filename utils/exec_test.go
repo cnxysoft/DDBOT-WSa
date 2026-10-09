@@ -2,12 +2,12 @@ package utils
 
 import (
 	"fmt"
+	"golang.org/x/text/encoding/simplifiedchinese"
 	"os"
 	"os/exec"
 	"runtime"
 	"testing"
 	"time"
-	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 func TestExecWithRunas(t *testing.T) {
@@ -26,27 +26,27 @@ func TestExecWithRunas(t *testing.T) {
 	t.Run("执行简单命令", func(t *testing.T) {
 		// 使用 runas 执行 whoami 命令
 		cmd := exec.Command("runas", "/trustlevel:0x20000", "whoami")
-		
+
 		// 设置一个超时时间，避免命令卡住
 		timer := time.AfterFunc(5*time.Second, func() {
 			cmd.Process.Kill()
 		})
 		defer timer.Stop()
-		
+
 		output, err := cmd.CombinedOutput()
-		
+
 		// 处理 Windows 中文编码问题
 		if runtime.GOOS == "windows" {
 			if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
 				output = decoded
 			}
 		}
-		
+
 		fmt.Printf("runas whoami 输出: %s\n", string(output))
 		if err != nil {
 			fmt.Printf("runas whoami 错误: %v\n", err)
 		}
-		
+
 		// 检查是否有任何输出
 		if len(output) > 0 {
 			t.Logf("runas 命令产生了输出: %s", string(output))
@@ -64,27 +64,27 @@ func TestExecWithRunas(t *testing.T) {
 		}
 
 		cmd := exec.Command("runas", "/trustlevel:0x20000", notepadPath)
-		
+
 		// 设置一个超时时间，避免命令卡住
 		timer := time.AfterFunc(5*time.Second, func() {
 			cmd.Process.Kill()
 		})
 		defer timer.Stop()
-		
+
 		output, err := cmd.CombinedOutput()
-		
+
 		// 处理 Windows 中文编码问题
 		if runtime.GOOS == "windows" {
 			if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
 				output = decoded
 			}
 		}
-		
+
 		fmt.Printf("runas notepad 输出: %s\n", string(output))
 		if err != nil {
 			fmt.Printf("runas notepad 错误: %v\n", err)
 		}
-		
+
 		// 检查是否有任何输出
 		if len(output) > 0 {
 			t.Logf("runas notepad 命令产生了输出: %s", string(output))
@@ -101,27 +101,27 @@ func TestExecWithRunas(t *testing.T) {
 		}
 
 		cmd := exec.Command("runas", "/user:Administrator", "whoami")
-		
+
 		// 设置一个超时时间，避免命令卡住
 		timer := time.AfterFunc(5*time.Second, func() {
 			cmd.Process.Kill()
 		})
 		defer timer.Stop()
-		
+
 		output, err := cmd.CombinedOutput()
-		
+
 		// 处理 Windows 中文编码问题
 		if runtime.GOOS == "windows" {
 			if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
 				output = decoded
 			}
 		}
-		
+
 		fmt.Printf("runas /user:Administrator whoami 输出: %s\n", string(output))
 		if err != nil {
 			fmt.Printf("runas /user:Administrator whoami 错误: %v\n", err)
 		}
-		
+
 		// 检查是否有任何输出
 		if len(output) > 0 {
 			t.Logf("runas /user:Administrator whoami 命令产生了输出: %s", string(output))
@@ -129,31 +129,31 @@ func TestExecWithRunas(t *testing.T) {
 			t.Log("runas /user:Administrator whoami 命令没有产生输出")
 		}
 	})
-	
+
 	// 测试用例4：测试 runas 执行 cmd 命令
 	t.Run("执行cmd命令", func(t *testing.T) {
 		cmd := exec.Command("runas", "/trustlevel:0x20000", "cmd /c echo Hello World")
-		
+
 		// 设置一个超时时间，避免命令卡住
 		timer := time.AfterFunc(5*time.Second, func() {
 			cmd.Process.Kill()
 		})
 		defer timer.Stop()
-		
+
 		output, err := cmd.CombinedOutput()
-		
+
 		// 处理 Windows 中文编码问题
 		if runtime.GOOS == "windows" {
 			if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(output); err == nil {
 				output = decoded
 			}
 		}
-		
+
 		fmt.Printf("runas cmd /c echo Hello World 输出: %s\n", string(output))
 		if err != nil {
 			fmt.Printf("runas cmd /c echo Hello World 错误: %v\n", err)
 		}
-		
+
 		// 检查是否有任何输出
 		if len(output) > 0 {
 			t.Logf("runas cmd /c echo Hello World 命令产生了输出: %s", string(output))

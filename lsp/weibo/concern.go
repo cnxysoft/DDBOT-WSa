@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/utils"
@@ -23,6 +24,8 @@ var logger = utils.GetModuleLogger("weibo-concern")
 type Concern struct {
 	*StateManager
 	cacheStartTs int64
+	authStop     chan struct{}
+	authStopOnce sync.Once
 }
 
 func (c *Concern) Site() string {
@@ -47,6 +50,19 @@ func (c *Concern) Start() error {
 	isAPI := cfg.IsWeiboAPIMode()
 	sub := ""
 
+	// CookieCloud 模式：配置不完整时直接关闭微博模块（成品 Start 行为）。
+	// 配置有效时由本函数用同一份 cfg 启动 CookieCloud 刷新器
+	// （成品 Start.gowrap1 concern.go:90），使 loadWeiboCookieCloudConfig 的
+	// 直接调用者收敛为 Start 与 ForceFreshCookie 两处。
+	if isWeiboCookieCloudMode() {
+		cloudCfg, err := loadWeiboCookieCloudConfig()
+		if err != nil {
+			logger.Error("微博 Cookie来源已设为 CookieCloud，但配置不完整，已关闭微博模块")
+			return nil
+		}
+		go c.refreshWeiboCookieCloud(cloudCfg)
+	}
+
 	// API 模式：直接使用外部 API 获取数据，无需 Cookie
 	if isAPI {
 		apiURL := cfg.GetWeiboAPIModeBaseURL()
@@ -55,8 +71,11 @@ func (c *Concern) Start() error {
 			return nil
 		}
 		logger.Info("微博运行模式：API 模式，将使用外部 API 获取数据")
-	} else if !isGuest {
+	} else if isGuest {
+		logger.Info("微博运行模式：访客临时 Cookie（纯 HTTP）")
+	} else {
 		// Login 模式：检查 cookie、autorefresh 或扫码登录
+		logger.Info("微博运行模式：账号登录 Cookie（纯 HTTP）")
 		sub = GetSettingCookie()
 		if sub == "" {
 			// 如果启用了 autorefresh，尝试从 API 获取初始 SUB（仅内存使用）
@@ -98,7 +117,7 @@ func (c *Concern) Start() error {
 
 			// 如果仍然没有 SUB，模块关闭
 			if sub == "" {
-				logger.Warn("微博 Cookie 未设置，将关闭微博推送功能。可开启 weibo.qrlogin 扫码或配置 weibo.autorefresh + cookieRefreshAPI 自动获取。")
+				logger.Warn("微博登录 Cookie 不可用且扫码登录已禁用，将关闭微博推送功能")
 				return nil
 			}
 		}
@@ -125,7 +144,10 @@ func (c *Concern) Start() error {
 	// 启动时立即刷新一次 Cookie（配置已加载，可以正确判断模式）
 	if !isAPI {
 		cookieHealthy.Store(false)
-		ForceFreshCookie()
+		if !ForceFreshCookie() && isGuest {
+			logger.Warn("微博访客临时 Cookie 初始化失败，将关闭微博推送功能")
+			return nil
+		}
 	}
 
 	if !isGuest && !isAPI {
@@ -175,7 +197,15 @@ func (c *Concern) Start() error {
 	// Login/Guest 模式每小时刷新 Cookie（API 模式不需要）
 	if !isAPI {
 		go func() {
-			for range time.Tick(time.Hour) {
+			// 成品证据：(*Concern).Start.func1(concern.go:133) 调用
+			// cfg.GetWeiboGuestRefreshInterval()（默认1h，钳制 [10m,24h]）；
+			// 登录态刷新间隔由 cfg.GetWeiboLoginRefreshInterval()（默认30m）控制。
+			for {
+				interval := cfg.GetWeiboGuestRefreshInterval()
+				if !isGuest {
+					interval = cfg.GetWeiboLoginRefreshInterval()
+				}
+				time.Sleep(interval)
 				freshCookieOpt(sub)
 			}
 		}()
@@ -226,6 +256,13 @@ func (c *Concern) Stop() {
 
 	// 停止 Cookie 监控
 	StopCookieRefreshMonitor()
+
+	// 停止登录 Cookie 心跳（成品 Stop 用 authStopOnce.Do(close(authStop))）
+	c.authStopOnce.Do(func() {
+		if c.authStop != nil {
+			close(c.authStop)
+		}
+	})
 
 	// 停止 SUB 自动刷新
 	StopSubAutoRefresh()
@@ -535,6 +572,7 @@ func (c *Concern) FindOrLoadUserInfo(uid int64) (*UserInfo, error) {
 func NewConcern(notify chan<- concern.Notify) *Concern {
 	c := &Concern{
 		StateManager: NewStateManager(notify),
+		authStop:     make(chan struct{}),
 	}
 	return c
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/admin"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 
@@ -26,15 +27,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	_ "github.com/cnxysoft/DDBOT-WSa/logging"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/xhh"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/xhs"
-	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
 )
 
@@ -123,6 +116,9 @@ func Run() {
 			db.Close()
 		})
 	}
+	// 输出本次站点模块启动计划
+	logSiteStartupPlan()
+
 	// 快速初始化
 	bot.Init()
 
@@ -143,30 +139,92 @@ func Run() {
 	bot.Stop()
 }
 
+// logSiteStartupPlan 输出本次站点模块启动计划，便于确认 sites.enabled 配置是否生效。
+//
+// 逐条对齐成品 main.logSiteStartupPlan（x64 0xdaed80, 1312B）：
+//   - 头部/尾部横幅恒输出；
+//   - "计划启动的站点模块"（enabled_sites）在成品内联汇编中无 len 判断，恒输出；
+//   - disabled_sites / unknown_sites 仅 len>0 时输出；
+//   - "未配置 sites.enabled..." 使用 Info 级别（成品汇编 level=4）。
+func logSiteStartupPlan() {
+	enabled, disabled, unknown, configured := concern.StartupSiteSelection()
+	logrus.Info("========== 站点模块启动配置 ==========")
+	logrus.WithField("enabled_sites", enabled).Info("计划启动的站点模块")
+	if len(disabled) > 0 {
+		logrus.WithField("disabled_sites", disabled).Info("已停用的站点模块")
+	}
+	if len(unknown) > 0 {
+		logrus.WithField("unknown_sites", unknown).Warn("sites.enabled 中存在不支持的站点名称")
+	}
+	if !configured {
+		logrus.Info("未配置 sites.enabled，按兼容模式启动全部站点模块")
+	}
+	if cfg.GetDefaultBlockAllGroups() {
+		logrus.Info("群交互策略：默认全部block；管理员私聊 /block 群号 -d 后放行")
+	} else {
+		logrus.Info("群交互策略：默认允许；仅手动block的群不响应")
+	}
+	if cfg.IsAtAllRemainingLimiterEnabled() {
+		logrus.WithFields(logrus.Fields{
+			"remaining_threshold":    cfg.GetAtAllRemainingThreshold(),
+			"bilibili_uid_whitelist": cfg.GetAtAllBilibiliUIDWhitelist(),
+		}).Info("atAll账号剩余次数限制已启用")
+	} else {
+		logrus.Info("未配置 atAll，账号剩余次数限制未启用")
+	}
+	logrus.Info("======================================")
+}
+
 var exampleConfig = func() string {
 	s := `
 ### 注意，填写时请把井号及后面的内容删除，并且冒号后需要加一个空格
 bot:
+  # true（默认）：所有群默认处于block状态，不响应群指令、链接解析和群事件模板；
+  # 主动的直播/动态推送不受影响。管理员私聊 /block 群号 -d 可放行指定群。
+  # false：恢复旧版行为，未手动block的群默认可响应。
+  defaultBlockAllGroups: true
   onJoinGroup: 
     rename: "【bot】"   # BOT 进群后自动改名，默认改名为"【bot】"，如果留空则不自动改名
-  sendFailureReminder: # 失败提醒：发送失败达到一定次数后触发 notify.bot.send_failed.tmpl 模板
-    enable: false      # 是否启用失败提醒
-    times: 3           # 失败次数阈值
   offlineQueue:   # 离线缓存：BOT 离线时暂存要发送的消息，上线后重新发送（期间不能重启 DDBOT）
     enable: false # 是否启用离线缓存
     expire: 30m   # 离线消息有效期
+  imageSend:      # OneBot图片发送方式；修改后重启DDBOT
+    mode: auto    # auto保持原方式；可切换 url（网络地址）/ base64 / file（本地临时文件）
+    timeout: 30s  # base64/file模式下载网络图片的超时
+    tempDir: ".image-send" # file模式临时目录；DDBOT与OneBot需在同一台机器或共享此路径
 
-# 初次运行时将不使用 b 站帐号方便进行测试
-# 如果不使用 b 站帐号，则推荐订阅数不要超过 5 个，否则推送延迟将上升
-# b 站相关的功能推荐配置一个 b 站账号，建议使用小号
+sites:
+  # 本版本支持 B站、抖音、微博、猫耳FM。默认只启动B站；需要时加入 douyin / weibo / missevan，修改后重启。
+  enabled:
+    - bilibili
+
+# B站直播和动态必须登录后使用，不再提供无Cookie慢速轮询。
+# 登录方式二选一：qrcode 扫码/手填Cookie，或 cookiecloud。
+# b 站相关的功能建议使用小号
 # bot 将使用您 b 站帐号的以下功能：
 # 关注用户 / 取消关注用户 / 查看关注列表
 # 请注意，订阅一个账号后，此处使用的 b 站账号将自动关注该账号
 bilibili:
-  SESSDATA: # 你的 b 站 cookie
+  cookieMode: qrcode # Cookie来源：qrcode（默认扫码/兼容手填Cookie）或 cookiecloud
+  cookieCloud:       # 仅 cookieMode: cookiecloud 时生效；客户端只下载并在本地解密，不会上传Cookie
+    endpoint:        # CookieCloud服务端地址，例如 https://cookie.example.com；部署在子目录时需包含子目录
+    uuid:            # CookieCloud浏览器插件中配置的UUID
+    password:        # CookieCloud浏览器插件中配置的端到端加密密码
+    interval: 10m    # 启动时立即获取，此后定时获取；最小1m，未配置默认10m
+    timeout: 15s     # 单次请求超时，未配置默认15s
+    cryptoType: auto # auto（推荐，读取服务端标记）、legacy 或 aes-128-cbc-fixed
+  SESSDATA: # 你的 b 站 cookie；扫码后可能显示为逗号连接的三段，这是一个完整值，请勿拆分
   bili_jct: # 你的 b 站 cookie
-  qrlogin: true # 是否启用二维码登录（Cookies 失效时只需要清空 SESSDATA 和 bili_jct 重启即可再次登录）
-  interval: 25s # 直播状态和动态检测间隔，过快可能导致 ip 被暂时封禁
+  DedeUserID: # 扫码登录时自动保存；与 SESSDATA、bili_jct 同时完整才会覆盖旧登录信息
+  ac_time_value: # 扫码接口返回的网页 refresh token，自动保存
+  qrlogin: true # qrcode模式下允许管理员确认后生成二维码；程序不会主动生成
+  interval: 25s # 未单独配置动态探测间隔时沿用；也用于部分首次直播状态加载
+  dynamic:
+    probeInterval: 3    # 网页新版增量探测秒数；1就是1秒，0/未配置时沿用上面的interval
+    jitter: 0s          # 每轮随机抖动；追求固定3秒探测时保持0s
+    maxBackoff: 15m     # 网络错误、5xx或风控后的最大退避时间
+    reconcileInterval: 1m # 即使增量计数为0，也定期拉一次列表兜底；最小30s，默认1m
+    seenLimit: 5000     # 内存中保留的最近动态ID数量，用于本轮幂等去重
   imageMergeMode: "auto" # 设置图片合并模式，支持 "auto" / "only9" / "off"
                           # auto 为默认策略，存在比较刷屏的图片时会合并
                           # only9 表示仅当恰好是 9 张图片的时候合并
@@ -176,157 +234,100 @@ bilibili:
   minFollowerCap: 0        # 设置订阅的 b 站用户需要满足至少有多少个粉丝，默认为 0，设为 -1 表示无限制
   disableSub: false        # 禁止 ddbot 去 b 站关注帐号，这意味着只能订阅帐号已关注的用户，或者在 b 站手动关注
   onlyOnlineNotify: false  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+  disableCookieAlert: false # 设为 true 可关闭 B站 Cookie 异常/恢复告警；接收目标复用 /config weibo_alert 配置
   autoParsePosts: false    # 自动解析专栏，将发送专栏动态改为发送专栏内容
   secAnalysis: false        # 是否开启动态二次解析，默认关闭
 
-# A 站相关的功能推荐配置一个 b 站账号，建议使用小号
-# bot 将使用您 A 站帐号的以下功能（订阅动态时）：
-# 关注用户 / 取消关注用户 / 查看关注列表
-# 请注意，订阅一个账号后，此处使用的 A 站账号将自动关注该账号
-# authKey 和 acPassToken 用于 ACFUN API 认证，与 account/password 不同
-# 通常只需要 account + password 即可，authKey/acPassToken 为可选的高级配置
-acfun:
-  account:
-  password:
-  authKey:          # ACFUN authKey（可选）
-  acPassToken:      # ACFUN acPassToken（可选）
-  unsub: false
-  interval: 25s
-  onlyOnlineNotify: false
-
-# Twitter 推送支持两种模式：
-# 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
-# 2. api 模式：使用 Twitter API，需要配置 cookie 和 Bearer Token
-# 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
-
-# mirror 模式配置
-# 支持使用多个 nitter 镜像，默认使用官方镜像（第三方镜像可能有额外校验）
-# 使用 lightbrd 镜像请自行先访问 https://lightbrd.com/进行 cookies 的获取
-# 填入你访问网站时提交的 user_agent，可在浏览器中查看
-# 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
-twitter:
-  mode: mirror  # 模式选择：mirror（默认）或 api
-  baseUrl:     # mirror 模式下的 nitter 镜像列表
-    - "https://nitter.net/"
-    - "https://nitter.privacyredirect.com/"
-    - "https://nitter.tiekoetter.com/"
-    - "https://nitter.poast.org/"
-    - "https://nitter.catsarch.com/"
-  interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
-  userAgent:      # 浏览器 User-Agent
-  unsub: false    # 是否自动取消关注（当取消订阅时）
-
-  # api 模式配置（mode: api 时生效）
-  # 以下字段用于 Twitter API 认证，需要真实账号的 cookies
-  # auth_token 和 ct0：登录 Twitter 后在 cookie 中获取
-  # bearerToken：Twitter API Bearer Token（可从 dev.twitter.com 获取或通过 main.js 自动获取）
-  # queryId：搜索 API 的 queryId（可通过 main.js 自动获取或使用默认配置）
-  # screenName：Twitter 账号的用户名（可选，自动获取时会填充）
-  # 注意：api 模式需要高信誉账号，否则可能被风控
-  auth_token:   # Twitter auth_token cookie
-  ct0:          # Twitter ct0 cookie
-  bearerToken:  # Twitter Bearer Token
-  queryId:      # Twitter 搜索 API queryId
-  screenName:   # Twitter 账号 screen_name（可选） 
-
-# 抖音直播推送（测试）
-# 需要手动访问 www.douyin.com 并填入__ac_signature 和__ac_nonce、sessionId 共三个 cookies 和你的浏览器 UA
+# 抖音直播与作品推送（仅在 sites.enabled 中加入 douyin 后启动）
 douyin:
-  acSignature: 
-  acNonce: 
-  sessionId: 
-  userAgent: 
-  interval: 30s
+  cookieMode: qrcode # Cookie来源：qrcode（默认扫码/兼容手填及状态文件）或 cookiecloud
+  cookieCloud:       # 仅 cookieMode: cookiecloud 时生效，可填写与B站相同的CookieCloud服务配置
+    endpoint:        # CookieCloud服务端地址，例如 https://cookie.example.com；部署在子目录时需包含子目录
+    uuid:            # CookieCloud浏览器插件中配置的UUID
+    password:        # CookieCloud浏览器插件中配置的端到端加密密码
+    interval: 10m    # 启动时立即获取，此后定时获取；最小1m，未配置默认10m
+    timeout: 15s     # 单次请求超时，未配置默认15s
+    cryptoType: auto # auto（推荐，读取服务端标记）、legacy 或 aes-128-cbc-fixed
+  cookie:             # 推荐：浏览器开发者工具复制的完整 Cookie；留空时默认尝试纯HTTP扫码
+  userAgent:          # Cookie对应浏览器的User-Agent；留空使用内置稳定UA
+  qrlogin: true       # 没有可用Cookie时允许管理员私聊回复“生成 抖音”后生成二维码；不会主动生成
+  qrloginTimeout: 3m  # 扫码等待时间
+  stateFile: ".douyin-state/cookies.json" # 扫码取得的完整Cookie Jar，权限限制为仅当前用户读取
+  requestTimeout: 15s # 单次抖音HTTP请求超时
+  liveInterval: 30s   # 直播状态轮询间隔
+  newsInterval: 2m    # 作品列表轮询间隔；作品接口更易风控，建议不要低于1m
+  requestSpacing: 2s  # 所有抖音请求严格串行，且相邻请求至少间隔此时长；同一主播跨群每轮只请求一次
+  # interval: 30s     # 旧版兼容项；仅当 liveInterval/newsInterval 未配置时作为共同间隔
+  notLiveConfirmTimes: 3 # 连续确认多少次下播才推送，避免单次接口抖动误报
   onlyOnlineNotify: false
+  disableCookieAlert: false # true时关闭抖音Cookie异常/恢复告警
+  linkParse: false      # 默认关闭；需要时改为true，自动解析群聊/私聊中的抖音链接
+  linkParsePrivate: true # 是否同时解析私聊中的抖音链接
+  linkParseGroupWhitelist: [] # 可解析的QQ群号；与用户白名单均为空时不限制
+  linkParseUserWhitelist: []  # 可触发解析的QQ号；群聊满足“群或用户任一白名单”即可，私聊只看此项
+  linkParseSendVideo: true # 视频作品除文字和封面外，再单独发送视频；失败不影响前一条解析结果
+  linkParseMaxImages: 9 # 图文最多取多少张；1张普通发送，大于1张强制使用合并转发，最高20
+  linkParseDedup: 1m   # 同一群/私聊重复链接的去重时间，避免重复下载和发送
+  # 以下三项仅兼容旧配置，不建议新部署继续使用：
+  # acSignature:
+  # acNonce:
+  # sessionId:
 
-# weibo 推送暂时需要设置 Cookie 才会启动。
+# 猫耳FM直播与新声音推送（在 sites.enabled 中加入 missevan 后启动；无需登录或Cookie）
+missevan:
+  liveInterval: 15s     # 直播状态检查间隔，最低5秒
+  newsInterval: 30s     # 新声音检查间隔，最低10秒
+  profileInterval: 30m  # 个人资料和直播间号复查间隔，最低1分钟
+  requestSpacing: 500ms # 猫耳FM请求严格串行，相邻请求最小间隔
+  requestTimeout: 15s   # 单次请求超时
+
+# 微博推送
 weibo:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
   mode: guest             # weibo 运行模式，可选 guest / login / api
-                          # guest: 访客模式，自动生成临时 Cookie
-                          # login: 登录模式，需要配置 sub 或启用 qrlogin/autorefresh
-                          # api: API 模式，从外部 API 自动获取 Cookie（推荐，但当出现api获取到的sub无法使用时请尝试使用login模式并开启autorefresh）
-  interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
-  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时可选）。
-  qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
-  autorefresh: false      # 是否启用 SUB 自动刷新（mode: login/api 时有效）
-                          # 启用后：1) 启动时若 sub 为空则从 API 获取初始化（仅内存）
-                          #      2) 每小时检查 SUB 是否变化，不同则自动替换（仅内存）
-                          #      3) 只使用 SUB + XSRF-TOKEN，丢弃其他可能无效的字段
-                          #      4) 需要配合 cookieRefreshAPI 使用
-                          # 注意：不会修改配置文件中的 weibo.sub，每次重启重新获取
-  
+                          # guest: 纯 HTTP 访客流程，动态解析 ver/request_id 并生成临时 Cookie
+                          # login: 读取完整登录 Cookie Jar；失效或不存在时使用官方 App 扫码
+                          # api: 从外部兼容 API 获取微博数据，不使用微博 Cookie
+  cookieMode: qrcode      # 仅mode: login生效；qrcode（本地状态/管理员确认扫码）或cookiecloud
+  cookieCloud:            # 仅mode: login且cookieMode: cookiecloud时生效
+    endpoint:             # CookieCloud服务端地址，可与B站/抖音相同
+    uuid:
+    password:
+    interval: 10m         # 启动立即获取，之后定时刷新；最小1m
+    timeout: 15s
+    cryptoType: auto      # auto（推荐）、legacy 或 aes-128-cbc-fixed
+  interval: 60s           # 微博订阅轮询间隔；guest 模式最低 60s
+  stateDir: ".weibo-state" # Cookie Jar 与访客 TID 保存目录；请勿上传或分享
+  requestTimeout: 15s     # 单次 HTTP 请求超时
+  protocolTimeout: 2m     # SSO/跨域同步等完整协议步骤总超时
+  guestRefreshInterval: 1h # guest 临时 Cookie 定时刷新间隔，最低 10m
+  sub:                    # 兼容旧配置；推荐扫码后使用 stateDir 中的完整 Cookie Jar
+  qrlogin: true           # login Cookie失效时允许管理员回复“生成 微博”后生成二维码；不会主动生成
+  qrloginTimeout: 3m      # 二维码轮询总时限
+  qrAutoOpen: false       # 是否自动打开二维码图片；默认 false，避免弹出外部窗口
+  autorefresh: true       # 是否定时调用微博心跳并捕获服务端真实 Set-Cookie 轮换
+  loginRefreshInterval: 30m # 登录 Cookie 心跳间隔，最低 5m
+  # userAgent:            # 可选；留空使用内置稳定 UA，Cookie Jar 会记录并复用
+
   # API 模式配置（mode: api 时使用）
   # API 模式直接从外部 API 获取微博数据，无需 Cookie
   # API 返回的数据格式需与微博移动端 API 兼容
   apiModeBaseURL: "http://127.0.0.1:5000"  # API 模式基础地址，完整 URL 为 {baseURL}/api/Weibo/GetMobileCards?uid=uid
 
-  # SnapCast 服务地址，用于访客模式生成 rid
-  # 如果留空则使用默认地址 https://sc.znin.net/render
-  # 可配置为自建的 SnapCast 服务地址
-  snapcastURL: ""
-
-  # Cookie 告警通知配置
+  # Cookie 告警通知配置（接收群通过 /config weibo_alert 配置）
   disableCookieAlert: false  # 设为 true 可关闭 Cookie/SUB 失效告警通知
-  alertGroupId: 0            # Cookie 告警发送到指定群，0 表示不发群
-  # alertQQList:             # Cookie 告警私聊发送给指定 QQ（可选，支持数组或逗号分隔字符串）
-  #   - 123456
-
-youtube:
-  onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
-
-# 小红书直播推送
-# 需要配置 cookies 才能获取用户房间信息
-xhs:
-  cookies:  # 支持完整 cookie 字典
-    a1: ""   # 小红书 a1 cookie（必需）
-    web_session: ""  # 可选
-    webId: ""  # 可选
-  interval: 15s  # 轮询间隔
-  onlyOnlineNotify: false
-
-# Twitch 直播推送
-# 需要在 https://dev.twitch.tv/console/apps 注册应用获取 clientId 和 clientSecret
-twitch:
-  clientId:               # Twitch 应用的 Client ID
-  clientSecret:           # Twitch 应用的 Client Secret
-  interval: 30s          # 轮询间隔，建议不要太短避免风控
-  onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
-
-# TwitCasting 直播推送
-# 需要在 TwitCasting 开发者后台注册应用获取 clientId 和 clientSecret
-twitcasting:
-  clientId:               # TwitCasting 应用的 Client ID
-  clientSecret:           # TwitCasting 应用的 Client Secret
-  nameStrategy: name      # 发送消息时显示的名称策略：name（默认）/ userid / both
-  broadcaster:            # 直播通知中是否显示主播信息
-    title: false          # 是否显示直播间标题
-    created: false       # 是否显示开播时间
-    image: false         # 是否显示直播封面
-
-# 小黑盒 动态推送
-heybox:
-  x_xhh_tokenid:              # 可选，未配置时自动生成
-  interval: 30s               # 轮询间隔，默认30秒
-  onlyOnlineNotify: false     # 是否只推送上线后的动态
 
 concern:
   emitInterval: 5s
 
 template:      # 是否启用模板功能，true 为启用，false 为禁用，默认为禁用
-  enable: true # 需要了解模板请看模板文档
+  enable: false # 需要自定义直播/动态模板时再开启
   
 autoreply: # 自定义命令自动回复，自定义命令通过模板发送消息，且不支持任何参数，需要同时启用模板功能
   group:   # 需要了解该功能请看模板文档
-    command: ["签到"]
+    command: []
   private:
-    command: [ ]
-
-# 重定义命令前缀，优先级高于 bot.commandPrefix
-# 如果有多个，可填写多项，prefix 支持留空，可搭配自定义命令使用
-# 例如下面的配置为：<Q 命令 1> <命令 2> </help>
-customCommandPrefix:
-  签到：""
+    command: []
   
 # 日志等级，可选值：trace / debug / info / warn / error
 logLevel: info
@@ -335,6 +336,12 @@ logLevel: info
 # enable: true 启用，false 禁用（默认启用）
 qq-logs:
   enable: true
+
+# 不使用图片池和代理池时保持 off，避免全新配置产生无意义的未知类型错误。
+imagePool:
+  type: "off"
+proxy:
+  type: "off"
 
 # 适配器选择：onebot-v11（默认）
 adapter:
@@ -367,8 +374,7 @@ telegram:
   enable: false            # 是否启用 Telegram
   token: ""                # Telegram Bot Token
   proxy:
-    enable: false         # 是否启用代理（http/https/socks5/socks5h）
-    url: ""               # 代理地址，例如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080
+    url: ""               # 留空不使用代理；支持 http/https/socks5/socks5h
   endpoint: ""            # 可选：自定义 Telegram API Endpoint，留空使用默认
 
 `

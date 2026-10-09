@@ -111,6 +111,25 @@ func LoadAndExec(name string, data interface{}) (*mmsg.MSG, error) {
 	if t == nil {
 		return nil, fmt.Errorf("<!missing template %v>", name)
 	}
+	// 通知模板走缓存版函数表（notification_cache.go）。
+	//
+	// 证据（DDBOT-Lite x64 成品二进制，LoadAndExec @0xb55b60）：
+	// 该函数在 LoadTemplate 之后依次调用
+	//   notificationTemplateScope @0xb55bfa  （判断并生成缓存 scope 串）
+	//   (*Template).Clone        @0xb55c20  （仅在命中时执行）
+	//   notificationTemplateFuncs@0xb55d11  （入参就是上面的 scope）
+	//   (*Template).Funcs        @0xb55d21
+	// 四个符号在整个 .text 段各只有这一个调用点，全部落在 LoadAndExec 内；
+	// 命令/触发器模板走的是不注入分支。Clone 是必要的：Funcs 会改写模板的
+	// parseFuncs/execFuncs，直接改共享的 rootT 会在并发执行时产生数据竞争。
+	if scope, ok := notificationTemplateScope(name, data); ok {
+		nt, err := t.Clone()
+		if err != nil {
+			logger.WithField("data", data).Errorf("template: %v clone error: %v", name, err)
+			return nil, err
+		}
+		t = nt.Funcs(notificationTemplateFuncs(scope))
+	}
 	if err := t.Execute(m, data); err != nil {
 		logger.WithField("data", data).Errorf("template: %v execute error: %v", name, err)
 		return nil, err

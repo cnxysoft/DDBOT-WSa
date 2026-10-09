@@ -1,5 +1,16 @@
-Douyin-{{ .name }}发布了新视频：
+Douyin-{{ .name }}发布了新作品：
 {{ .date }}
 {{ .desc }}
+{{- if .pictures }}
+{{- range .pictures }}
+{{ pic . }}
+{{- end }}
+{{- else if .cover }}
 {{ pic .cover }}
-{{ .url }}
+{{- else }}
+{{ printf "\n" -}}
+{{- end }}
+{{- .url -}}
+{{- range .live_photos }}
+{{ cut }}{{ video . "[Live Photo动态部分]" }}
+{{- end }}

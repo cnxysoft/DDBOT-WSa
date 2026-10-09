@@ -68,7 +68,7 @@ func (lgc *LspGroupCommand) Execute() {
 	}()
 
 	if lgc.l.PermissionStateManager.CheckBlockList(lgc.uin()) ||
-		lgc.l.PermissionStateManager.CheckBlockList(lgc.groupCode()) {
+		lgc.l.PermissionStateManager.CheckGroupBlocked(lgc.groupCode()) {
 		return
 	}
 
@@ -170,6 +170,12 @@ func (lgc *LspGroupCommand) Execute() {
 				lgc.ResubscribeCommand()
 			}
 		}
+	case "强制拉取开播推送":
+		// 成品 Execute (x64 0xc9360e-0xc93640)：命令名匹配后直接调 runDouyinDebugCommand(true)，无额外权限门。
+		lgc.runDouyinDebugCommand(true)
+	case "强制拉取第一个动态":
+		// 成品 Execute (x64 0xc93661-0xc9368d)：runDouyinDebugCommand(false)。
+		lgc.runDouyinDebugCommand(false)
 	default:
 		if CheckCustomGroupCommand(lgc.CommandName()) {
 			if lgc.requireNotDisable(lgc.CommandName()) {
@@ -212,6 +218,61 @@ func (lgc *LspGroupCommand) LspCommand() {
 		return
 	}
 	lgc.sendChain(lgc.templateMsg("command.group.lsp.tmpl", nil))
+}
+
+// douyinDebugController 是抖音调试指令在 lsp 层依赖的控制器接口。
+// 成品类型元数据（recovered/types/types-closure-x64.tsv:6559）：
+//
+//	interface { DebugForceLatestNews func(int64, string) (string, error); DebugForceLiveStart func(int64, string) (string, error) }
+//
+// 方法顺序为字典序（LatestNews 在前），对应 itab Fun[0]=DebugForceLatestNews、Fun[1]=DebugForceLiveStart；
+// 反汇编 0xc94311/0xc9432c 分别取 itab+0x20/+0x18，与之一致。
+type douyinDebugController interface {
+	DebugForceLatestNews(int64, string) (string, error)
+	DebugForceLiveStart(int64, string) (string, error)
+}
+
+// douyinDebugGroupCode 是抖音调试指令限定的测试群（成品立即数 0x3c562970 = 1012279664）。
+const douyinDebugGroupCode int64 = 1012279664
+
+// runDouyinDebugCommand 处理抖音调试指令（成品 lsp/groupCommand.go:214，x64 0xc941e0，1024B）。
+// live=true 对应“强制拉取开播推送”，live=false 对应“强制拉取第一个动态”。
+func (lgc *LspGroupCommand) runDouyinDebugCommand(live bool) {
+	if lgc.msg.GroupCode != douyinDebugGroupCode {
+		return
+	}
+	c, err := concern.GetConcernBySite("douyin")
+	if err != nil {
+		// 成品 c94285：reply "抖音模块当前未启动"
+		lgc.textReply("抖音模块当前未启动")
+		return
+	}
+	ctrl, ok := c.(douyinDebugController)
+	if !ok {
+		// 成品 c94552：reply "当前抖音模块不支持调试拉取"
+		lgc.textReply("当前抖音模块不支持调试拉取")
+		return
+	}
+	var id string
+	// 成品 c942c1-c942e9：id = strings.TrimSpace(Parser.Args[0])，无参数时为空串
+	if args := lgc.GetArgs(); len(args) > 0 {
+		id = strings.TrimSpace(args[0])
+	}
+	var result string
+	if live {
+		result, err = ctrl.DebugForceLiveStart(lgc.msg.GroupCode, id)
+	} else {
+		result, err = ctrl.DebugForceLatestNews(lgc.msg.GroupCode, id)
+	}
+	if err != nil {
+		// 成品 c943a8-c944e9：log.WithError(err).Warn("抖音调试拉取失败")
+		lgc.DefaultLoggerWithCommand(lgc.CommandName()).WithError(err).Warn("抖音调试拉取失败")
+		// 成品 c94509-c94528：reply "抖音调试拉取失败：" + err.Error()
+		lgc.textReply("抖音调试拉取失败：" + err.Error())
+		return
+	}
+	// 成品 c94536：reply 方法返回的文案
+	lgc.textReply(result)
 }
 
 func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
@@ -976,9 +1037,21 @@ func handleWeiboAlertPrivate(reply func(string), action string, group, qq int64)
 		var alertID int64
 
 		if group > 0 {
+			// 成品 handleWeiboAlertPrivate (x64 c9e1d9 call EnsureGroup；失败文案 c9e23c/0x10e839a)。
+			g, gerr := utils.GetBot().EnsureGroup(group)
+			if gerr != nil || g == nil {
+				reply(fmt.Sprintf("设置失败 - 没有找到QQ群<%d>，请确认bot是否在群内", group))
+				return
+			}
 			alertType = "group"
 			alertID = group
 		} else {
+			// 成品 (x64 c9e295 call GetStrangerInfo；失败文案 c9e2e8/0x10c8764)。
+			info, ierr := utils.GetBot().GetStrangerInfo(qq)
+			if ierr != nil || len(info) == 0 {
+				reply(fmt.Sprintf("设置失败 - 没有找到QQ<%d>", qq))
+				return
+			}
 			alertType = "private"
 			alertID = qq
 		}

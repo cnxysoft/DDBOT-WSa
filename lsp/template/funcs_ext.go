@@ -32,11 +32,29 @@ func RegisterExtFunc(name string, fn interface{}) {
 	funcsExt[name] = fn
 }
 
+// memberList 证据：成品 funcs_ext.go:35（@0xb37fa0，416 字节），callees 依次为
+// FindGroup(+0x27) -> EnsureGroup(+0x40) -> GetGroupMembersByID(+0x60) -> FindGroup(+0x79)
+// -> memberInfo(+0x102)；群对象「成员已加载」标志为 0 时才拉取成员列表。
+//
+// 成品该标志是 adapter.GroupInfo.MembersLoaded（recovered/types/types-closure-x64.tsv:11029
+// 字段序 Members→MembersLoaded→Client；置位点铁证：adapter.(*Messenger).GetGroupMembersByID
+// @0x89c8e8 有 movb $0x1,0x58(%rdx)，且全镜像 DDBOT 函数内仅此一处写入）。
 func memberList(groupCode int64) []map[string]interface{} {
 	var result []map[string]interface{}
-	gi := localutils.GetBot().FindGroup(groupCode)
+	bot := localutils.GetBot()
+	gi := bot.FindGroup(groupCode)
 	if gi == nil {
-		return result
+		var err error
+		gi, err = bot.EnsureGroup(groupCode)
+		if err != nil || gi == nil {
+			return result
+		}
+	}
+	if !gi.MembersLoaded {
+		if _, err := bot.GetGroupMembersByID(groupCode); err != nil {
+			return result
+		}
+		gi = bot.FindGroup(groupCode)
 	}
 	for _, m := range gi.Members {
 		result = append(result, memberInfo(groupCode, m.Uin))
@@ -44,41 +62,117 @@ func memberList(groupCode int64) []map[string]interface{} {
 	return result
 }
 
+// memberInfo 证据：成品 funcs_ext.go:56（@0xb38140，224 字节）——FindGroup ->
+// （nil 时）EnsureGroup -> 缓存命中（按 m.Uin 线性扫描）直接出结果；
+// 未命中时 EnsureGroupMember(groupCode, uin)（callsite +0x92），返回的成员为 nil
+// 则返回空 map，否则交给 memberInfoResult。
 func memberInfo(groupCode int64, uin int64) map[string]interface{} {
-	var result = make(map[string]interface{})
-	gi := localutils.GetBot().FindGroup(groupCode)
+	result := make(map[string]interface{})
+	bot := localutils.GetBot()
+	gi := bot.FindGroup(groupCode)
 	if gi == nil {
-		return result
+		var err error
+		gi, err = bot.EnsureGroup(groupCode)
+		if err != nil || gi == nil {
+			return result
+		}
 	}
 	fi := gi.FindMember(uin)
 	if fi == nil {
+		mi, _ := bot.EnsureGroupMember(groupCode, uin)
+		if mi == nil {
+			return result
+		}
+		fi = mi
+	}
+	return memberInfoResult(uin, fi)
+}
+
+// refreshGroupMember 通过 utils.(*HackedBot) 实时刷新成员资料。
+//
+// 证据：成品 memberInfoRealtime/isQQAdmin 直接调用
+// utils.(*HackedBot).EnsureGroup + RefreshGroupMember（utils.HackedBot 的这 6 个方法
+// 与 adapter.BotCaller 的同名方法一一对应，见 utils/hackedBot.go）。
+func refreshGroupMember(groupCode, uin int64) *adapter.GroupMemberInfo {
+	bot := localutils.GetBot()
+	if bot == nil {
+		return nil
+	}
+	mi, err := bot.RefreshGroupMember(groupCode, uin)
+	if err != nil {
+		return nil
+	}
+	return mi
+}
+
+// memberInfoResult 把 GroupMemberInfo 转换为模板使用的字段表。
+//
+// 证据（DDBOT-Lite x64 成品，memberInfoResult @ funcs_ext.go:90，864 字节）：
+// 反汇编确认字段为 uin / name / permission / gender；其中
+// permission: Owner(1)->10、Administrator(2)->5、其余->1；
+// gender: 0->2、1->1、其余->0；name 取 CardName 非空否则 Nickname（即 DisplayName）。
+func memberInfoResult(uin int64, mi *adapter.GroupMemberInfo) map[string]interface{} {
+	result := make(map[string]interface{})
+	if mi == nil {
 		return result
 	}
 	result["uin"] = uin
-	result["name"] = fi.DisplayName()
-	switch fi.Permission {
+	result["name"] = mi.DisplayName()
+	switch mi.Permission {
 	case adapter.Owner:
-		// 群主
 		result["permission"] = 10
 	case adapter.Administrator:
-		// 管理员
 		result["permission"] = 5
 	default:
-		// 其他
 		result["permission"] = 1
 	}
-	switch fi.Gender {
+	switch mi.Gender {
 	case 0:
-		// 男
 		result["gender"] = 2
 	case 1:
-		// 女
 		result["gender"] = 1
 	default:
-		// 未知
 		result["gender"] = 0
 	}
 	return result
+}
+
+// memberInfoRealtime 实时拉取群成员资料后构造模板数据。
+//
+// 证据（DDBOT-Lite x64 成品，memberInfoRealtime @ funcs_ext.go:76，192 字节）：
+// 参数校验（groupCode<=0 或 uin<=0）后调用 EnsureGroup + RefreshGroupMember，
+// 再交给 memberInfoResult；任一失败返回空 map（不是 nil）。
+func memberInfoRealtime(groupCode int64, uin int64) map[string]interface{} {
+	if groupCode <= 0 || uin <= 0 {
+		return make(map[string]interface{})
+	}
+	// 证据：先 EnsureGroup 保证群资料在缓存中，再 RefreshGroupMember 取实时成员。
+	if bot := localutils.GetBot(); bot != nil {
+		if _, err := bot.EnsureGroup(groupCode); err != nil {
+			return make(map[string]interface{})
+		}
+	}
+	mi := refreshGroupMember(groupCode, uin)
+	if mi == nil {
+		return make(map[string]interface{})
+	}
+	return memberInfoResult(uin, mi)
+}
+
+// isQQAdmin 报告 uin 是否是该群的群主或管理员（实时刷新成员资料）。
+//
+// 证据（DDBOT-Lite x64 成品，isQQAdmin @ funcs_ext.go:176，128 字节）：
+// 参数顺序为 (uin, groupCode)——与同文件已有 isAdmin(uin, groupCode ...int64) 一致；
+// 调用 RefreshGroupMember 后判断 Permission == Owner(1) 或 Administrator(2)。
+func isQQAdmin(uin int64, groupCode int64) bool {
+	if uin <= 0 || groupCode <= 0 {
+		return false
+	}
+	mi := refreshGroupMember(groupCode, uin)
+	if mi == nil {
+		return false
+	}
+	return mi.Permission == adapter.Owner || mi.Permission == adapter.Administrator
 }
 
 func cut() *mmsg.CutElement {

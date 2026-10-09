@@ -24,6 +24,27 @@ func init() {
 	c = NewConcern(concern.GetNotifyChan())
 	concern.RegisterConcern(c)
 
+	// 配置文件在 Run 阶段才读取，等框架完成初始化后按 cookieMode 分流 Cookie 维护链路
+	go func() {
+		for bot.Instance == nil {
+			time.Sleep(time.Second)
+		}
+		switch {
+		case cfg.IsWeiboAPIMode():
+			// API 模式不需要 Cookie
+		case isWeiboCookieCloudMode():
+			// CookieCloud 刷新器已由 (*Concern).Start 用其加载的 cfg 启动
+			// （成品 Start.gowrap1 concern.go:90），此处不再重复启动。
+			logger.Info("CookieCloud 模式由CookieCloud刷新器维护，不启动本地微博Cookie心跳")
+		case isGuestMode():
+			// 访客模式的临时 Cookie 由订阅刷新链路维护
+		case cfg.GetWeiboAutoRefresh():
+			startCookieHealthMonitor()
+		default:
+			logger.Info("weibo.autorefresh 未启用，不启动微博登录 Cookie 心跳")
+		}
+	}()
+
 	// 每 5 分钟检查 Cookie 健康状态，异常时向所有订阅群发送告警
 	go func() {
 		var lastAlertSent bool
@@ -66,6 +87,53 @@ func init() {
 			}
 		}
 	}()
+}
+
+// startCookieHealthMonitor 启动微博登录 Cookie 心跳：按 loginRefreshInterval 定时刷新登录 Cookie，
+// 捕获服务端真实 Set-Cookie 轮换，并以 getSpaConfig 验证登录状态。
+func startCookieHealthMonitor() {
+	logger.Info("微博登录 Cookie 心跳与轮换捕获已启动")
+	// 成品证据：(*Concern).Start(concern.go:48) 与 StartSubAutoRefresh(sub_autorefresh.go:19)
+	// 都调用 cfg.GetWeiboLoginRefreshInterval()（默认30m，钳制 [5m,24h]）。
+	interval := cfg.GetWeiboLoginRefreshInterval()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.authStop:
+				logger.Info("微博登录 Cookie 心跳已停止")
+				return
+			case <-ticker.C:
+				weiboLoginCookieHeartbeat()
+			}
+		}
+	}()
+}
+
+// weiboLoginCookieHeartbeat 执行一次登录 Cookie 心跳，登录态失效时上报并等待管理员扫码确认。
+func weiboLoginCookieHeartbeat() {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+
+	p, _ := loadLoginProtocol()
+	ctx, cancel := weiboProtocolContext()
+	defer cancel()
+	if err := p.refreshLoginCookies(ctx); err != nil {
+		if err.Error() == "微博登录状态检查未通过" {
+			reportWeiboCookieFailure("微博登录 Cookie 心跳验证失败，需要重新扫码确认")
+			return
+		}
+		logger.WithField("error", err).Error("微博登录 Cookie 心跳刷新失败")
+		return
+	}
+	if !activateCookieJar(cookieModeLogin, p.jar, p.userAgent) {
+		reportWeiboCookieFailure("微博登录 Cookie 心跳验证失败，需要重新扫码确认")
+		return
+	}
+	loginJarHolder.Store(p.jar)
+	cookieHealthy.Store(true)
+	consecutiveCookieFails.Store(0)
 }
 
 func freshCookieOpt(sub string) {
