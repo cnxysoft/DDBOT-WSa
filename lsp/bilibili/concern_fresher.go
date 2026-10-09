@@ -294,29 +294,11 @@ func (c *Concern) fresh() concern.FreshFunc {
 	}
 }
 
-// seriesFreshThrottle 合集轮询的节流时间戳（合集更新频率低，不需要每轮都拉）
-var seriesFreshThrottle atomic.Int64
-
-// getSeriesInterval 合集轮询间隔，默认 5 分钟
-func getSeriesInterval() time.Duration {
-	if config.GlobalConfig != nil {
-		if d := config.GlobalConfig.GetDuration("bilibili.seriesInterval"); d > 0 {
-			return d
-		}
-	}
-	return time.Minute * 5
-}
-
 // freshSeries 轮询全部合集订阅，比对最新稿件并产生推送事件。
+// 每轮都拉，与直播/动态共用 bilibili.interval（默认 25s）：直播回放这类稿件的出现时间
+// 并不固定（实测可能是直播结束后 40 分钟以上），所以不做单独节流，出现后一轮内即可推送。
 // 先更新本地状态再推送：宁可漏推一次，也不要在状态写入失败时重复推送。
 func (c *Concern) freshSeries() ([]*SeriesNewInfo, error) {
-	interval := getSeriesInterval()
-	now := time.Now().Unix()
-	if last := seriesFreshThrottle.Load(); last > 0 && now-last < int64(interval.Seconds()) {
-		return nil, nil
-	}
-	seriesFreshThrottle.Store(now)
-
 	_, ids, _, err := c.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
 		return p.ContainAll(Series)
 	})
