@@ -1,0 +1,5 @@
+{{ if .up_name }}{{ .up_name }} 的合集《{{ .series_name }}》更新了{{ else }}合集《{{ .series_name }}》更新了{{ end }}
+{{ .title }}
+{{ getTime .pub_time "" }}
+{{ .url -}}
+{{ pic .cover "[封面]" }}

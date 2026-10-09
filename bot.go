@@ -200,7 +200,7 @@ bilibili:
   SESSDATA: # 你的 b 站 cookie
   bili_jct: # 你的 b 站 cookie
   qrlogin: true # 是否启用二维码登录（Cookies 失效时只需要清空 SESSDATA 和 bili_jct 重启即可再次登录）
-  interval: 25s # 直播状态和动态检测间隔，过快可能导致 ip 被暂时封禁
+  interval: 25s # 直播状态、动态与合集的检测间隔，过快可能导致 ip 被暂时封禁
   imageMergeMode: "auto" # 设置图片合并模式，支持 "auto" / "only9" / "off"
                           # auto 为默认策略，存在比较刷屏的图片时会合并
                           # only9 表示仅当恰好是 9 张图片的时候合并

@@ -1,6 +1,7 @@
 package bilibili
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,6 +27,9 @@ var logger = utils.GetModuleLogger("bilibili-concern")
 const (
 	Live concern_type.Type = "live"
 	News concern_type.Type = "news"
+	// Series 合集（系列）订阅：轮询合集稿件列表推送新稿件。
+	// 直播回放等特殊稿件不会产生动态，只订阅动态会漏推，故单独一类。
+	Series concern_type.Type = "series"
 )
 
 var online bool
@@ -46,10 +50,18 @@ func (c *Concern) Site() string {
 }
 
 func (c *Concern) Types() []concern_type.Type {
-	return []concern_type.Type{Live, News}
+	return []concern_type.Type{Live, News, Series}
 }
 
 func (c *Concern) ParseId(s string) (interface{}, error) {
+	// 合集订阅 id 形如 <mid>/<series_id>（或合集链接），其他情况按 uid 解析
+	if IsSeriesSubId(s) {
+		mid, seriesId, err := ParseSeriesSubId(s)
+		if err != nil {
+			return nil, err
+		}
+		return SeriesSubId(mid, seriesId), nil
+	}
 	return ParseUid(s)
 }
 
@@ -145,6 +157,9 @@ func (c *Concern) Start() error {
 
 func (c *Concern) Add(ctx mmsg.IMsgCtx,
 	groupCode int64, _id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
+	if ctype.ContainAll(Series) {
+		return c.addSeries(groupCode, _id)
+	}
 	mid := _id.(int64)
 	selfUid := accountUid.Load()
 	var watchSelf = selfUid != 0 && selfUid == mid
@@ -277,6 +292,9 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx,
 
 func (c *Concern) Remove(ctx mmsg.IMsgCtx,
 	groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
+	if ctype.ContainAll(Series) {
+		return c.removeSeries(groupCode, id)
+	}
 	mid := id.(int64)
 	var identityInfo concern.IdentityInfo
 	var allCtype concern_type.Type
@@ -314,7 +332,84 @@ func (c *Concern) Remove(ctx mmsg.IMsgCtx,
 }
 
 func (c *Concern) Get(id interface{}) (concern.IdentityInfo, error) {
+	// 合集订阅的 id 是字符串 <mid>/<series_id>
+	if sid, ok := id.(string); ok {
+		info, err := c.StateManager.GetSeriesInfo(sid)
+		if err != nil {
+			return concern.NewIdentity(sid, "unknown"), nil
+		}
+		return concern.NewIdentity(sid, info.Name), nil
+	}
 	return c.FindUser(id.(int64), false)
+}
+
+// addSeries 订阅一个合集（系列）：校验合集存在、记录基线（订阅时已有稿件不补推）
+func (c *Concern) addSeries(groupCode int64, _id interface{}) (concern.IdentityInfo, error) {
+	id, ok := _id.(string)
+	if !ok {
+		return nil, errors.New("合集订阅 id 类型错误")
+	}
+	mid, seriesId, err := ParseSeriesSubId(id)
+	if err != nil {
+		return nil, err
+	}
+	log := logger.WithFields(localutils.GroupLogFields(groupCode)).
+		WithField("series", SeriesSubId(mid, seriesId))
+	if err = c.StateManager.CheckGroupConcern(groupCode, id, Series); err != nil {
+		return nil, err
+	}
+	meta, err := GetSeriesMeta(mid, seriesId)
+	if err != nil {
+		log.Errorf("GetSeriesMeta error %v", err)
+		return nil, fmt.Errorf("查询合集信息失败 %v", err)
+	}
+	info := &SeriesInfo{
+		Mid:      mid,
+		SeriesId: seriesId,
+		Name:     meta.Name,
+		Total:    meta.Total,
+	}
+	// 基线：以当前最新稿件为起点，只推订阅之后的新增，避免订阅瞬间刷屏
+	if archives, err := GetSeriesArchives(mid, seriesId, 1); err != nil {
+		log.Warnf("获取合集最新稿件失败，稍后由轮询补齐基线 %v", err)
+	} else if len(archives) > 0 {
+		info.LastAid = archives[0].Aid
+	}
+	if err = c.StateManager.AddSeriesInfo(info); err != nil {
+		log.Errorf("AddSeriesInfo error %v", err)
+		return nil, fmt.Errorf("保存合集订阅失败 %v", err)
+	}
+	if _, err = c.StateManager.AddGroupConcern(groupCode, id, Series); err != nil {
+		return nil, err
+	}
+	name := info.Name
+	if up, err := c.FindOrLoadUser(mid); err == nil && up != nil && up.Name != "" {
+		name = fmt.Sprintf("%v的合集《%v》", up.Name, info.Name)
+	}
+	log.WithField("name", name).Info("合集订阅成功")
+	return concern.NewIdentity(id, name), nil
+}
+
+// removeSeries 取消合集订阅，并在没有任何群订阅时清理本地状态
+func (c *Concern) removeSeries(groupCode int64, id interface{}) (concern.IdentityInfo, error) {
+	sid, ok := id.(string)
+	if !ok {
+		return nil, errors.New("合集订阅 id 类型错误")
+	}
+	identity := concern.NewIdentity(sid, "unknown")
+	if info, err := c.StateManager.GetSeriesInfo(sid); err == nil && info != nil {
+		identity = concern.NewIdentity(sid, info.Name)
+	}
+	if _, err := c.StateManager.RemoveGroupConcern(groupCode, sid, Series); err != nil {
+		return nil, err
+	}
+	// 没有其他群订阅该合集时删除本地状态，避免残留
+	if ctype, err := c.StateManager.GetConcern(sid); err == nil && !ctype.ContainAll(Series) {
+		if err := c.StateManager.DeleteSeriesInfo(sid); err != nil && err != buntdb.ErrNotFound {
+			logger.WithField("series", sid).Warnf("DeleteSeriesInfo error %v", err)
+		}
+	}
+	return identity, nil
 }
 
 func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
@@ -341,6 +436,9 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 			for _, notify := range notifies {
 				result = append(result, notify)
 			}
+		case *SeriesNewInfo:
+			log.WithFields(localutils.GroupLogFields(groupCode)).Trace("series notify")
+			result = append(result, NewConcernSeriesNotify(groupCode, event))
 		}
 		return
 	}
@@ -450,7 +548,10 @@ func (c *Concern) SyncSub() {
 	var midSet = make(map[int64]bool)
 	var attentionMidSet = make(map[int64]bool)
 	_, _, _, err = c.StateManager.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool {
-		midSet[id.(int64)] = true
+		// 合集订阅的 id 是字符串，与关注关系无关，跳过
+		if mid, ok := id.(int64); ok {
+			midSet[mid] = true
+		}
 		return true
 	})
 
@@ -581,9 +682,20 @@ func (c *Concern) RemoveAllByGroupCode(groupCode int64) ([]string, error) {
 				}
 				_, id, err := c.ParseGroupConcernStateKey(key)
 				if err != nil {
+					// 合集订阅的 id 是字符串（<mid>/<series_id>），与关注关系无关，
+					// 仅在没有任何群订阅该合集时清理本地状态
+					if _, sid, serr := localdb.ParseConcernStateKeyWithString(key); serr == nil && IsSeriesSubId(sid) {
+						if ctype, cerr := c.StateManager.GetConcern(sid); cerr == nil && !ctype.ContainAll(Series) {
+							_ = c.StateManager.DeleteSeriesInfo(sid)
+						}
+					}
 					continue
 				}
-				changedIdSet[id.(int64)] = true
+				mid, ok := id.(int64)
+				if !ok {
+					continue
+				}
+				changedIdSet[mid] = true
 			}
 			c.RWCover(func() error {
 				for mid := range changedIdSet {
