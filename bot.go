@@ -150,9 +150,6 @@ bot:
   commandPrefix: "/"     # 命令前缀，默认 "/"
   onJoinGroup: 
     rename: "【bot】"   # BOT 进群后自动改名，默认改名为"【bot】"，如果留空则不自动改名
-  sendFailureReminder: # 失败提醒：发送失败达到一定次数后触发 notify.bot.send_failed.tmpl 模板
-    enable: false      # 是否启用失败提醒
-    times: 3           # 失败次数阈值
   offlineQueue:   # 离线缓存：BOT 离线时暂存要发送的消息，上线后重新发送（期间不能重启 DDBOT）
     enable: false # 是否启用离线缓存
     expire: 30m   # 离线消息有效期

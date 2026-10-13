@@ -949,29 +949,6 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		logger.Debug("BOT已离线，尝试触发离线提醒模板")
 		_, _ = template.LoadAndExec(templateName, data)
 	})
-
-	bot.BotSendFailedEvent.Subscribe(func(event *adapter.BotSendFailedEvent) {
-		logger.Debugf("消息已 %d 次发送失败，尝试触发提醒模板", event.Times)
-		templateName := "notify.bot.send_failed.tmpl"
-		data := map[string]interface{}{
-			"message":     event.Message,
-			"target_id":   event.TargetUin,
-			"target_type": event.TargetType,
-			"times":       event.Times,
-		}
-		switch event.TargetType {
-		case TargetTypeGroup:
-			if gi := localutils.GetBot().FindGroup(event.TargetUin); gi != nil {
-				data["target_name"] = gi.Name
-			}
-		case TargetTypeFriend:
-			if fi := localutils.GetBot().FindFriend(event.TargetUin); fi != nil {
-				data["target_name"] = fi.Nickname
-			}
-		}
-		logger.Debug("消息多次发送失败，尝试触发提醒模板")
-		_, _ = template.LoadAndExec(templateName, data)
-	})
 }
 
 func (l *Lsp) SendMsgToAdmin(m *mmsg.MSG) {
