@@ -2,6 +2,7 @@ package acfun
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/guonaihong/gout"
@@ -42,5 +43,11 @@ func GetUserInfo(id int64) (*SpaceProfileResponse, error) {
 	}
 
 	err = protoJsonOpts.Unmarshal(body, result)
-	return result, err
+	if err != nil {
+		return nil, err
+	}
+	if result.GetResult() != 0 {
+		return nil, fmt.Errorf("获取用户信息失败：%v - %v", result.GetResult(), result.GetErrorMsg())
+	}
+	return result, nil
 }

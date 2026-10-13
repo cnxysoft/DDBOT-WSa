@@ -29,7 +29,7 @@ func GetIsFollowing(id int64) (*RelationStatusResponse, error) {
 	params := gout.H{
 		"toUserIds": id,
 	}
-	err := requests.GetWithHeader(url, params, &respHeader, &resp, opts...)
+	err := requests.GetWithHeader(url, params, &resp, &respHeader, opts...)
 	if err != nil {
 		logger.WithField("FuncName", utils.FuncName()).
 			WithField("uid", id).Errorf("请求关注状态失败：%v", err)
