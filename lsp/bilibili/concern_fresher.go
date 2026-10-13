@@ -263,6 +263,23 @@ func (c *Concern) fresh() concern.FreshFunc {
 				}
 				return nil
 			})
+
+			errGroup.Go(func() error {
+				defer func() {
+					logger.WithField("cost", time.Now().Sub(start)).
+						Tracef("watchCore series fresh done")
+				}()
+				seriesList, err := c.freshSeries()
+				if err != nil {
+					logger.Errorf("freshSeries error %v", err)
+					return err
+				}
+				for _, series := range seriesList {
+					eventChan <- series
+				}
+				return nil
+			})
+
 			err := errGroup.Wait()
 			freshCount.Inc()
 			end := time.Now()
@@ -275,6 +292,81 @@ func (c *Concern) fresh() concern.FreshFunc {
 			t.Reset(interval)
 		}
 	}
+}
+
+// freshSeries 轮询全部合集订阅，比对最新稿件并产生推送事件。
+// 每轮都拉，与直播/动态共用 bilibili.interval（默认 25s）：直播回放这类稿件的出现时间
+// 并不固定（实测可能是直播结束后 40 分钟以上），所以不做单独节流，出现后一轮内即可推送。
+// 先更新本地状态再推送：宁可漏推一次，也不要在状态写入失败时重复推送。
+func (c *Concern) freshSeries() ([]*SeriesNewInfo, error) {
+	_, ids, _, err := c.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
+		return p.ContainAll(Series)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool, len(ids))
+	var result []*SeriesNewInfo
+	for _, raw := range ids {
+		sid, ok := raw.(string)
+		if !ok || seen[sid] {
+			continue
+		}
+		seen[sid] = true
+
+		mid, seriesId, err := ParseSeriesSubId(sid)
+		if err != nil {
+			logger.WithField("series", sid).Warnf("解析合集订阅 id 失败 %v", err)
+			continue
+		}
+		archives, err := GetSeriesArchives(mid, seriesId, SeriesArchivesPageSize)
+		if err != nil {
+			logger.WithField("series", sid).Warnf("拉取合集稿件失败 %v", err)
+			continue
+		}
+		if len(archives) == 0 {
+			continue
+		}
+
+		info, err := c.StateManager.GetSeriesInfo(sid)
+		if err != nil || info == nil {
+			// 状态缺失（历史数据或写入失败）：以当前最新稿件为基线，避免整合集补推
+			info = &SeriesInfo{Mid: mid, SeriesId: seriesId, LastAid: archives[0].Aid}
+			_ = c.StateManager.AddSeriesInfo(info)
+			continue
+		}
+
+		newArchives := NewSeriesArchives(archives, info.LastAid)
+		if len(newArchives) == 0 {
+			continue
+		}
+		info.LastAid = newArchives[len(newArchives)-1].Aid
+		if err := c.StateManager.AddSeriesInfo(info); err != nil {
+			logger.WithField("series", sid).Errorf("更新合集状态失败，跳过本轮推送 %v", err)
+			continue
+		}
+
+		upName := ""
+		if up, err := c.FindOrLoadUser(mid); err == nil && up != nil {
+			upName = up.Name
+		}
+		for _, archive := range newArchives {
+			logger.WithField("series", sid).
+				WithField("name", info.Name).
+				WithField("bvid", archive.Bvid).
+				Info("合集新增稿件")
+			result = append(result, &SeriesNewInfo{
+				SeriesInfo: info,
+				UpName:     upName,
+				Archive:    archive,
+			})
+		}
+	}
+	return result, nil
 }
 
 func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
