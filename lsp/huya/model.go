@@ -13,6 +13,7 @@ type LiveInfo struct {
 	RoomId    string `json:"room_id"`
 	RoomUrl   string `json:"room_url"`
 	Avatar    string `json:"avatar"`
+	Cover     string `json:"cover"`
 	Name      string `json:"name"`
 	RoomName  string `json:"room_name"`
 	IsLiving  bool   `json:"living"`
@@ -80,13 +81,25 @@ func (m *LiveInfo) Site() string {
 	return Site
 }
 
+// GetCover 返回推送用的封面图：优先直播间封面，取不到时退回主播头像
+func (m *LiveInfo) GetCover() string {
+	if m == nil {
+		return ""
+	}
+	if m.Cover != "" {
+		return m.Cover
+	}
+	return m.Avatar
+}
+
 func (m *LiveInfo) GetMSG() *mmsg.MSG {
 	m.once.Do(func() {
 		var data = map[string]interface{}{
 			"title":      m.RoomName,
 			"name":       m.Name,
 			"url":        m.RoomUrl,
-			"cover":      m.Avatar,
+			"cover":      m.GetCover(),
+			"avatar":     m.Avatar,
 			"living":     m.Living(),
 			"group_code": m.GroupCode,
 		}
