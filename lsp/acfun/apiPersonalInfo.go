@@ -2,6 +2,7 @@ package acfun
 
 import (
 	"bytes"
+	"fmt"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/requests"
@@ -46,8 +47,13 @@ func GetUserPersonalInfo() (*UserResponse, error) {
 	}
 
 	err = protoJsonOpts.Unmarshal(body, result)
-	if err != nil || result.GetResult() != 0 {
+	if err != nil {
 		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("解析账号信息失败：%v", err)
+		return nil, err
+	}
+	if result.GetResult() != 0 {
+		err = fmt.Errorf("获取账号信息失败：result=%v host=%v", result.GetResult(), result.GetHostName())
+		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("%v", err)
 		return nil, err
 	}
 
