@@ -253,8 +253,13 @@ func GetWeiboAlertGroupId() int64 {
 }
 
 // GetWeiboCookieAlertEnabled 检查是否启用 Cookie 失效告警通知
+// 默认关闭：仅当显式配置 weibo.disableCookieAlert: false 时才启用。
+// 自动生成的配置写的是 disableCookieAlert: true，与此默认一致；
+// 未配置该键（例如使用最小配置）时同样按关闭处理。
 func GetWeiboCookieAlertEnabled() bool {
-	// 默认启用，显式设置为 false 时禁用
+	if !config.GlobalConfig.IsSet("weibo.disableCookieAlert") {
+		return false
+	}
 	return !config.GlobalConfig.GetBool("weibo.disableCookieAlert")
 }
 
