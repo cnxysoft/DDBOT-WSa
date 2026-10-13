@@ -150,9 +150,6 @@ bot:
   commandPrefix: "/"     # 命令前缀，默认 "/"
   onJoinGroup: 
     rename: "【bot】"   # BOT 进群后自动改名，默认改名为"【bot】"，如果留空则不自动改名
-  sendFailureReminder: # 失败提醒：发送失败达到一定次数后触发 notify.bot.send_failed.tmpl 模板
-    enable: false      # 是否启用失败提醒
-    times: 3           # 失败次数阈值
   offlineQueue:   # 离线缓存：BOT 离线时暂存要发送的消息，上线后重新发送（期间不能重启 DDBOT）
     enable: false # 是否启用离线缓存
     expire: 30m   # 离线消息有效期
@@ -181,7 +178,7 @@ pyProxyPool:
 
 # 图片池配置（用于色图等命令）
 imagePool:
-  type: lolicon    # 可选：lolicon / localPool / off
+  type: loliconPool    # 可选：loliconPool / localPool / off
 loliconPool:
   apikey:          # LOLICON API Key（可选）
   cacheMin: 0      # 缓存图片最小数量
@@ -227,7 +224,6 @@ acfun:
   unsub: false
   interval: 25s
   onlyOnlineNotify: false
-  minFollowerCap: 0   # 低于此粉丝数的用户不推送
   disableSub: false   # 禁止 A 站自动关注账号
 
 # Twitter 推送支持两种模式：
@@ -315,11 +311,8 @@ weibo:
   # 可配置为自建的 SnapCast 服务地址
   snapcastURL: ""
 
-  # Cookie 告警通知配置
+  # Cookie 告警通知配置（告警发送对象通过 /config weibo_alert 指定）
   disableCookieAlert: true  # 设为 true 可关闭 Cookie/SUB 失效告警通知
-  alertGroupId: 0            # Cookie 告警发送到指定群，0 表示不发群
-  alertQQList: []            # Cookie 告警私聊发送给指定 QQ（可选，支持数组或逗号分隔字符串）
-                             # 示例: [123456, 789012] 或 "123456,789012"
 
 youtube:
   onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送

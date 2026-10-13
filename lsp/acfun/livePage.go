@@ -3,6 +3,7 @@ package acfun
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
@@ -39,6 +40,9 @@ func LivePage(uid int64) (*LivePageResponse, error) {
 	var result = new(LivePageResponse)
 	if err = json.Unmarshal(match[livePageRegex.SubexpIndex("json")], result); err != nil {
 		return nil, err
+	}
+	if len(result.GetLiveInfo().GetUser().GetName()) == 0 {
+		return nil, fmt.Errorf("live page 未包含用户信息，uid %d 可能不存在", uid)
 	}
 	return result, nil
 }

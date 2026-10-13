@@ -12,8 +12,15 @@ import (
 )
 
 type UserInfo struct {
-	Uid      int64  `json:"uid"`
-	Name     string `json:"name"`
+	Uid  int64  `json:"uid"`
+	Name string `json:"name"`
+	// Followed 的含义随数据来源而变，不要拿它当统一的"粉丝数"用：
+	//   Live 路径填的是粉丝数   —— 来自 User.FanCountValue（concern.go）
+	//   Profile 路径填的是关注数 —— 来自 Profile.Followed，是字符串转出来的（concern.go）
+	// 所以不能用它实现"粉丝数门槛"：在动态路径上会拿"关注了多少人"当"多少粉丝"比较，
+	// 方向刚好相反，会静默地放行/拦截错误的用户。
+	// 曾经的 acfun.minFollowerCap 配置项正因为这个原因被删除（生成配置里有、代码里没人读）。
+	// 若要实现该功能，需要先找到语义唯一的粉丝数字段（协议里有 Follow.FanCount，目前无人使用）。
 	Followed int    `json:"followed"`
 	UserImg  string `json:"user_img"`
 	LiveUrl  string `json:"live_url"`

@@ -88,7 +88,7 @@ var allGroupCommand = [...]string{
 	ListCommand, SetuCommand, HuangtuCommand,
 	EnableCommand, DisableCommand,
 	ReverseCommand, ConfigCommand,
-	HelpCommand, ScoreCommand, AdminCommand,
+	HelpCommand, ScoreCommand,
 	SilenceCommand, NoUpdateCommand, CleanConcern,
 	ScanCommand, ScanEnCommand,
 }
