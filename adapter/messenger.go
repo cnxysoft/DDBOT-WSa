@@ -40,6 +40,7 @@ type BotEventDispatcher interface {
 	DispatchGroupInvitedRequest(event *GroupInvitedRequest)
 	DispatchBotOnline(event *BotOnlineEvent)
 	DispatchBotOffline(event *BotOfflineEvent)
+	DispatchBotSendFailed(event *BotSendFailedEvent)
 	DispatchGroupMsgEmojiLike(event *GroupMsgEmojiLikeEvent)
 	DispatchProfileLike(event *ProfileLikeEvent)
 	DispatchPokeRecall(event *PokeRecallEvent)
@@ -171,6 +172,8 @@ type Messenger struct {
 	privateMsgCount  atomic.Int64
 	groupSendCount   atomic.Int64
 	privateSendCount atomic.Int64
+	// sendFailureCount 连续发送失败计数，发送成功后清零（bot.sendFailureReminder）
+	sendFailureCount atomic.Int64
 
 	// 离线消息队列
 	offlineQueue          []offlineQueueMsg
@@ -340,6 +343,9 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 		msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
 		m.groupSendCount.Add(1)
 		if err != nil {
+			if getSendFailureReminder() {
+				m.handleSendFailed(true, newstr, sendFailedTargetTypeGroup, groupCode)
+			}
 			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
 			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("群消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
@@ -373,6 +379,10 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 				Error: nil,
 			}
 		}
+	}
+
+	if getSendFailureReminder() {
+		m.handleSendFailed(false, "", sendFailedTargetTypeGroup, groupCode)
 	}
 
 	return lastResult
@@ -424,6 +434,9 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		msgID, err := m.Adapter.SendPrivateMessage(target, messages)
 		m.privateSendCount.Add(1)
 		if err != nil {
+			if getSendFailureReminder() {
+				m.handleSendFailed(true, newstr, sendFailedTargetTypePrivate, target)
+			}
 			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
 			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("私聊消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
@@ -446,6 +459,10 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		} else {
 			lastMsgID = msgID
 		}
+	}
+
+	if getSendFailureReminder() {
+		m.handleSendFailed(false, "", sendFailedTargetTypePrivate, target)
 	}
 
 	return PrivateSendResp{
@@ -1833,6 +1850,47 @@ func getOfflineQueueExpire() time.Duration {
 		return 30 * time.Minute
 	}
 	return t
+}
+
+func getSendFailureReminder() bool {
+	return config.GlobalConfig.GetBool("bot.sendFailureReminder.enable")
+}
+
+func getSendFailureReminderTimes() int {
+	return config.GlobalConfig.GetInt("bot.sendFailureReminder.times")
+}
+
+// 发送失败事件的目标类型，取值与 lsp.TargetTypeGroup / lsp.TargetTypeFriend 一致
+const (
+	sendFailedTargetTypeGroup   = 0
+	sendFailedTargetTypePrivate = 1
+)
+
+// handleSendFailed 维护连续发送失败计数：
+// add 为 true 时累加，并在计数恰好达到 bot.sendFailureReminder.times 时派发 BotSendFailedEvent；
+// add 为 false（发送成功）时清零。语义与 master 的 miraigo handleSendFailed 一致，
+// 阈值为精确相等比较，因此只在恰好达到阈值的那一次失败触发一次。
+func (m *Messenger) handleSendFailed(add bool, msg string, targetType int, targetID int64) {
+	if !add {
+		m.sendFailureCount.Store(0)
+		messengerLogger.Debugf("检测到消息发送成功，清空失败计数")
+		return
+	}
+	times := getSendFailureReminderTimes()
+	n := m.sendFailureCount.Inc()
+	messengerLogger.Debugf("检测到消息发送失败，增加失败计数，当前失败次数：%d", n)
+	if n != int64(times) {
+		return
+	}
+	messengerLogger.Warnf("累计发送消息失败 %d 次，触发 BotSendFailedEvent 事件", n)
+	if m.eventDispatcher != nil {
+		m.eventDispatcher.DispatchBotSendFailed(&BotSendFailedEvent{
+			Message:    msg,
+			TargetUin:  targetID,
+			TargetType: targetType,
+			Times:      int(n),
+		})
+	}
 }
 
 func (m *Messenger) saveOfflineMsg(msg offlineQueueMsg) {

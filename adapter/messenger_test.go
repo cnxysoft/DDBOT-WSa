@@ -182,8 +182,9 @@ func (m *mockAdapter) OnRequestEvent(handler func(*RequestEvent))          {}
 
 // mockDispatcher implements BotEventDispatcher for testing.
 type mockDispatcher struct {
-	mu     sync.Mutex
-	events []string
+	mu               sync.Mutex
+	events           []string
+	sendFailedEvents []*BotSendFailedEvent
 }
 
 func newMockDispatcher() *mockDispatcher {
@@ -271,6 +272,12 @@ func (d *mockDispatcher) DispatchBotOffline(event *BotOfflineEvent) {
 	defer d.mu.Unlock()
 	d.events = append(d.events, "bot_offline")
 }
+func (d *mockDispatcher) DispatchBotSendFailed(event *BotSendFailedEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.events = append(d.events, "bot_send_failed")
+	d.sendFailedEvents = append(d.sendFailedEvents, event)
+}
 func (d *mockDispatcher) DispatchGroupMsgEmojiLike(event *GroupMsgEmojiLikeEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -291,6 +298,12 @@ func (d *mockDispatcher) getEvents() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]string{}, d.events...)
+}
+
+func (d *mockDispatcher) getSendFailedEvents() []*BotSendFailedEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]*BotSendFailedEvent{}, d.sendFailedEvents...)
 }
 
 // setupTestMessenger creates a Messenger with a mock adapter and dispatcher,
@@ -1060,6 +1073,96 @@ func TestSendGroupMessage_QueuedWhenNotSentAndQueueEnabled(t *testing.T) {
 	assert.Equal(t, GroupSendQueued, resp.Status())
 	assert.ErrorIs(t, resp.Error, ErrRequestNotSent)
 	assert.Len(t, messenger.loadOfflineMsgs(), 1)
+}
+
+// TestMessenger_BotSendFailedEventOnConsecutiveFailures 验证 sendFailureReminder 接线：
+//  1. 连续发送失败达到 bot.sendFailureReminder.times 时派发 BotSendFailedEvent（字段与 lsp 订阅回调匹配）；
+//  2. 发送成功会清零连续失败计数；
+//  3. 计数从 0 重新开始后再次达到阈值可再次派发。
+func TestMessenger_BotSendFailedEventOnConsecutiveFailures(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.sendFailureReminder.enable")
+	oldTimes := config.GlobalConfig.GetInt("bot.sendFailureReminder.times")
+	oldQueue := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	defer func() {
+		config.GlobalConfig.Set("bot.sendFailureReminder.enable", oldEnable)
+		config.GlobalConfig.Set("bot.sendFailureReminder.times", oldTimes)
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldQueue)
+	}()
+	// 关闭离线队列，避免失败消息进入重发流程干扰计数
+	config.GlobalConfig.Set("bot.offlineQueue.enable", false)
+	config.GlobalConfig.Set("bot.sendFailureReminder.enable", true)
+	config.GlobalConfig.Set("bot.sendFailureReminder.times", 2)
+
+	mock := newRetryMockAdapter(errors.New("send error 1"), errors.New("send error 2"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+	dispatcher := newMockDispatcher()
+	messenger.SetBotEventDispatcher(dispatcher)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "hello"})
+
+	// 第 1 次失败：计数 1，未达阈值
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Empty(t, dispatcher.getSendFailedEvents())
+
+	// 第 2 次失败：计数 2 == times，派发一次
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	events := dispatcher.getSendFailedEvents()
+	if assert.Len(t, events, 1) {
+		assert.Equal(t, "hello", events[0].Message)
+		assert.Equal(t, int64(545402644), events[0].TargetUin)
+		assert.Equal(t, sendFailedTargetTypeGroup, events[0].TargetType)
+		assert.Equal(t, 2, events[0].Times)
+	}
+
+	// 发送成功：清零计数，不派发
+	assert.NoError(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Len(t, dispatcher.getSendFailedEvents(), 1)
+
+	// 再失败一次：计数从 0 重新开始，未达阈值
+	mock.mu.Lock()
+	mock.groupErrors = append(mock.groupErrors, errors.New("send error 3"))
+	mock.mu.Unlock()
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Len(t, dispatcher.getSendFailedEvents(), 1)
+
+	// 再失败一次：再次达到阈值，派发第二次
+	mock.mu.Lock()
+	mock.groupErrors = append(mock.groupErrors, errors.New("send error 4"))
+	mock.mu.Unlock()
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Len(t, dispatcher.getSendFailedEvents(), 2)
+}
+
+// TestMessenger_BotSendFailedEventDisabled 验证未启用 sendFailureReminder 时不派发事件。
+func TestMessenger_BotSendFailedEventDisabled(t *testing.T) {
+	oldEnable := config.GlobalConfig.GetBool("bot.sendFailureReminder.enable")
+	oldTimes := config.GlobalConfig.GetInt("bot.sendFailureReminder.times")
+	oldQueue := config.GlobalConfig.GetBool("bot.offlineQueue.enable")
+	defer func() {
+		config.GlobalConfig.Set("bot.sendFailureReminder.enable", oldEnable)
+		config.GlobalConfig.Set("bot.sendFailureReminder.times", oldTimes)
+		config.GlobalConfig.Set("bot.offlineQueue.enable", oldQueue)
+	}()
+	config.GlobalConfig.Set("bot.offlineQueue.enable", false)
+	config.GlobalConfig.Set("bot.sendFailureReminder.enable", false)
+	config.GlobalConfig.Set("bot.sendFailureReminder.times", 1)
+
+	mock := newRetryMockAdapter(errors.New("send error 1"), errors.New("send error 2"))
+	messenger := NewMessenger(mock)
+	defer messenger.Stop()
+	messenger.Online.Store(true)
+	dispatcher := newMockDispatcher()
+	messenger.SetBotEventDispatcher(dispatcher)
+
+	msg := &SendingMessage{}
+	msg.Append(&TextSegment{Content: "hello"})
+
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Error(t, messenger.SendGroupMessage(545402644, msg, "hello").Error)
+	assert.Empty(t, dispatcher.getSendFailedEvents())
 }
 
 func TestSendResp_Status(t *testing.T) {

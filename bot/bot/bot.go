@@ -633,6 +633,12 @@ func (bot *Bot) DispatchBotOffline(event *adapter.BotOfflineEvent) {
 	}
 }
 
+func (bot *Bot) DispatchBotSendFailed(event *adapter.BotSendFailedEvent) {
+	if bot.BotSendFailedEvent != nil {
+		bot.BotSendFailedEvent.Dispatch(event)
+	}
+}
+
 func (bot *Bot) DispatchGroupMsgEmojiLike(event *adapter.GroupMsgEmojiLikeEvent) {
 	if bot.GroupMsgEmojiLikeEvent != nil {
 		bot.GroupMsgEmojiLikeEvent.Dispatch(event)
