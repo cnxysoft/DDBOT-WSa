@@ -175,3 +175,38 @@ func TestParseRoomPageLegacyClass(t *testing.T) {
 		t.Errorf("IsLiving = false, want true")
 	}
 }
+func TestCoverFallback(t *testing.T) {
+	withCover := `{"status":200,"data":{"liveStatus":"ON","profileInfo":{"nick":"n","avatar180":"https://a/x.jpg"},"liveData":{"roomName":"t","screenshot":"https://c/s.jpg"}}}`
+	got, err := parseProfileRoom("1", []byte(withCover))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cover != "https://c/s.jpg" || got.GetCover() != "https://c/s.jpg" {
+		t.Errorf("Cover = %q, GetCover() = %q, want https://c/s.jpg", got.Cover, got.GetCover())
+	}
+
+	noCover := `{"status":200,"data":{"liveStatus":"OFF","profileInfo":{"nick":"n","avatar180":"https://a/x.jpg"},"liveData":{}}}`
+	got2, err := parseProfileRoom("1", []byte(noCover))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.Cover != "" {
+		t.Errorf("Cover = %q, want empty", got2.Cover)
+	}
+	if got2.GetCover() != "https://a/x.jpg" {
+		t.Errorf("GetCover() = %q, want fallback to avatar", got2.GetCover())
+	}
+
+	// 页面兜底：从内嵌 TT_ROOM_DATA 提取（含 JSON 转义的 \/）
+	page := `<html><body class="liveStatus-on">` +
+		`<h3 class="host-name" title="n"></h3><h2 class="host-title" title="t"></h2>` +
+		`<script>var TT_ROOM_DATA = {"screenshot":"https:\/\/c\/s.jpg"};</script>` +
+		`</body></html>`
+	got3, err := parseRoomPage("1", []byte(page))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got3.Cover != "https://c/s.jpg" {
+		t.Errorf("page Cover = %q, want https://c/s.jpg", got3.Cover)
+	}
+}

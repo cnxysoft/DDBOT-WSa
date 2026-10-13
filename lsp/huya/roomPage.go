@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type huyaProfileRoomResp struct {
 		LiveData struct {
 			RoomName     string `json:"roomName"`
 			Introduction string `json:"introduction"`
+			Screenshot   string `json:"screenshot"`
 		} `json:"liveData"`
 	} `json:"data"`
 }
@@ -47,6 +49,9 @@ func huyaRequestOpts() []requests.Option {
 		requests.TimeoutOption(time.Second * 10),
 	}
 }
+
+// huyaScreenshotRe 从直播页内嵌的 TT_ROOM_DATA 中提取封面图地址
+var huyaScreenshotRe = regexp.MustCompile(`"screenshot"\s*:\s*"([^"]+)"`)
 
 func huyaFixURL(u string) string {
 	if strings.HasPrefix(u, "//") {
@@ -105,6 +110,7 @@ func parseProfileRoom(roomId string, bin []byte) (*LiveInfo, error) {
 		RoomUrl:  HuyaPath(roomId),
 		Name:     resp.Data.ProfileInfo.Nick,
 		Avatar:   huyaFixURL(resp.Data.ProfileInfo.Avatar180),
+		Cover:    huyaFixURL(resp.Data.LiveData.Screenshot),
 		IsLiving: resp.Data.LiveStatus == huyaLiveStatusOn,
 	}
 	// 未开播/回放时 roomName 为空，退回房间简介
@@ -161,6 +167,11 @@ func parseRoomPage(roomId string, page []byte) (*LiveInfo, error) {
 
 	// 头像：旧选择器 #avatar-img 已不在页面中，现为 .host-pic img
 	ri.Avatar = huyaFixURL(huyaAvatarFromHtml(doc))
+
+	// 直播间封面：取页面内嵌 TT_ROOM_DATA 里的 screenshot
+	if m := huyaScreenshotRe.FindSubmatch(page); m != nil {
+		ri.Cover = huyaFixURL(strings.ReplaceAll(string(m[1]), `\/`, "/"))
+	}
 
 	// 房间标题
 	if titleH2 := doc.Find(".host-title"); titleH2.Size() == 1 {
