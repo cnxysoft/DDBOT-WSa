@@ -497,7 +497,6 @@ func (c *LspPrivateCommand) ConfigCommand() {
 		} `cmd:"" help:"配置动态过滤器" name:"filter"`
 		WeiboAlert struct {
 			Action string `arg:"" optional:"" default:"show" enum:"set,clear,show" help:"set=设置告警目标, clear=清除, show=查看当前设置"`
-			Group  int64  `optional:"" short:"g" help:"告警发送到指定群"`
 			QQ     int64  `optional:"" short:"q" help:"告警私聊发送给指定QQ"`
 		} `cmd:"" help:"配置微博Cookie/SUB告警通知的发送对象" name:"weibo_alert"`
 		Group int64 `optional:"" short:"g" help:"要操作的QQ群号码"`
@@ -604,7 +603,14 @@ func (c *LspPrivateCommand) ConfigCommand() {
 			c.textSend("未知的filter子命令")
 		}
 	case "weibo_alert":
-		handleWeiboAlertPrivate(func(s string) { c.textSend(s) }, configCmd.WeiboAlert.Action, configCmd.WeiboAlert.Group, configCmd.WeiboAlert.QQ)
+		if !c.l.PermissionStateManager.RequireAny(
+			permission.AdminRoleRequireOption(c.uin()),
+		) {
+			c.noPermission()
+			return
+		}
+		// kong 会把 -g 解析到根级 configCmd.Group，子命令自己的 short:"g" 会被根级抢走恒为 0
+		handleWeiboAlertPrivate(func(s string) { c.textSend(s) }, configCmd.WeiboAlert.Action, configCmd.Group, configCmd.WeiboAlert.QQ)
 	default:
 		c.textSend("暂未支持，你可以催作者GKD")
 	}
