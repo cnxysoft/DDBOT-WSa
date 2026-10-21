@@ -120,3 +120,9 @@ func apiError() {
 func api429() {
 	globalRateLimiter.Handle429()
 }
+
+// apiReset 清空退避与错误计数。进入自动恢复模式时调用：此时抓取已暂停，
+// 旧退避窗口没有意义，继续保留只会拖慢首次校验。
+func apiReset() {
+	globalRateLimiter.RecordSuccess()
+}

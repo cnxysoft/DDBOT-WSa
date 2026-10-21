@@ -592,10 +592,10 @@ func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan c
 		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
 		if err != nil {
 			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
-			recordTwitterFetchResult(false)
+			recordTwitterFetchResult(err)
 			continue
 		}
-		recordTwitterFetchResult(true)
+		recordTwitterFetchResult(nil)
 		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
 
 		for _, tweet := range result.Tweets {
@@ -665,10 +665,10 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 	if err != nil {
 		logger.Errorf("HomeTimeline fetch error: %v", err)
 		t.homeTimelineCursor = "" // 清除无效 cursor
-		recordTwitterFetchResult(false)
+		recordTwitterFetchResult(err)
 		return
 	}
-	recordTwitterFetchResult(true)
+	recordTwitterFetchResult(nil)
 
 	for _, tweet := range result.Tweets {
 		var screenName string
@@ -814,26 +814,63 @@ func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
 	return true
 }
 
-// twitterFetchFailures 运行时拉取失败的连续计数；成功一轮即清零。
-// 连续失败达到阈值说明会话/网络级别故障，进入自动恢复模式并告警，
-// 避免像以前那样只刷日志静默停摆。
+// 运行时拉取失败的连续计数，成功一轮即清零。
+//
+// 这里把“登录态失效”和“普通抓取失败”分开计数：
+//   - 登录态失效（401/403、Twitter 鉴权错误码）属于 Cookie 问题，连续几次即可确认，需立即告警；
+//   - 网络抖动、代理故障、响应无法解码属于普通抓取失败，必须持续一段时间才算异常，
+//     且告警文案不能写成 Cookie 失效——线上曾把响应解析失败算作 Cookie 失效，
+//     结果每 100 分钟误报一次，反而掩盖了真正的时间线接口故障。
 var (
-	twitterFetchFailures       atomic.Int32
-	twitterFetchFailThreshold  int32 = 20
+	twitterAuthFailures      atomic.Int32
+	twitterFetchFailures     atomic.Int32
+	twitterFetchFailingSince atomic.Int64 // 本轮连续失败起始时间（Unix 秒），0 表示当前无连续失败
 )
 
-func recordTwitterFetchResult(ok bool) {
-	if ok {
-		twitterFetchFailures.Store(0)
+// 阈值与时长用变量保存（测试需要覆写），生产值见下方默认。
+var (
+	twitterAuthFailThreshold  int32 = 3
+	twitterFetchFailThreshold int32 = 12
+)
+
+// twitterFetchFailMinDuration 普通抓取失败需持续多久才告警，避免网络抖动造成骚扰。
+var twitterFetchFailMinDuration = 30 * time.Minute
+
+func recordTwitterFetchResult(err error) {
+	if err == nil {
+		resetTwitterFetchFailures()
 		return
 	}
-	n := twitterFetchFailures.Add(1)
-	if n >= twitterFetchFailThreshold {
-		twitterFetchFailures.Store(0)
-		if !twitterRecovering.Load() {
-			enterTwitterRecovering(fmt.Sprintf("运行中连续%d次获取推文失败", n))
+
+	now := time.Now()
+	twitterFetchFailingSince.CompareAndSwap(0, now.Unix())
+
+	if isTwitterAuthError(err) {
+		if n := twitterAuthFailures.Add(1); n >= twitterAuthFailThreshold && !twitterRecovering.Load() {
+			enterTwitterRecovering(twitterIncidentAuth,
+				fmt.Sprintf("运行中连续%d次获取推文失败：登录态失效（%v）", n, err))
 		}
+		return
 	}
+
+	n := twitterFetchFailures.Add(1)
+	if n < twitterFetchFailThreshold {
+		return
+	}
+	if since := twitterFetchFailingSince.Load(); since > 0 && now.Sub(time.Unix(since, 0)) < twitterFetchFailMinDuration {
+		return
+	}
+	if !twitterRecovering.Load() {
+		enterTwitterRecovering(twitterIncidentFetch,
+			fmt.Sprintf("运行中连续%d次获取推文失败：%v", n, err))
+	}
+}
+
+// resetTwitterFetchFailures 清空连续失败计数；任意一次成功或进入恢复模式后重新统计。
+func resetTwitterFetchFailures() {
+	twitterAuthFailures.Store(0)
+	twitterFetchFailures.Store(0)
+	twitterFetchFailingSince.Store(0)
 }
 
 func SetRequestOptions() []requests.Option {
