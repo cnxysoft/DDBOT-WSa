@@ -39,6 +39,11 @@ func (c *Concern) fresh() concern.FreshFunc {
 			case <-ctx.Done():
 				return
 			}
+			if cfg.IsPlatformDisabled(Site) {
+				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+				t.Reset(interval)
+				continue
+			}
 			if bot.Instance == nil || bot.Instance.Messenger == nil || bot.Instance.Adapter == nil ||
 				!bot.Instance.Messenger.Online.Load() || !bot.Instance.Adapter.IsConnected() {
 				logger.Debug("BOT未连接，延迟B站订阅轮询")

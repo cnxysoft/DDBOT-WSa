@@ -113,6 +113,16 @@ var nonOprateable = [...]string{
 	CleanConcern,
 }
 
+// AllGroupCommands 返回群命令列表（副本，供 admin API 使用）
+func AllGroupCommands() []string {
+	return append([]string{}, allGroupCommand[:]...)
+}
+
+// AllPrivateCommands 返回私聊管理命令列表（副本，供 admin API 使用）
+func AllPrivateCommands() []string {
+	return append([]string{}, allPrivateOperate[:]...)
+}
+
 func CheckValidCommand(command string) bool {
 	return sliceutil.Contains(allGroupCommand, command)
 }

@@ -10,8 +10,9 @@ import (
 )
 
 // TestCollectConfigWriteViolations 覆盖「整体写」的鉴权：
-// 必须挡掉受保护键/敏感键的真实变更，同时不能误伤
+// 必须挡掉受保护键（admin.token/websocket.token）的真实变更，同时不能误伤
 // GET 脱敏后原样回传的占位符，以及未发生的变更。
+// 平台凭据（敏感但非受保护键）按「可写不可读」模型允许覆盖。
 func TestCollectConfigWriteViolations(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -58,10 +59,25 @@ func TestCollectConfigWriteViolations(t *testing.T) {
 			want:     nil,
 		},
 		{
-			name:     "telegram token 变更被拒绝",
+			// 凭据安全模型：平台凭据（非 protected 的敏感键）允许覆盖写入，但读取永远脱敏
+			name:     "平台凭据允许覆盖（可写不可读）",
 			existing: map[string]interface{}{"telegram": map[string]interface{}{"token": "t1"}},
 			updated:  map[string]interface{}{"telegram": map[string]interface{}{"token": "t2"}},
-			want:     []string{"telegram.token"},
+			want:     nil,
+		},
+		{
+			name:     "新增平台凭据允许",
+			existing: map[string]interface{}{"bilibili": map[string]interface{}{"interval": "25s"}},
+			updated: map[string]interface{}{"bilibili": map[string]interface{}{
+				"interval": "25s", "SESSDATA": "new-cookie", "bili_jct": "new-jct",
+			}},
+			want: nil,
+		},
+		{
+			name:     "清除平台凭据允许",
+			existing: map[string]interface{}{"weibo": map[string]interface{}{"sub": "old-sub"}},
+			updated:  map[string]interface{}{"weibo": map[string]interface{}{"sub": ""}},
+			want:     nil,
 		},
 		{
 			name:     "普通配置变更允许",

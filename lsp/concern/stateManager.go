@@ -525,6 +525,11 @@ func (c *StateManager) EmitQueueFresher(doFresh func(p concern_type.Type, id int
 				if !received {
 					return
 				}
+				// WebUI 平台级开关：停用的平台完全停止轮询（不请求 API、不产生事件）。
+				// emitQueue 为环形遍历，条目保留在队列中，恢复开关后自动继续轮询。
+				if cfg.IsPlatformDisabled(c.name) {
+					continue
+				}
 				id := emitItem.Id
 				if ok := c.checkFresh(id, true); !ok {
 					c.Logger().WithFields(logrus.Fields{

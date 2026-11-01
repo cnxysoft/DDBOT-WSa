@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	lsptelegram "github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
@@ -49,6 +50,20 @@ func (l *Lsp) consumeConcernNotify() (panicked bool) {
 			var inotify = _inotify
 			target := mmsg.NewGroupTarget(inotify.GetGroupCode())
 			nLogger := inotify.Logger()
+
+			// WebUI 平台级开关：停用的平台不推送（轮询与订阅数据保留，恢复开关后继续）
+			if cfg.IsPlatformDisabled(inotify.Site()) {
+				nLogger.Info("平台已在 WebUI 停用，跳过本次推送")
+				publishPush(PushEntry{
+					Site:      inotify.Site(),
+					Type:      inotify.Type().String(),
+					GroupCode: inotify.GetGroupCode(),
+					Target:    formatPushTarget(inotify),
+					Summary:   "平台已在 WebUI 停用，跳过推送",
+					Status:    PushStatusSkipped,
+				})
+				continue
+			}
 
 			if l.LspStateManager.IsMuted(inotify.GetGroupCode(), utils.GetBot().GetUin()) &&
 				!l.PermissionStateManager.CheckGroupAdministrator(inotify.GetGroupCode(), utils.GetBot().GetUin()) {
@@ -128,6 +143,14 @@ func (l *Lsp) consumeConcernNotify() (panicked bool) {
 				if inotify.GetGroupCode() < 0 {
 					lsptelegram.SendToChat(inotify.GetGroupCode(), m)
 					cfg.NotifyAfterCallback(inotify, nil)
+					publishPush(PushEntry{
+						Site:      inotify.Site(),
+						Type:      inotify.Type().String(),
+						GroupCode: inotify.GetGroupCode(),
+						Target:    formatPushTarget(inotify),
+						Summary:   summarizePushMsg(m),
+						Status:    PushStatusSent,
+					})
 					return
 				}
 
@@ -135,6 +158,14 @@ func (l *Lsp) consumeConcernNotify() (panicked bool) {
 				if len(msgs) > 0 {
 					cfg.NotifyAfterCallback(inotify, msgs[0])
 				}
+				publishPush(PushEntry{
+					Site:      inotify.Site(),
+					Type:      inotify.Type().String(),
+					GroupCode: inotify.GetGroupCode(),
+					Target:    formatPushTarget(inotify),
+					Summary:   summarizePushMsg(m),
+					Status:    pushStatusFromMsgs(msgs),
+				})
 
 				if atBeforeHook.Pass {
 					var atIdsOnce bool

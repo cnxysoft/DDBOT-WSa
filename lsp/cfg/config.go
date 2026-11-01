@@ -27,6 +27,17 @@ func MatchCmdWithPrefix(cmd string) (prefix string, command string, err error) {
 	return "", "", errors.New("match failed")
 }
 
+// IsPlatformDisabled 判断平台是否被 WebUI 停用（platform.<site>.enable 显式为 false）。
+// 缺省或 true 均视为启用。走 viper 热配置读取，admin 原子写入配置文件后
+// 经 WatchConfig 自动重载，无需重启即生效。
+func IsPlatformDisabled(site string) bool {
+	if site == "" {
+		return false
+	}
+	key := "platform." + site + ".enable"
+	return config.GlobalConfig.IsSet(key) && !config.GlobalConfig.GetBool(key)
+}
+
 func GetCommandPrefix(commands ...string) string {
 	if len(commands) > 0 {
 		var customPrefixCfg = GetCustomCommandPrefix()

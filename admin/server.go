@@ -1,13 +1,18 @@
 package admin
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -83,22 +88,6 @@ type ConfigUpdateRequest struct {
 	Config map[string]interface{} `json:"config"`
 }
 
-type ConfigKeyUpdateRequest struct {
-	Value interface{} `json:"value"`
-}
-
-type LogsRequest struct {
-	Limit  int    `json:"limit"`
-	Offset int    `json:"offset"`
-	Level  string `json:"level"`
-}
-
-type SendNotificationRequest struct {
-	Target  string `json:"target"`
-	Message string `json:"message"`
-	Type    string `json:"type"`
-}
-
 type SubInfo struct {
 	ID        interface{} `json:"id"`
 	Type      string      `json:"type"`
@@ -107,38 +96,34 @@ type SubInfo struct {
 	Name      string      `json:"name"`
 }
 
-type ConfigInfo struct {
-	Key   string      `json:"key"`
-	Value interface{} `json:"value"`
-}
-
+// LogInfo SSE 日志流与内存环形缓冲的条目结构
 type LogInfo struct {
 	Time    string `json:"time"`
 	Level   string `json:"level"`
 	Message string `json:"message"`
 }
 
-type SystemStatus struct {
-	CPU    float64 `json:"cpu"`
-	Memory float64 `json:"memory"`
-	Disk   float64 `json:"disk"`
-}
-
-type NotificationInfo struct {
-	ID      string    `json:"id"`
-	Time    time.Time `json:"time"`
-	Type    string    `json:"type"`
-	Target  string    `json:"target"`
-	Message string    `json:"message"`
-	Success bool      `json:"success"`
-}
-
 type Server struct {
-	addr  string
-	token string
+	addr string
+
+	// token 支持运行期热更新（初始化向导设置密码后无需重启即可登录），读写加锁
+	tokenMu sync.RWMutex
+	token   string
 
 	startedAt time.Time
 	online    *atomic.Bool
+}
+
+func (s *Server) getToken() string {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	return s.token
+}
+
+func (s *Server) setToken(t string) {
+	s.tokenMu.Lock()
+	s.token = t
+	s.tokenMu.Unlock()
 }
 
 type SubSummary struct {
@@ -173,7 +158,14 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 
 	s := &Server{addr: addr, token: token, startedAt: time.Now(), online: online}
 
+	// 推送记录收集器（eventbus → 内存环形缓冲，供 REST/SSE 读取）
+	installPushCollector()
+
 	mux := http.NewServeMux()
+	// 初始化向导（无鉴权，但仅在 admin.token 未设置时可用，见 setup.go）。
+	// guardSetup 把可达来源限制为本机回环 + 同源，堵住跨站页面/局域网主机在首次部署窗口夺权（见审查报告 H2）。
+	mux.HandleFunc("/api/v1/setup", s.guardSetup(s.handleSetup))
+	mux.HandleFunc("/api/v1/setup/status", s.handleSetupStatus)
 	// 基础 API
 	mux.HandleFunc("/api/v1/health", s.withAuth(s.handleHealth))
 	mux.HandleFunc("/api/v1/onebot/status", s.withAuth(s.handleOneBotStatus))
@@ -183,32 +175,47 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	mux.HandleFunc("/api/v1/subs/list", s.withAuth(s.handleSubsList))
 	mux.HandleFunc("/api/v1/subs/add", s.withAuth(s.handleAddSub))
 	mux.HandleFunc("/api/v1/subs/remove", s.withAuth(s.handleRemoveSub))
-	mux.HandleFunc("/api/v1/subs/detail/{id}", s.withAuth(s.handleSubDetail))
 	mux.HandleFunc("/api/admin/sub/config", s.withAuth(s.handleSubConfig))
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
-	mux.HandleFunc("/api/v1/config/{key}", s.withAuth(s.handleConfigKey))
-	mux.HandleFunc("/api/v1/config/reload", s.withAuth(s.handleConfigReload))
 
 	// 日志管理 API
-	mux.HandleFunc("/api/v1/logs", s.withAuth(s.handleLogs))
-	mux.HandleFunc("/api/v1/logs/{level}", s.withAuth(s.handleLogsByLevel))
-	mux.HandleFunc("/api/v1/logs/clear", s.withAuth(s.handleClearLogs))
+	mux.HandleFunc("/api/v1/logs/stream", s.withAuth(s.handleLogsStream))
 
 	// 状态管理 API
 	mux.HandleFunc("/api/v1/status", s.withAuth(s.handleStatus))
-	mux.HandleFunc("/api/v1/status/concerns", s.withAuth(s.handleConcernsStatus))
-	mux.HandleFunc("/api/v1/status/system", s.withAuth(s.handleSystemStatus))
+
+	// 权限与命令管理 API（数据层复用 lsp/permission StateManager）
+	mux.HandleFunc("/api/v1/permissions/overview", s.withAuth(s.handlePermissionsOverview))
+	// guardAdminUngrant 保护最后一个管理员：lsp 在无管理员时会把管理权授予第一个私聊命令者（见审查报告 M6）
+	mux.HandleFunc("/api/v1/permissions/admin", s.withAuth(s.guardAdminUngrant(s.handleAdminAction)))
+	mux.HandleFunc("/api/v1/permissions/group-admins", s.withAuth(s.handleGroupAdmins))
+	mux.HandleFunc("/api/v1/permissions/group-admin", s.withAuth(s.handleGroupAdminAction))
+	mux.HandleFunc("/api/v1/permissions/silence", s.withAuth(s.handleSilence))
+	mux.HandleFunc("/api/v1/permissions/blocklist", s.withAuth(s.handleBlockList))
+	mux.HandleFunc("/api/v1/commands", s.withAuth(s.handleCommands))
+	mux.HandleFunc("/api/v1/commands/global", s.withAuth(s.handleCommandGlobal))
+	mux.HandleFunc("/api/v1/commands/group", s.withAuth(s.handleCommandGroup))
+
+	// 推送记录
+	mux.HandleFunc("/api/v1/pushes", s.withAuth(s.handlePushes))
+	mux.HandleFunc("/api/v1/pushes/stream", s.withAuth(s.handlePushesStream))
+
+	// 模板编辑
+	mux.HandleFunc("/api/v1/templates", s.withAuth(s.handleTemplates))
+	mux.HandleFunc("/api/v1/templates/detail", s.withAuth(s.handleTemplateDetail))
+	mux.HandleFunc("/api/v1/templates/save", s.withAuth(s.handleTemplateSave))
+	mux.HandleFunc("/api/v1/templates/preview", s.withAuth(s.handleTemplatePreview))
+	mux.HandleFunc("/api/v1/templates/reset", s.withAuth(s.handleTemplateReset))
 
 	// 通知管理 API
-	mux.HandleFunc("/api/v1/notifications", s.withAuth(s.handleNotifications))
-	mux.HandleFunc("/api/v1/notifications/send", s.withAuth(s.handleSendNotification))
-	mux.HandleFunc("/api/v1/notifications/stats", s.withAuth(s.handleNotificationStats))
 
 	// API 调试界面（同样需要鉴权，避免成为唯一无鉴权路由）
-	mux.HandleFunc("/api/debug", s.withAuth(s.serveApiDebugger))
-	mux.HandleFunc("/api/debug/", s.withAuth(s.serveApiDebuggerAssets))
+
+	// Web 管理面板静态资源（catch-all 兜底；数据接口均已在上方精确注册并鉴权，
+	// ServeMux 最长匹配保证 /api/* 不会被这里吞掉。静态资源见 static.go 的说明）
+	mux.Handle("/", http.HandlerFunc(serveWebFile))
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	go func() {
@@ -221,18 +228,17 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 添加 CORS 头
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
+		// 安全：不返回 Access-Control-Allow-Origin（旧实现是通配符 *，见审查报告 H2）。
+		// 面板与 API 由同一个 server 同源提供，同源请求不需要 CORS；返回 * 会让任意网页
+		// 在受害者浏览器里携带 token 读取 /api/v1/config 等数据接口的响应。
+		// 若确有跨源前端，应按白名单回显 Origin，而不是放开 *。
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
 		// 安全：token 为空时一律拒绝，不允许无鉴权访问（对应配置 admin.token 为空的默认情况）
-		if s.token == "" {
+		if s.getToken() == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"admin token not configured"}`))
 			return
@@ -243,11 +249,110 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 常量时间比较，防时序攻击
-		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(s.token)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(s.getToken())) != 1 {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		next(w, r)
+	}
+}
+
+// ---- 初始化向导来源限制（H2）----
+//
+// admin.token 未设置时 /api/v1/setup 匿名可写。仅监听 127.0.0.1 挡不住用户浏览器里的
+// 跨站页面（它们可以向 127.0.0.1 发 CORS 简单请求）；监听 0.0.0.0 时局域网任意主机都能
+// 抢先设置管理密码接管面板。因此 guardSetup 要求：
+//   - RemoteAddr 是回环地址（挡局域网/公网直连）；
+//   - Host 是回环地址（挡 DNS rebinding：攻击者域名解析到 127.0.0.1 时 Host 仍是攻击者域名）；
+//   - 带 Origin/Referer 时必须与 Host 完全同源（挡跨站页面伪造的请求）。
+//
+// 影响：首次向导只能在运行 bot 的机器上通过 http://127.0.0.1:15631（或 localhost）完成；
+// 已初始化后远程/反代访问面板不受影响（走 token 鉴权）。guardSetup 包裹 setup.go 的
+// handleSetup，是因为本次改动范围限定在 server.go。
+func (s *Server) guardSetup(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if !isLoopbackAddr(r.RemoteAddr) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "setup is only allowed from localhost"})
+			return
+		}
+		if !isLoopbackHost(r.Host) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "setup is only allowed via a loopback host"})
+			return
+		}
+		// Origin / Referer 任一存在时都必须是同源；两者都缺失（如本机 curl）时靠上面的回环校验兜底
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if !sameOriginHost(origin, r.Host) {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "cross-origin setup request rejected"})
+				return
+			}
+		} else if referer := r.Header.Get("Referer"); referer != "" && !sameOriginHost(referer, r.Host) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "cross-origin setup request rejected"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// isLoopbackAddr 判断连接来源地址（r.RemoteAddr，host:port）是否为回环地址。
+func isLoopbackAddr(remoteAddr string) bool {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+// isLoopbackHost 判断请求 Host 头是否指向本机（回环 IP 或 localhost）。
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// sameOriginHost 判断 Origin 头的 host:port 是否与请求 Host 完全一致（同源）。
+func sameOriginHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
+}
+
+// ---- 最后一个管理员保护（M6）----
+//
+// lsp 在 CheckNoAdmin() 为真时会把 Admin 授予第一个私聊 Whosyourdaddy 的用户
+// （lsp/permission/stateManager.go、lsp/privateCommand.go）。面板上无提示地 ungrant 掉
+// 最后一个管理员，等于把 bot 管理权交给任意能私聊 bot 的 QQ 用户。
+// guardAdminUngrant 包裹 permission.go 的 handleAdminAction，是因为本次改动范围限定在 server.go。
+func (s *Server) guardAdminUngrant(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.Body != nil {
+			body, err := io.ReadAll(r.Body)
+			// 还原 body，真正的 handler 还要解析一次
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var req AdminActionRequest
+			if err == nil && json.Unmarshal(body, &req) == nil && req.Action == "ungrant" && req.QQ != 0 {
+				admins := s.permissionSM().ListAdmin()
+				if len(admins) == 1 && admins[0] == req.QQ {
+					writeErr(w, http.StatusBadRequest, "不能移除最后一个管理员：移除后 bot 会把管理权授予第一个发送私聊命令的用户")
+					return
+				}
+			}
+		}
 		next(w, r)
 	}
 }
@@ -285,7 +390,7 @@ func (s *Server) handleSubsSummary(w http.ResponseWriter, _ *http.Request) {
 // 订阅管理 API 处理函数
 
 func (s *Server) handleSubsList(w http.ResponseWriter, r *http.Request) {
-	var subs []SubInfo
+	subs := make([]SubInfo, 0) // 空列表返回 [] 而非 null
 	for _, c := range concern.ListConcern() {
 		sm := c.GetStateManager()
 		groupCodes, ids, ctypes, err := sm.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool { return true })
@@ -429,41 +534,6 @@ func (s *Server) handleRemoveSub(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
-func (s *Server) handleSubDetail(w http.ResponseWriter, r *http.Request) {
-	// 从 URL 中获取 ID
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/subs/detail/")
-	if id == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid ID"})
-		return
-	}
-
-	// 查找订阅
-	for _, c := range concern.ListConcern() {
-		sm := c.GetStateManager()
-		groupCodes, ids, ctypes, err := sm.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool { return true })
-		if err != nil {
-			continue
-		}
-		for i := range ids {
-			if fmt.Sprintf("%v", ids[i]) == id {
-				if i < len(groupCodes) && i < len(ctypes) {
-					_ = json.NewEncoder(w).Encode(SubInfo{
-						ID:        ids[i],
-						Type:      ctypes[i].String(),
-						Site:      c.Site(),
-						GroupCode: groupCodes[i],
-					})
-					return
-				}
-			}
-		}
-	}
-
-	w.WriteHeader(http.StatusNotFound)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": "Subscription not found"})
-}
-
 func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
 		site := r.URL.Query().Get("site")
@@ -514,6 +584,13 @@ func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request: " + err.Error()})
 			return
 		}
+		// 安全/健壮性：省略 config 字段时 req.Config 是 nil 指针（接口非 nil），
+		// 直接传给 OperateGroupConcernConfig 会在 cfg.Validate() 里对 nil 取字段地址 panic（见审查报告 M2）。
+		if req.Config == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "config is required"})
+			return
+		}
 
 		var targetConcern concern.Concern
 		for _, c := range concern.ListConcern() {
@@ -560,35 +637,109 @@ func (s *Server) handleSubConfig(w http.ResponseWriter, r *http.Request) {
 // POST 写入时遇到该占位值会被跳过，避免把脱敏值写回真实配置。
 const redactedPlaceholder = "***REDACTED***"
 
-var sensitiveKeyPatterns = []string{
-	"password", "passwd", "secret", "token", "sessdata",
-	"auth_token", "cookie", "credential", "apikey", "api_key",
-	"access_key", "private", "auth",
+// 凭据脱敏白名单：按「从根开始的完整路径」判断，不再用叶子键名子串匹配（见审查报告 H1）。
+// 旧实现只看叶子键名是否包含 password/token/cookie 等子串，导致 bilibili.bili_jct、
+// weibo.sub、twitter.ct0、douyin.sessionId/acSignature/acNonce、xhs.cookies.* 等高价值
+// 凭据在 GET /api/v1/config 中明文返回，与「凭据明文不可读取」的安全模型矛盾。
+//
+// sensitiveConfigLeafPaths：这些路径的整个值（标量/异常 map/切片）都替换为占位符。
+// 覆盖仓库自带 application.yaml（bot.go exampleConfig）中的全部凭据字段；
+// 不含账号名、clientId、API 地址一类非密钥字段，避免过度脱敏。
+var sensitiveConfigLeafPaths = map[string]bool{
+	"admin.token":              true,
+	"websocket.token":          true,
+	"telegram.token":           true,
+	"bilibili.SESSDATA":        true,
+	"bilibili.bili_jct":        true,
+	"acfun.password":           true,
+	"acfun.authKey":            true,
+	"acfun.acPassToken":        true,
+	"twitter.auth_token":       true,
+	"twitter.ct0":              true,
+	"twitter.bearerToken":      true,
+	"douyin.acSignature":       true,
+	"douyin.acNonce":           true,
+	"douyin.sessionId":         true,
+	"weibo.sub":                true,
+	"twitch.clientSecret":      true,
+	"twitcasting.clientSecret": true,
+	"heybox.x_xhh_tokenid":     true,
+	"loliconPool.apikey":       true,
 }
 
-func isSensitiveKey(key string) bool {
-	k := strings.ToLower(key)
-	for _, p := range sensitiveKeyPatterns {
-		if strings.Contains(k, p) {
+// sensitiveConfigSubtreePaths：这些路径下的所有叶子都视为凭据（保留嵌套结构，逐叶替换）。
+// 用于 xhs.cookies 这类「凭据命名空间」——子键名（a1/web_session/webId）不含敏感子串，
+// 且未来可能新增 cookie 字段，整棵树脱敏才安全。
+var sensitiveConfigSubtreePaths = []string{
+	"xhs.cookies",
+}
+
+func joinConfigPath(prefix, key string) string {
+	if prefix == "" {
+		return key
+	}
+	return prefix + "." + key
+}
+
+func isSensitiveSubtreePath(path string) bool {
+	for _, p := range sensitiveConfigSubtreePaths {
+		if path == p || strings.HasPrefix(path, p+".") {
 			return true
 		}
 	}
 	return false
 }
 
-// maskSensitiveConfig 递归地将敏感键的非空字符串值替换为占位符
+// maskSensitiveConfig 递归地将白名单路径的非空值替换为占位符。
+// 非 string 标量（如数值型 token）与切片同样脱敏，避免「写成不带引号的数字就漏」的绕过。
 func maskSensitiveConfig(cfg map[string]interface{}) {
+	maskConfigMap(cfg, "")
+}
+
+func maskConfigMap(cfg map[string]interface{}, prefix string) {
 	for k, v := range cfg {
-		if m, ok := v.(map[string]interface{}); ok {
-			maskSensitiveConfig(m)
+		path := joinConfigPath(prefix, k)
+		if sensitiveConfigLeafPaths[path] {
+			cfg[k] = maskedConfigValue(v)
 			continue
 		}
-		if isSensitiveKey(k) {
-			if s, ok := v.(string); ok && s != "" {
+		sensitive := isSensitiveSubtreePath(path)
+		switch val := v.(type) {
+		case map[string]interface{}:
+			maskConfigMap(val, path)
+		case []interface{}:
+			if sensitive {
+				// 敏感路径下的整个列表无法按元素定位，整体替换
+				cfg[k] = maskedConfigValue(v)
+				continue
+			}
+			maskConfigSlice(val, path)
+		default:
+			if sensitive && !configValueUnset(v) {
 				cfg[k] = redactedPlaceholder
 			}
 		}
 	}
+}
+
+// maskConfigSlice 递归处理列表中的 map/slice 元素，使嵌套白名单路径也能命中。
+func maskConfigSlice(items []interface{}, prefix string) {
+	for _, item := range items {
+		switch val := item.(type) {
+		case map[string]interface{}:
+			maskConfigMap(val, prefix)
+		case []interface{}:
+			maskConfigSlice(val, prefix)
+		}
+	}
+}
+
+// maskedConfigValue 返回脱敏后的值：未设置（nil/空串）保持原样，其余一律占位符。
+func maskedConfigValue(v interface{}) interface{} {
+	if configValueUnset(v) {
+		return v
+	}
+	return redactedPlaceholder
 }
 
 // mergeConfig 将 newCfg 合并到 baseCfg（new 优先）；值为脱敏占位符的键跳过，保留 base 原值
@@ -656,39 +807,86 @@ func configValueUnset(v interface{}) bool {
 }
 
 // collectConfigWriteViolations 递归比较「请求写入的配置」与「现有配置」，
-// 返回被拒绝修改的键路径：受保护键（protectedConfigKeys）或敏感键，且值确实发生了变化。
-// 只拦截真正发生变化的键，因此 GET 返回的脱敏占位符、原样回传的未修改值都不会被误判，
-// 也不会因为类型差异（yaml int 与 json float64）产生误报。
+// 返回会被拒绝的受保护键路径（protectedConfigKeys），只要 mergeConfig 会改变它的值。
+//
+// 凭据安全模型（可写不可读）：
+//   - GET 永远脱敏（maskSensitiveConfig），凭据明文不可读取
+//   - 受保护键（admin.token / websocket.token）禁止修改——这两个键可提权或留后门
+//   - 其余敏感键（平台 cookie/token/密码）允许覆盖写入，但读不回明文；
+//     拿到 admin token 的攻击者最多覆盖凭据（影响与删订阅同级），无法窃取既有凭据
+//
+// 不能只检查「命中受保护键的叶子标量」，那会漏掉两类绕过（见审查报告 M1）：
+//  1. 整体替换父键：{"admin": null} / {"admin": "x"} 会把 admin.token 连同父键一起删掉；
+//  2. 改变受保护键类型：{"websocket": {"token": {"x": 1}}} 会把字符串 token 换成 map。
+//
+// 因此这里：
+//   - 受保护键被写成 map（类型/结构改变）一律违规；
+//   - 待写入的 map 替换掉现有 map 时，检查新子树里的受保护键；
+//   - 非受保护路径若用标量/nil 整体替换掉含受保护键的现有子树，按被删掉的受保护键记违规；
+//   - 受保护键的叶子值按「占位符代表未修改」「新旧语义相等代表未修改」判断。
 func collectConfigWriteViolations(existing, updated map[string]interface{}, prefix string) []string {
 	var violations []string
 	for k, newVal := range updated {
-		key := k
-		if prefix != "" {
-			key = prefix + "." + k
-		}
-		if newMap, ok := newVal.(map[string]interface{}); ok {
-			existingMap, _ := existing[k].(map[string]interface{})
-			violations = append(violations, collectConfigWriteViolations(existingMap, newMap, key)...)
+		key := joinConfigPath(prefix, k)
+		newMap, newIsMap := newVal.(map[string]interface{})
+		oldVal, oldPresent := existing[k]
+		oldMap, oldIsMap := oldVal.(map[string]interface{})
+
+		if newIsMap {
+			// 受保护键被写成 map：类型/结构改变，直接违规
+			if isProtectedConfigKeyPath(key) {
+				violations = append(violations, key)
+				continue
+			}
+			// existing 不是 map 时传入 nil，递归仍能定位新子树里的受保护键
+			if !oldIsMap {
+				violations = append(violations, collectConfigWriteViolations(nil, newMap, key)...)
+				continue
+			}
+			violations = append(violations, collectConfigWriteViolations(oldMap, newMap, key)...)
 			continue
 		}
-		if !protectedConfigKeys[key] && !isSensitiveKey(k) {
+
+		if isProtectedConfigKeyPath(key) {
+			// 与 mergeConfig 保持一致：脱敏占位符代表「未修改」，merge 时会被跳过
+			if s, ok := newVal.(string); ok && s == redactedPlaceholder {
+				continue
+			}
+			oldUnset := !oldPresent || configValueUnset(oldVal)
+			newUnset := configValueUnset(newVal)
+			if oldUnset && newUnset {
+				continue // 新旧都是未设置状态，视为未修改
+			}
+			if !oldUnset && !newUnset && !oldIsMap && fmt.Sprintf("%v", oldVal) == fmt.Sprintf("%v", newVal) {
+				continue // 值未变化（类型差异如 yaml int 与 json float64 也不误报）
+			}
+			violations = append(violations, key)
 			continue
 		}
-		// 与 mergeConfig 保持一致：脱敏占位符代表「未修改」，merge 时会被跳过
-		if s, ok := newVal.(string); ok && s == redactedPlaceholder {
-			continue
+
+		// 普通路径：若用标量/nil 整体替换掉了一个 map，且该 map 里含受保护键，
+		// 说明受保护键会被一起删除（如 {"admin": null}）。
+		if oldIsMap {
+			violations = append(violations, protectedPathsInSubtree(oldMap, key)...)
 		}
-		oldUnset := configValueUnset(existing[k])
-		newUnset := configValueUnset(newVal)
-		if oldUnset && newUnset {
-			continue // 新旧都是未设置状态，视为未修改
-		}
-		if !oldUnset && !newUnset && fmt.Sprintf("%v", existing[k]) == fmt.Sprintf("%v", newVal) {
-			continue // 值未变化
-		}
-		violations = append(violations, key)
 	}
 	return violations
+}
+
+// protectedPathsInSubtree 返回 cfg 子树中所有受保护键的完整路径（用于检测父键被整体替换/删除）。
+func protectedPathsInSubtree(cfg map[string]interface{}, prefix string) []string {
+	var paths []string
+	for k, v := range cfg {
+		path := joinConfigPath(prefix, k)
+		if sub, ok := v.(map[string]interface{}); ok {
+			paths = append(paths, protectedPathsInSubtree(sub, path)...)
+			continue
+		}
+		if isProtectedConfigKeyPath(path) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -726,12 +924,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_ = yaml.Unmarshal(data, &existing)
 		}
 
-		// 安全：整体写同样要挡掉受保护键/敏感键（admin.token、websocket.token 等），
+		// 安全：整体写挡掉受保护键（admin.token、websocket.token），
 		// 否则可以绕过 handleConfigKey 的单键校验，靠整体 merge 落盘 token 提权或留下后门。
+		// 平台凭据（cookie/token/密码）允许覆盖写入但不可读取明文（见 collectConfigWriteViolations 注释）。
 		if violations := collectConfigWriteViolations(existing, req.Config, ""); len(violations) > 0 {
 			w.WriteHeader(http.StatusForbidden)
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "protected or sensitive config keys cannot be modified via API: " + strings.Join(violations, ", "),
+				"error": "protected config keys cannot be modified via API: " + strings.Join(violations, ", "),
 			})
 			return
 		}
@@ -772,345 +971,22 @@ var protectedConfigKeys = map[string]bool{
 	"websocket.token": true,
 }
 
-func (s *Server) handleConfigKey(w http.ResponseWriter, r *http.Request) {
-	// 从 URL 中获取配置键
-	key := strings.TrimPrefix(r.URL.Path, "/api/v1/config/")
-	if key == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid config key"})
-		return
+// isProtectedConfigKeyPath 判断完整键路径是否命中受保护键：
+// 精确匹配顶层路径（websocket.token），或任意嵌套层级的同名末段（a.b.websocket.token），
+// 防止把受保护键藏进嵌套结构绕过校验。
+func isProtectedConfigKeyPath(path string) bool {
+	if protectedConfigKeys[path] {
+		return true
 	}
-
-	switch r.Method {
-	case http.MethodGet:
-		// 获取特定配置项（敏感键脱敏）
-		value := config.GlobalConfig.Get(key)
-		lastKey := key
-		if idx := strings.LastIndex(key, "."); idx >= 0 {
-			lastKey = key[idx+1:]
+	for pk := range protectedConfigKeys {
+		if strings.HasSuffix(path, "."+pk) {
+			return true
 		}
-		if isSensitiveKey(lastKey) {
-			if sv, ok := value.(string); ok && sv != "" {
-				value = redactedPlaceholder
-			}
-		}
-		_ = json.NewEncoder(w).Encode(ConfigInfo{Key: key, Value: value})
-
-	case http.MethodPost:
-		// 更新特定配置项
-		var req ConfigKeyUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
-			return
-		}
-
-		// 安全：受保护键与敏感键禁止通过 API 修改；值必须是标量，防止写入嵌套结构
-		if protectedConfigKeys[key] || isSensitiveKey(key) {
-			w.WriteHeader(http.StatusForbidden)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "protected config key cannot be modified via API"})
-			return
-		}
-		switch req.Value.(type) {
-		case string, bool, int, int64, float64, json.Number:
-		default:
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "config value must be a scalar (string/bool/number)"})
-			return
-		}
-
-		// 读取当前配置
-		data, err := os.ReadFile("application.yaml")
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
-			return
-		}
-
-		var config map[string]interface{}
-		if err := yaml.Unmarshal(data, &config); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to parse config file"})
-			return
-		}
-
-		// 更新配置项
-		// 处理嵌套键，如 "admin.enable"
-		oldData := data
-		keys := strings.Split(key, ".")
-		current := config
-		for i, k := range keys {
-			if i == len(keys)-1 {
-				current[k] = req.Value
-			} else {
-				if _, ok := current[k]; !ok {
-					current[k] = make(map[string]interface{})
-				}
-				if nested, ok := current[k].(map[string]interface{}); ok {
-					current = nested
-				} else {
-					w.WriteHeader(http.StatusBadRequest)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid config key path"})
-					return
-				}
-			}
-		}
-
-		// 写回配置文件（写入前备份，权限收紧）
-		data, err = yaml.Marshal(config)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
-			return
-		}
-
-		if err := os.WriteFile("application.yaml.bak", oldData, 0600); err != nil {
-			logrus.Warnf("配置备份失败: %v", err)
-		}
-		if err := writeFileAtomic("application.yaml", data, 0600); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
-			return
-		}
-
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-
-	default:
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
 	}
-}
-
-func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
-	// 重新加载配置
-	// 注意：这里需要根据实际的配置加载机制来实现
-	// 由于 config.GlobalConfig 是全局的，我们可以尝试重新读取配置文件
-
-	data, err := os.ReadFile("application.yaml")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
-		return
-	}
-
-	var config map[string]interface{}
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to parse config file"})
-		return
-	}
-
-	// 这里可以添加重新加载配置的逻辑
-	// 由于具体的配置加载机制可能不同，这里只是返回成功
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	return false
 }
 
 // 日志管理 API 处理函数
-
-func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	// 获取日志目录
-	logDir := "./logs"
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		logDir = "."
-	}
-
-	// 查找最新的日志文件
-	var latestLogFile string
-	var latestModTime time.Time
-
-	entries, err := os.ReadDir(logDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read log directory"})
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
-			fileInfo, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if fileInfo.ModTime().After(latestModTime) {
-				latestModTime = fileInfo.ModTime()
-				latestLogFile = filepath.Join(logDir, entry.Name())
-			}
-		}
-	}
-
-	if latestLogFile == "" {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "No log files found"})
-		return
-	}
-
-	// 读取日志文件
-	data, err := os.ReadFile(latestLogFile)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read log file"})
-		return
-	}
-
-	// 解析日志
-	lines := strings.Split(string(data), "\n")
-	var logs []LogInfo
-
-	// 简单的日志解析，假设日志格式为：时间 级别 消息
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 3)
-		if len(parts) >= 3 {
-			logs = append(logs, LogInfo{
-				Time:    parts[0],
-				Level:   parts[1],
-				Message: parts[2],
-			})
-		} else {
-			logs = append(logs, LogInfo{
-				Time:    time.Now().Format("2006-01-02 15:04:05"),
-				Level:   "INFO",
-				Message: line,
-			})
-		}
-	}
-
-	// 应用分页
-	limit := 100
-	offset := 0
-
-	if r.URL.Query().Get("limit") != "" {
-		fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
-	}
-
-	if r.URL.Query().Get("offset") != "" {
-		fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
-	}
-
-	if offset < 0 {
-		offset = 0
-	}
-
-	if limit <= 0 {
-		limit = 100
-	}
-
-	end := offset + limit
-	if end > len(logs) {
-		end = len(logs)
-	}
-
-	if offset >= len(logs) {
-		_ = json.NewEncoder(w).Encode([]LogInfo{})
-		return
-	}
-
-	_ = json.NewEncoder(w).Encode(logs[offset:end])
-}
-
-func (s *Server) handleLogsByLevel(w http.ResponseWriter, r *http.Request) {
-	// 从 URL 中获取日志级别
-	level := strings.TrimPrefix(r.URL.Path, "/api/v1/logs/")
-	if level == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid log level"})
-		return
-	}
-
-	// 获取日志目录
-	logDir := "./logs"
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		logDir = "."
-	}
-
-	// 查找最新的日志文件
-	var latestLogFile string
-	var latestModTime time.Time
-
-	entries, err := os.ReadDir(logDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read log directory"})
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
-			fileInfo, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			if fileInfo.ModTime().After(latestModTime) {
-				latestModTime = fileInfo.ModTime()
-				latestLogFile = filepath.Join(logDir, entry.Name())
-			}
-		}
-	}
-
-	if latestLogFile == "" {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "No log files found"})
-		return
-	}
-
-	// 读取日志文件
-	data, err := os.ReadFile(latestLogFile)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read log file"})
-		return
-	}
-
-	// 解析日志
-	lines := strings.Split(string(data), "\n")
-	var logs []LogInfo
-
-	// 简单的日志解析，假设日志格式为：时间 级别 消息
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 3)
-		if len(parts) >= 3 && strings.EqualFold(parts[1], level) {
-			logs = append(logs, LogInfo{
-				Time:    parts[0],
-				Level:   parts[1],
-				Message: parts[2],
-			})
-		}
-	}
-
-	_ = json.NewEncoder(w).Encode(logs)
-}
-
-func (s *Server) handleClearLogs(w http.ResponseWriter, r *http.Request) {
-	// 获取日志目录
-	logDir := "./logs"
-	if _, err := os.Stat(logDir); os.IsNotExist(err) {
-		logDir = "."
-	}
-
-	// 清理日志文件
-	entries, err := os.ReadDir(logDir)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read log directory"})
-		return
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".log") {
-			filePath := filepath.Join(logDir, entry.Name())
-			if err := os.Truncate(filePath, 0); err != nil {
-				// 忽略错误，继续清理其他日志文件
-			}
-		}
-	}
-
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-}
 
 // 状态管理 API 处理函数
 
@@ -1121,7 +997,6 @@ type DetailedStatus struct {
 	Subscriptions       int             `json:"subscriptions"`
 	SubscriptionsBySite map[string]int  `json:"subscriptionsBySite"`
 	ConcernsStatus      map[string]bool `json:"concernsStatus"`
-	System              SystemStatus    `json:"system"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -1149,9 +1024,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		concernsStatus[c.Site()] = true // 简单起见，假设所有站点都正常
 	}
 
-	// 获取系统状态
-	systemStatus := s.getSystemStatus()
-
 	// 构建详细状态
 	online := false
 	if s.online != nil {
@@ -1164,654 +1036,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Subscriptions:       subscriptions,
 		SubscriptionsBySite: subscriptionsBySite,
 		ConcernsStatus:      concernsStatus,
-		System:              systemStatus,
 	}
 
 	_ = json.NewEncoder(w).Encode(status)
 }
 
-func (s *Server) handleConcernsStatus(w http.ResponseWriter, r *http.Request) {
-	// 获取各站点关注状态
-	concernsStatus := make(map[string]map[string]interface{})
-
-	for _, c := range concern.ListConcern() {
-		sm := c.GetStateManager()
-		_, ids, ctypes, err := sm.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool { return true })
-		if err != nil {
-			concernsStatus[c.Site()] = map[string]interface{}{
-				"online": false,
-				"error":  err.Error(),
-			}
-			continue
-		}
-
-		// 统计各类型的订阅数量
-		typeCount := make(map[string]int)
-		for _, t := range ctypes {
-			typeCount[t.String()]++
-		}
-
-		concernsStatus[c.Site()] = map[string]interface{}{
-			"online":        true,
-			"subscriptions": len(ids),
-			"types":         typeCount,
-		}
-	}
-
-	_ = json.NewEncoder(w).Encode(concernsStatus)
-}
-
-func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
-	// 获取系统状态
-	systemStatus := s.getSystemStatus()
-	_ = json.NewEncoder(w).Encode(systemStatus)
-}
-
-func (s *Server) getSystemStatus() SystemStatus {
-	// 简单实现，返回模拟数据
-	// 实际项目中可以使用系统监控库获取真实数据
-	return SystemStatus{
-		CPU:    25.5, // 25.5%
-		Memory: 45.2, // 45.2%
-		Disk:   60.7, // 60.7%
-	}
-}
-
-// 通知管理 API 处理函数
-
-type NotificationStats struct {
-	Total          int                `json:"total"`
-	Success        int                `json:"success"`
-	Failed         int                `json:"failed"`
-	ByType         map[string]int     `json:"byType"`
-	ByTarget       map[string]int     `json:"byTarget"`
-	RecentFailures []NotificationInfo `json:"recentFailures"`
-}
-
-func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
-	// 模拟通知历史
-	// 实际项目中，应该从数据库或日志中获取真实的通知历史
-	var notifications []NotificationInfo
-
-	// 添加一些模拟数据
-	notifications = append(notifications, NotificationInfo{
-		ID:      "1",
-		Time:    time.Now().Add(-time.Hour),
-		Type:    "live",
-		Target:  "group:123456",
-		Message: "测试直播通知",
-		Success: true,
-	})
-
-	notifications = append(notifications, NotificationInfo{
-		ID:      "2",
-		Time:    time.Now().Add(-2 * time.Hour),
-		Type:    "news",
-		Target:  "group:123456",
-		Message: "测试新闻通知",
-		Success: true,
-	})
-
-	notifications = append(notifications, NotificationInfo{
-		ID:      "3",
-		Time:    time.Now().Add(-3 * time.Hour),
-		Type:    "live",
-		Target:  "group:789012",
-		Message: "测试直播通知 2",
-		Success: false,
-	})
-
-	_ = json.NewEncoder(w).Encode(notifications)
-}
-
-func (s *Server) handleSendNotification(w http.ResponseWriter, r *http.Request) {
-	var req SendNotificationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
-		return
-	}
-
-	// 模拟发送通知
-	// 实际项目中，应该调用真实的通知发送函数
-	fmt.Printf("发送测试通知: Target=%s, Type=%s, Message=%s\n", req.Target, req.Type, req.Message)
-
-	// 模拟发送成功
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "测试通知发送成功"})
-}
-
-func (s *Server) handleNotificationStats(w http.ResponseWriter, r *http.Request) {
-	// 模拟通知统计信息
-	// 实际项目中，应该从数据库或日志中获取真实的统计信息
-	stats := NotificationStats{
-		Total:   100,
-		Success: 95,
-		Failed:  5,
-		ByType: map[string]int{
-			"live":  60,
-			"news":  30,
-			"other": 10,
-		},
-		ByTarget: map[string]int{
-			"group:123456": 70,
-			"group:789012": 30,
-		},
-		RecentFailures: []NotificationInfo{
-			{
-				ID:      "3",
-				Time:    time.Now().Add(-3 * time.Hour),
-				Type:    "live",
-				Target:  "group:789012",
-				Message: "测试直播通知 2",
-				Success: false,
-			},
-		},
-	}
-
-	_ = json.NewEncoder(w).Encode(stats)
-}
-
 // API 调试界面处理函数
-
-func (s *Server) serveApiDebugger(w http.ResponseWriter, r *http.Request) {
-	// 设置CORS头以便调试
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	// 返回API调试界面的HTML
-	html := `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DDBOT-WSa API 调试工具</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: #333;
-        }
-        .container { 
-            max-width: 1200px; 
-            margin: 0 auto; 
-            background: white; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            overflow: hidden;
-        }
-        .header { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            padding: 30px; 
-            text-align: center; 
-        }
-        .header h1 { font-size: 28px; margin-bottom: 8px; }
-        .header p { opacity: 0.9; font-size: 16px; }
-        
-        .main-content { 
-            display: grid; 
-            grid-template-columns: 1fr 1fr; 
-            gap: 20px; 
-            padding: 30px; 
-        }
-        
-        .panel { 
-            background: #f8f9fa; 
-            border-radius: 10px; 
-            padding: 25px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        .panel h2 { 
-            color: #495057; 
-            margin-bottom: 20px; 
-            padding-bottom: 10px; 
-            border-bottom: 2px solid #dee2e6; 
-        }
-        
-        .form-group { margin-bottom: 20px; }
-        .form-group label { 
-            display: block; 
-            margin-bottom: 8px; 
-            font-weight: 600; 
-            color: #495057; 
-        }
-        .form-control { 
-            width: 100%; 
-            padding: 12px; 
-            border: 2px solid #e9ecef; 
-            border-radius: 6px; 
-            font-size: 14px; 
-            transition: border-color 0.2s; 
-        }
-        .form-control:focus { 
-            outline: none; 
-            border-color: #667eea; 
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); 
-        }
-        
-        .form-row { 
-            display: grid; 
-            grid-template-columns: 1fr 1fr; 
-            gap: 15px; 
-        }
-        
-        select.form-control { 
-            appearance: none; 
-            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            background-size: 16px;
-            padding-right: 40px;
-        }
-        
-        textarea.form-control { 
-            min-height: 150px; 
-            resize: vertical; 
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; 
-        }
-        
-        .btn { 
-            width: 100%; 
-            padding: 14px; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            border: none; 
-            border-radius: 6px; 
-            font-size: 16px; 
-            font-weight: 600; 
-            cursor: pointer; 
-            transition: all 0.2s; 
-        }
-        .btn:hover:not(:disabled) { 
-            transform: translateY(-2px); 
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); 
-        }
-        .btn:disabled { 
-            opacity: 0.6; 
-            cursor: not-allowed; 
-        }
-        
-        .response-info { 
-            display: flex; 
-            justify-content: space-between; 
-            margin-bottom: 20px; 
-            padding: 15px; 
-            background: white; 
-            border-radius: 6px; 
-            border-left: 4px solid #667eea; 
-        }
-        
-        .status-badge { 
-            padding: 6px 12px; 
-            border-radius: 20px; 
-            font-size: 14px; 
-            font-weight: 600; 
-        }
-        .status-success { background: #d4edda; color: #155724; }
-        .status-error { background: #f8d7da; color: #721c24; }
-        
-        .tabs { 
-            display: flex; 
-            margin-bottom: 20px; 
-            border-bottom: 1px solid #dee2e6; 
-        }
-        
-        .tab-btn { 
-            padding: 12px 20px; 
-            background: none; 
-            border: none; 
-            color: #6c757d; 
-            cursor: pointer; 
-            border-bottom: 3px solid transparent; 
-            transition: all 0.2s; 
-            font-weight: 500; 
-        }
-        .tab-btn.active { 
-            color: #667eea; 
-            border-bottom-color: #667eea; 
-        }
-        
-        .response-content { 
-            background: white; 
-            border-radius: 6px; 
-            padding: 20px; 
-            min-height: 250px; 
-            max-height: 400px; 
-            overflow-y: auto; 
-            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; 
-            font-size: 13px; 
-            line-height: 1.5; 
-        }
-        
-        .response-content pre { 
-            margin: 0; 
-            white-space: pre-wrap; 
-            word-break: break-all; 
-        }
-        
-        .empty-state { 
-            text-align: center; 
-            padding: 40px; 
-            color: #6c757d; 
-        }
-        
-        .api-presets { 
-            margin-top: 15px; 
-        }
-        .preset-btn { 
-            display: inline-block;
-            margin: 5px 5px 5px 0;
-            padding: 8px 12px;
-            background: #e9ecef;
-            border: none;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .preset-btn:hover { 
-            background: #667eea; 
-            color: white; 
-        }
-        
-        @media (max-width: 768px) {
-            .main-content { 
-                grid-template-columns: 1fr; 
-            }
-            .form-row { 
-                grid-template-columns: 1fr; 
-            }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🤖 DDBOT-WSa API 调试工具</h1>
-            <p>轻松测试和调试你的机器人API接口</p>
-        </div>
-        
-        <div class="main-content">
-            <div class="panel">
-                <h2>📤 请求配置</h2>
-                
-                <div class="form-group">
-                    <label>基础URL:</label>
-                    <input type="text" id="baseUrl" class="form-control" value="http://` + strings.TrimPrefix(s.addr, "http://") + `" placeholder="http://localhost:15631">
-                </div>
-                
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>方法:</label>
-                        <select id="method" class="form-control">
-                            <option value="GET">GET</option>
-                            <option value="POST">POST</option>
-                            <option value="PUT">PUT</option>
-                            <option value="DELETE">DELETE</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Token:</label>
-                        <input type="password" id="token" class="form-control" placeholder="Bearer token">
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label>API路径:</label>
-                    <input type="text" id="apiPath" class="form-control" value="/api/v1/health" placeholder="/api/v1/...">
-                    <div class="api-presets">
-                        <small>常用API:</small><br>
-                        <button class="preset-btn" onclick="setApi('/api/v1/health')">健康检查</button>
-                        <button class="preset-btn" onclick="setApi('/api/v1/onebot/status')">OneBot状态</button>
-                        <button class="preset-btn" onclick="setApi('/api/v1/subs/summary')">订阅汇总</button>
-                        <button class="preset-btn" onclick="setApi('/api/v1/subs/list')">订阅列表</button>
-                        <button class="preset-btn" onclick="setApi('/api/v1/status')">系统状态</button>
-                        <button class="preset-btn" onclick="setApi('/api/v1/config')">完整配置</button>
-                    </div>
-                </div>
-                
-                <div class="form-group" id="requestBodyGroup" style="display: none;">
-                    <label>请求体 (JSON):</label>
-                    <textarea id="requestBody" class="form-control" placeholder='{\n  "site": "bilibili",\n  "id": "123456",\n  "type": "live",\n  "groupCode": 123456789\n}'></textarea>
-                </div>
-                
-                <button id="sendBtn" class="btn" onclick="sendRequest()">发送请求</button>
-            </div>
-            
-            <div class="panel">
-                <h2>📥 响应结果</h2>
-                
-                <div class="response-info">
-                    <span id="statusBadge" class="status-badge">等待请求...</span>
-                    <span id="responseTime">-</span>
-                </div>
-                
-                <div class="tabs">
-                    <button class="tab-btn active" onclick="switchTab('headers')">响应头</button>
-                    <button class="tab-btn" onclick="switchTab('body')">响应体</button>
-                </div>
-                
-                <div id="headersTab" class="response-content">
-                    <div class="empty-state">暂无响应头信息</div>
-                </div>
-                
-                <div id="bodyTab" class="response-content" style="display: none;">
-                    <div class="empty-state">暂无响应内容</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // 全局变量
-        let currentTab = 'body';
-        let loading = false;
-        
-        // 方法改变时更新UI
-        document.getElementById('method').addEventListener('change', function() {
-            const requestBodyGroup = document.getElementById('requestBodyGroup');
-            requestBodyGroup.style.display = this.value === 'GET' ? 'none' : 'block';
-        });
-        
-        // 设置API路径
-        function setApi(path) {
-            document.getElementById('apiPath').value = path;
-            // 根据API路径预设请求体
-            updateRequestBody(path);
-        }
-        
-        // 更新请求体模板
-        function updateRequestBody(path) {
-            const requestBody = document.getElementById('requestBody');
-            switch(path) {
-                case '/api/v1/subs/add':
-                case '/api/v1/subs/remove':
-                    requestBody.value = JSON.stringify({
-                        "site": "bilibili",
-                        "id": "123456",
-                        "type": "live",
-                        "groupCode": 123456789
-                    }, null, 2);
-                    break;
-                case '/api/v1/config/admin.enable':
-                    requestBody.value = JSON.stringify({
-                        "value": true
-                    }, null, 2);
-                    break;
-                case '/api/v1/notifications/send':
-                    requestBody.value = JSON.stringify({
-                        "target": "group:123456",
-                        "message": "测试消息",
-                        "type": "live"
-                    }, null, 2);
-                    break;
-                default:
-                    requestBody.value = '';
-            }
-            
-            // 显示请求体输入框
-            if (requestBody.value) {
-                document.getElementById('requestBodyGroup').style.display = 'block';
-                document.getElementById('method').value = 'POST';
-            }
-        }
-        
-        // 切换标签页
-        function switchTab(tab) {
-            currentTab = tab;
-            
-            // 更新按钮状态
-            document.querySelectorAll('.tab-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            event.target.classList.add('active');
-            
-            // 显示对应内容
-            document.getElementById('headersTab').style.display = tab === 'headers' ? 'block' : 'none';
-            document.getElementById('bodyTab').style.display = tab === 'body' ? 'block' : 'none';
-        }
-        
-        // 发送请求
-        async function sendRequest() {
-            if (loading) return;
-            
-            const baseUrl = document.getElementById('baseUrl').value;
-            const method = document.getElementById('method').value;
-            const token = document.getElementById('token').value;
-            const apiPath = document.getElementById('apiPath').value;
-            const requestBody = document.getElementById('requestBody').value;
-            
-            if (!apiPath) {
-                alert('请输入API路径');
-                return;
-            }
-            
-            loading = true;
-            const sendBtn = document.getElementById('sendBtn');
-            sendBtn.textContent = '发送中...';
-            sendBtn.disabled = true;
-            
-            const startTime = Date.now();
-            
-            try {
-                // 智能URL拼接，避免重复的/api/
-                let url = baseUrl;
-                if (!baseUrl.endsWith('/') && !apiPath.startsWith('/')) {
-                    url += '/';
-                }
-                // 如果apiPath已经包含/api/前缀，则直接使用
-                if (apiPath.startsWith('/api/')) {
-                    url = baseUrl.replace(/\/api\/.*$/, '') + apiPath;
-                } else {
-                    url += apiPath;
-                }
-                const headers = {
-                    'Content-Type': 'application/json'
-                };
-                
-                if (token) {
-                    headers['Authorization'] = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
-                }
-                
-                const options = {
-                    method: method,
-                    headers: headers
-                };
-                
-                // 添加请求体
-                if (method !== 'GET' && requestBody.trim()) {
-                    try {
-                        JSON.parse(requestBody);
-                        options.body = requestBody;
-                    } catch (e) {
-                        throw new Error('请求体不是有效的JSON格式');
-                    }
-                }
-                
-                const response = await fetch(url, options);
-                const endTime = Date.now();
-                
-                // 更新状态显示
-                const statusBadge = document.getElementById('statusBadge');
-                const responseTime = document.getElementById('responseTime');
-                
-                statusBadge.textContent = response.status + ' ' + response.statusText;
-                statusBadge.className = 'status-badge ' + (response.status < 400 ? 'status-success' : 'status-error');
-                responseTime.textContent = '耗时: ' + (endTime - startTime) + 'ms';
-                
-                // 处理响应头
-                let headersText = '';
-                for (let [key, value] of response.headers.entries()) {
-                    headersText += key + ': ' + value + '\n';
-                }
-                
-                document.getElementById('headersTab').innerHTML = 
-                    headersText ? '<pre>' + headersText + '</pre>' : '<div class="empty-state">暂无响应头信息</div>';
-                
-                // 处理响应体
-                const contentType = response.headers.get('content-type');
-                let bodyText = '';
-                
-                if (contentType && contentType.includes('application/json')) {
-                    const data = await response.json();
-                    bodyText = JSON.stringify(data, null, 2);
-                } else {
-                    bodyText = await response.text();
-                }
-                
-                document.getElementById('bodyTab').innerHTML = 
-                    bodyText ? '<pre>' + bodyText + '</pre>' : '<div class="empty-state">暂无响应内容</div>';
-                
-                // 默认显示响应体
-                if (currentTab !== 'body') {
-                    switchTab('body');
-                }
-                
-            } catch (error) {
-                const statusBadge = document.getElementById('statusBadge');
-                const responseTime = document.getElementById('responseTime');
-                
-                statusBadge.textContent = '请求失败';
-                statusBadge.className = 'status-badge status-error';
-                responseTime.textContent = '耗时: ' + (Date.now() - startTime) + 'ms';
-                
-                document.getElementById('bodyTab').innerHTML = 
-                    '<pre>{\n  "error": "' + error.message + '"\n}</pre>';
-            } finally {
-                loading = false;
-                sendBtn.textContent = '发送请求';
-                sendBtn.disabled = false;
-            }
-        }
-        
-        // 回车发送请求
-        document.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                sendRequest();
-            }
-        });
-    </script>
-</body>
-</html>`
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(html))
-}
-
-func (s *Server) serveApiDebuggerAssets(w http.ResponseWriter, r *http.Request) {
-	// 简单的静态文件服务，主要用于未来扩展
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.WriteHeader(http.StatusNotFound)
-	_, _ = w.Write([]byte("API调试器资源文件"))
-}

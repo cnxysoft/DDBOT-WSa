@@ -733,6 +733,11 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 		for {
 			select {
 			case <-ti.C:
+				if cfg.IsPlatformDisabled(Site) {
+					logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+					reset()
+					continue
+				}
 				t.processUsers(ctx, eventChan)
 				reset()
 			case groupCode := <-t.manualRefreshCh:

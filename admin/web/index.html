@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DDBOT-WSa 管理面板</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 内联 SVG 图标库 -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l3.5-3.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M6.5 9.5l3 2.5-3 2.5"/><path d="M12.5 15H17"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7h18M3 12h18M3 17h18"/><circle cx="14" cy="7" r="2.2" fill="var(--bg-soft,#161b22)"/><circle cx="8" cy="12" r="2.2" fill="var(--bg-soft,#161b22)"/><circle cx="16" cy="17" r="2.2" fill="var(--bg-soft,#161b22)"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3a9 9 0 000 18z" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="9"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H6a2 2 0 01-2-2V5a2 2 0 012-2h3"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-rt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11A8 8 0 105.6 17.5"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></symbol>
+    <symbol id="i-switch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2.5" y="7.5" width="19" height="9" rx="4.5"/><circle cx="8" cy="12" r="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="p-bilibili" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="8" width="15" height="10.5" rx="3.2"/><path d="M8.5 4.8L11 7.2M15.5 4.8L13 7.2"/><ellipse cx="9.2" cy="12.6" rx=".9" ry="1.15" fill="currentColor" stroke="none"/><ellipse cx="14.8" cy="12.6" rx=".9" ry="1.15" fill="currentColor" stroke="none"/><path d="M10.6 15.7h2.8"/></symbol>
+    <symbol id="p-weibo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="11.5" cy="14.5" rx="7.5" ry="5"/><circle cx="11.5" cy="14.5" r="2.1" fill="currentColor" stroke="none"/><path d="M17.6 7.4a4.2 4.2 0 0 1 3.6 4.1M16 4a7.2 7.2 0 0 1 6.2 7" stroke-width="1.5"/></symbol>
+    <symbol id="p-twitter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="butt"><path d="M5.2 4.8l13.6 14.4M18.8 4.8L5.2 19.2"/></symbol>
+    <symbol id="p-youtube" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="6.5" width="18" height="11" rx="3.4"/><path d="M10.3 9.6l4.4 2.4-4.4 2.4z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="p-douyu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 12.5a6 4.2 0 0 0 12 0 6 4.2 0 0 0-12 0z"/><path d="M17.5 12.5l3.8-3v6z"/><circle cx="8.6" cy="11.6" r="1.05" fill="currentColor" stroke="none"/><path d="M10.5 8.9q1.5-1.9 3-.4" stroke-width="1.5"/></symbol>
+    <symbol id="p-huya" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13.6" r="6.4"/><path d="M6.8 10L7.2 5.4l3.6 2.7M17.2 10l-.4-4.6-3.6 2.7"/><circle cx="9.6" cy="13.2" r=".95" fill="currentColor" stroke="none"/><circle cx="14.4" cy="13.2" r=".95" fill="currentColor" stroke="none"/><path d="M10.3 16.6q1.7 1.3 3.4 0"/></symbol>
+    <symbol id="p-acfun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M9 16.4l3-8.8 3 8.8M10.3 13.4h3.4"/></symbol>
+    <symbol id="p-douyin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.2v10.4"/><circle cx="10.9" cy="14.7" r="2.85"/><path d="M14 4.7l5.4 1.2v3.5L14 8.2"/></symbol>
+    <symbol id="p-xhs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="4.5" width="13" height="15" rx="2.6"/><path d="M8.7 9.2h6.6M8.7 12h6.6M8.7 14.8h4.2"/></symbol>
+    <symbol id="p-twitch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h14v10l-4 4h-3.7l-3.3 3v-3H5z"/><path d="M10.8 8.6v3.4M14.4 8.6v3.4"/></symbol>
+    <symbol id="p-twitcasting" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7.5" width="17" height="12" rx="2.6"/><circle cx="12" cy="13.5" r="3.2"/><path d="M9 7.5l1.6-3h2.8l1.6 3"/></symbol>
+    <symbol id="p-heybox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9.6l7-4 7 4v8l-7 4-7-4z"/><path d="M5 9.6l7 4 7-4M12 13.6v8"/></symbol>
+    <symbol id="p-generic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="2.8" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="14" r="4.2"/><path d="M11 11L20 2M17 5l2.5 2.5M14.5 7.5L17 10"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 13.5A8.5 8.5 0 1110.5 4 6.8 6.8 0 0020 13.5z"/></symbol>
+  </svg>
+  <!-- 初始化向导层（仅首次部署 admin.token 未设置时出现） -->
+  <div id="setup-overlay" class="login-overlay hidden">
+    <div class="login-card setup-card">
+      <div class="login-badge"><svg class="btn-ic" style="width:26px;height:26px"><use href="#i-sliders"/></svg></div>
+      <div class="login-logo">DDBOT<span>-WSa</span></div>
+      <p class="login-sub">检测到首次部署，几步就能用起来</p>
+
+      <div class="setup-steps" id="setup-steps">
+        <span class="setup-step active" data-step="1"><b>1</b><small>密码</small></span>
+        <i></i><span class="setup-step" data-step="2"><b>2</b><small>OneBot</small></span>
+        <i></i><span class="setup-step" data-step="3"><b>3</b><small>主题</small></span>
+        <i></i><span class="setup-step" data-step="4"><b>4</b><small>确认</small></span>
+      </div>
+
+      <!-- 步骤 1：管理密码 -->
+      <div class="setup-pane" id="setup-pane-1">
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-key"/></svg></div>
+        <h3 class="setup-title">欢迎！先设一个管理密码</h3>
+        <p class="setup-desc">这是登录这个管理后台的钥匙，请至少 6 位。忘了的话去 application.yaml 里改 admin.token。</p>
+        <div class="pass-wrap">
+          <input type="password" id="setup-pass" class="input" placeholder="管理密码" autocomplete="new-password">
+          <button type="button" class="pass-eye" data-eye="setup-pass" aria-label="显示密码"><svg class="btn-ic"><use href="#i-eye"/></svg></button>
+        </div>
+        <input type="password" id="setup-pass2" class="input" placeholder="再输一次，确认没打错" autocomplete="new-password">
+        <p id="setup-err-1" class="login-error hidden"></p>
+        <button class="btn primary setup-next" data-goto="2">下一步：连接 OneBot</button>
+      </div>
+
+      <!-- 步骤 2：OneBot 连接 -->
+      <div class="setup-pane hidden" id="setup-pane-2">
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-switch"/></svg></div>
+        <h3 class="setup-title">让 Bot 连上你的 QQ</h3>
+        <p class="setup-desc">Bot 通过 OneBot 11 收发 QQ 消息（NapCat / Lagrange / LLOneBot 等实现端）。不确定怎么填可以跳过，稍后在「配置 → 网络」里弄。</p>
+        <div class="setup-mode" id="setup-mode">
+          <button type="button" class="setup-mode-btn active" data-mode="ws-server"><b>正向连接</b><small>Bot 开端口等 OneBot 来连</small></button>
+          <button type="button" class="setup-mode-btn" data-mode="ws-reverse"><b>反向连接</b><small>Bot 主动去连 OneBot</small></button>
+        </div>
+        <input type="text" id="setup-ob-addr" class="input" placeholder="127.0.0.1:15630">
+        <input type="password" id="setup-ob-token" class="input" placeholder="Access Token（两边没设就留空）" autocomplete="off">
+        <p id="setup-err-2" class="login-error hidden"></p>
+        <div class="setup-btn-row">
+          <button class="btn ghost setup-prev" data-goto="1">上一步</button>
+          <button class="btn primary setup-next" data-goto="3">下一步：主题</button>
+        </div>
+      </div>
+
+      <!-- 步骤 3：主题 -->
+      <div class="setup-pane hidden" id="setup-pane-3">
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-theme"/></svg></div>
+        <h3 class="setup-title">挑一个顺眼的样子</h3>
+        <p class="setup-desc">点一下立即生效，之后随时能在左下角切换。</p>
+        <div class="setup-theme" id="setup-theme">
+          <button type="button" class="setup-theme-btn" data-theme-choice="auto"><svg class="btn-ic"><use href="#i-monitor"/></svg>跟随系统</button>
+          <button type="button" class="setup-theme-btn" data-theme-choice="light"><svg class="btn-ic"><use href="#i-sun"/></svg>亮色</button>
+          <button type="button" class="setup-theme-btn" data-theme-choice="dark"><svg class="btn-ic"><use href="#i-moon"/></svg>暗色</button>
+        </div>
+        <div class="setup-btn-row">
+          <button class="btn ghost setup-prev" data-goto="2">上一步</button>
+          <button class="btn primary setup-next" data-goto="4">下一步：确认</button>
+        </div>
+      </div>
+
+      <!-- 步骤 4：确认 -->
+      <div class="setup-pane hidden" id="setup-pane-4">
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-doc"/></svg></div>
+        <h3 class="setup-title">都填好了，看一下</h3>
+        <div class="setup-summary" id="setup-summary"></div>
+        <p id="setup-err-4" class="login-error hidden"></p>
+        <div class="setup-btn-row">
+          <button class="btn ghost setup-prev" data-goto="3">上一步</button>
+          <button type="button" id="setup-submit" class="btn primary">完成初始化</button>
+        </div>
+      </div>
+
+      <!-- 成功态：带「接下来去哪」指引，读完手动进入 -->
+      <div class="setup-pane hidden" id="setup-pane-done">
+        <div class="setup-done-check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5 10-11"/></svg></div>
+        <h3 class="setup-title">一切就绪</h3>
+        <p class="setup-desc">配置已写入 application.yaml。</p>
+        <div class="setup-next-steps">
+          <div class="ns-row"><svg class="btn-ic"><use href="#i-dash"/></svg><span>OneBot 连接需<b>重启 Bot</b>生效，之后到<b>仪表盘</b>看连接状态</span></div>
+          <div class="ns-row"><svg class="btn-ic"><use href="#i-list"/></svg><span>去<b>订阅管理</b>添加第一个订阅</span></div>
+          <div class="ns-row"><svg class="btn-ic"><use href="#i-doc"/></svg><span>遇到问题，右上角<b>文档</b>有答案</span></div>
+        </div>
+        <button type="button" id="setup-enter" class="btn primary">进入管理面板</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 登录层 -->
+  <div id="login-overlay" class="login-overlay hidden">
+    <div class="login-card">
+      <div class="login-badge"><svg class="btn-ic" style="width:26px;height:26px"><use href="#i-dash"/></svg></div>
+      <div class="login-logo">DDBOT<span>-WSa</span></div>
+      <p class="login-sub">输入管理后台 Token 以继续</p>
+      <form id="login-form">
+        <input type="password" id="login-token" class="input" placeholder="请输入 Admin Token" autocomplete="current-password" required>
+        <button type="submit" id="login-btn" class="btn primary">登 录</button>
+      </form>
+      <p id="login-error" class="login-error hidden"></p>
+      <p class="login-hint">Token 配置于 application.yaml 的 admin.token</p>
+    </div>
+  </div>
+
+  <!-- 主应用 -->
+  <div id="app" class="app">
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="logo">DDBOT<span>-WSa</span></div>
+      <nav class="nav">
+        <a href="#/dashboard" class="nav-item active" data-page="dashboard">
+          <svg class="nav-ic"><use href="#i-dash"/></svg>仪表盘</a>
+        <a href="#/subscriptions" class="nav-item" data-page="subscriptions">
+          <svg class="nav-ic"><use href="#i-list"/></svg>订阅管理</a>
+        <a href="#/logs" class="nav-item" data-page="logs">
+          <svg class="nav-ic"><use href="#i-term"/></svg>实时日志</a>
+        <a href="#/pushes" class="nav-item" data-page="pushes">
+          <svg class="nav-ic"><use href="#i-send"/></svg>推送记录</a>
+        <a href="#/config" class="nav-item" data-page="config">
+          <svg class="nav-ic"><use href="#i-sliders"/></svg>配置</a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="theme-toggle" class="btn ghost sm" title="切换主题"><svg class="btn-ic"><use href="#i-theme"/></svg>主题</button>
+        <button id="logout-btn" class="btn ghost sm" title="退出登录"><svg class="btn-ic"><use href="#i-logout"/></svg>退出</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="menu-toggle" class="menu-toggle" title="菜单"><svg class="btn-ic"><use href="#i-menu"/></svg></button>
+        <h1 id="page-title">仪表盘</h1>
+        <a class="btn ghost sm" href="https://kizunerwe.github.io/DDBOT-WSa-docs/" target="_blank" rel="noopener" title="打开文档站"><svg class="btn-ic"><use href="#i-doc"/></svg>文档</a>
+        <span id="conn-badge" class="badge off">连接中…</span>
+      </header>
+
+      <!-- 仪表盘 -->
+      <section id="page-dashboard" class="page active">
+        <div class="cards-grid">
+          <div class="card stat-card">
+            <div class="stat-label">OneBot 连接</div>
+            <div class="stat-value"><span id="ob-status" class="dot off"></span><span id="ob-text">检测中</span></div>
+            <div class="stat-sub" id="ob-sub">—</div>
+          </div>
+          <div class="card stat-card">
+            <div class="stat-label">运行时间</div>
+            <div class="stat-value skeleton" id="uptime">—</div>
+            <div class="stat-sub" id="sub-count">—</div>
+          </div>
+          <div class="card stat-card">
+            <div class="stat-label">平台订阅</div>
+            <div class="stat-value skeleton" id="subs-total">—</div>
+            <div class="stat-sub" id="subs-bysite">—</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>最近日志</h3>
+            <a href="#/logs" class="link">查看全部 →</a>
+          </div>
+          <div id="dash-logs" class="log-view compact"></div>
+        </div>
+      </section>
+
+      <!-- 订阅管理 -->
+      <section id="page-subscriptions" class="page">
+        <div class="card">
+          <div class="card-head">
+            <h3>订阅列表</h3>
+            <button id="add-sub-btn" class="btn primary sm"><svg class="btn-ic"><use href="#i-plus"/></svg>添加订阅</button>
+          </div>
+          <div id="subs-table-wrap" class="table-wrap">
+            <table class="table" id="subs-table">
+              <thead><tr><th>平台</th><th>ID</th><th>名称</th><th>群号</th><th>类型</th><th class="th-actions">操作</th></tr></thead>
+              <tbody id="subs-tbody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 实时日志 -->
+      <section id="page-logs" class="page">
+        <div class="card log-card">
+          <div class="log-toolbar">
+            <input type="search" id="log-search" class="input" placeholder="过滤日志内容…">
+            <div class="log-levels" id="log-levels">
+              <label><input type="checkbox" value="trace" checked>trace</label>
+              <label><input type="checkbox" value="debug" checked>debug</label>
+              <label><input type="checkbox" value="info" checked>info</label>
+              <label><input type="checkbox" value="warning" checked>warn</label>
+              <label><input type="checkbox" value="error" checked>error</label>
+            </div>
+            <label class="switch-label"><input type="checkbox" id="log-autoscroll" checked>自动滚动</label>
+            <button id="log-pause" class="btn ghost sm">暂停</button>
+            <button id="log-clear" class="btn ghost sm">清屏</button>
+            <span id="log-conn" class="badge off">连接中</span>
+          </div>
+          <div id="log-stream" class="log-view"></div>
+        </div>
+      </section>
+
+      <!-- 推送记录 -->
+      <section id="page-pushes" class="page">
+        <div class="card">
+          <div class="log-toolbar">
+            <select id="push-site-filter" class="input select">
+              <option value="">全部平台</option>
+            </select>
+            <select id="push-status-filter" class="input select">
+              <option value="">全部状态</option>
+              <option value="sent">已发送</option>
+              <option value="failed">发送失败</option>
+              <option value="skipped">已跳过</option>
+            </select>
+            <span class="perm-note">实时流 · 本地保留 30 天，自动过期</span>
+            <span id="push-conn" class="badge off">连接中</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th style="width:150px">时间</th><th style="width:90px">平台</th><th style="width:130px">类型</th><th style="width:110px">群号</th><th style="width:110px">订阅对象</th><th>内容摘要</th><th style="width:100px">状态</th></tr></thead>
+              <tbody id="push-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 配置 -->
+      <section id="page-config" class="page">
+        <div class="config-toolbar">
+          <div class="config-tabs" id="config-tabs"></div>
+          <div class="config-toolbar-right">
+            <span id="config-hint" class="config-hint">修改合并写入并热生效；凭据类字段仅可在配置文件中修改</span>
+            <button id="config-save" class="btn primary sm">保存当前分区</button>
+          </div>
+        </div>
+        <div id="config-panels"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 平台配置弹层 -->
+  <div id="platform-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="platform-modal-title">平台配置</h3>
+        <button class="modal-close" id="platform-modal-close" aria-label="关闭"><svg class="btn-ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="modal-body" id="platform-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 模板编辑弹层 -->
+  <div id="template-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="template-modal-title">模板编辑</h3>
+        <button class="modal-close" id="template-modal-close" aria-label="关闭"><svg class="btn-ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="modal-body" id="template-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 订阅编辑弹层 -->
+  <div id="sub-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="sub-modal-title">添加订阅</h3><button class="modal-close" id="sub-modal-close" aria-label="关闭"><svg class="btn-ic"><use href="#i-close"/></svg></button></div>
+      <div id="sub-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+  <script src="js/app.js"></script>
+  <script src="js/pushes.js"></script>
+</body>
+</html>

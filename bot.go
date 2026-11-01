@@ -57,6 +57,8 @@ func SetUpLog() {
 	}
 	logrus.SetOutput(writer)
 	logrus.SetFormatter(formatter)
+	// 内存日志桥（admin SSE 推送用），尽早安装以覆盖启动早期日志
+	admin.InstallLogHook()
 	logrus.AddHook(lfshook.NewHook(
 		lfshook.WriterMap{
 			logrus.DebugLevel: os.Stdout,

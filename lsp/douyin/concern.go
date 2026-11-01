@@ -350,6 +350,11 @@ func (d *Concern) fresh() concern.FreshFunc {
 			case <-ctx.Done():
 				return
 			}
+			if cfg.IsPlatformDisabled(Site) {
+				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+				ti.Reset(interval)
+				continue
+			}
 			var start = time.Now()
 			var errGroup errgroup.Group
 
