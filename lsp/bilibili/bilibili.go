@@ -46,6 +46,7 @@ var BasePath = map[string]string{
 	PathGetPlayTogetherUserAnchorInfoV2: BaseLiveHost,
 	PathRoomInfo:                        BaseLiveHost,
 	PathWebAreaList:                     BaseLiveHost,
+	PathPolymerOpusDetail:               BaseHost,
 	PathWebDynamicDetail:                BaseHost,
 	PathWebDynamicDetailPic:             BaseHost,
 	PathWebDynamicFeedAll:               BaseHost,
