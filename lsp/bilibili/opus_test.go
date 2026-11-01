@@ -3,6 +3,7 @@ package bilibili
 import (
 	"os"
 	"strings"
+	"time"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -213,4 +214,110 @@ func stubOpusContentFetcher(t *testing.T, fn func(string) (*opusContent, error))
 		opusContentFetcher = original
 		resetOpusContentCache()
 	})
+}
+
+// 分段要按原文顺序图文交替，图片落在它原本的位置上。
+func TestOpusDetailSegments(t *testing.T) {
+	content := loadOpusDetailFixture(t).render()
+
+	var images, texts int
+	for _, segment := range content.Segments {
+		switch {
+		case segment.Image != "":
+			images++
+		case segment.Text != "":
+			texts++
+		}
+	}
+	assert.Equal(t, 12, images)
+	assert.Greater(t, texts, 10)
+
+	// 第一张图之前应该是“接下来分享第一条动态”那段文字，中间夹着视频链接
+	require.Greater(t, len(content.Segments), 2)
+	assert.Contains(t, content.Segments[0].Text, "昨晚万圣节")
+	assert.Contains(t, content.Segments[1].Text, "大肥鱼“报恩” https://b23.tv/OdUvXDg")
+	assert.Contains(t, content.Segments[2].Image, "9b967e8ae300ffccf39ce80126fa634f2104494173")
+
+	// 图片后面的文字不能丢
+	last := content.Segments[len(content.Segments)-1]
+	assert.Contains(t, last.Text, "这期分享动态结束了")
+}
+
+// 正文超长时在能放下的分段处截断，后面的图文都不再输出。
+func TestCapOpusSegments(t *testing.T) {
+	segments := []DynamicInfoSegment{
+		{Text: "一二三"},
+		{Image: "https://i0.hdslb.com/a.jpg"},
+		{Text: "四五六七八"},
+		{Image: "https://i0.hdslb.com/b.jpg"},
+	}
+
+	out := capOpusSegments(segments, 5)
+
+	// 前两段放得下，第三段只剩 2 个字，截断后立即停止
+	require.Len(t, out, 3)
+	assert.Equal(t, "一二三", out[0].Text)
+	assert.Equal(t, "https://i0.hdslb.com/a.jpg", out[1].Image)
+	assert.Equal(t, "四五……\n", out[2].Text)
+
+	// 预算刚好用完时不产生只有省略号的分段
+	out = capOpusSegments(segments, 3)
+	require.Len(t, out, 2)
+	assert.Equal(t, "一二三", out[0].Text)
+	assert.Equal(t, "https://i0.hdslb.com/a.jpg", out[1].Image)
+}
+
+// 空输入不产生空分段。
+func TestCapOpusSegmentsEmpty(t *testing.T) {
+	assert.Nil(t, capOpusSegments(nil, 100))
+	assert.Nil(t, capOpusSegments([]DynamicInfoSegment{{Text: ""}}, 100))
+}
+
+// peek 只读缓存：命中返回同一份数据，未命中或过期返回 nil，且不触发请求。
+func TestPeekOpusContent(t *testing.T) {
+	resetOpusContentCache()
+
+	assert.Nil(t, peekOpusContent("42"))
+
+	content := &opusContent{Text: "正文", Segments: []DynamicInfoSegment{{Text: "正文\n"}}}
+	opusContentCache.Lock()
+	opusContentCache.entries["42"] = opusCacheEntry{content: content, expireAt: time.Now().Add(time.Minute)}
+	opusContentCache.Unlock()
+
+	assert.Same(t, content, peekOpusContent("42"))
+
+	opusContentCache.Lock()
+	opusContentCache.entries["43"] = opusCacheEntry{content: content, expireAt: time.Now().Add(-time.Second)}
+	opusContentCache.Unlock()
+
+	assert.Nil(t, peekOpusContent("43"))
+}
+
+// 补全与渲染阶段必须共用同一份缓存：polymerItemToCard 取完详情后，
+// prepare() 里的 peekOpusContent 要能直接命中，不再打接口。
+func TestEnrichThenPeekKeepsSegments(t *testing.T) {
+	resetOpusContentCache()
+	calls := 0
+	stubOpusContentFetcher(t, func(string) (*opusContent, error) {
+		calls++
+		return loadOpusDetailFixture(t).render(), nil
+	})
+
+	item := &polymerItem{
+		IDStr: "1265660629497151489",
+		Modules: &polymerModules{ModuleDynamic: &polymerModuleDynamic{
+			Desc: &polymerDesc{Text: "正文"},
+			Major: &polymerMajor{Type: "MAJOR_TYPE_OPUS", Opus: &polymerOpus{
+				Summary: &polymerDesc{Text: "正文"},
+				Pics:    []*polymerPic{{URL: "https://i0.hdslb.com/cover.jpg"}},
+			}},
+		}},
+	}
+	card, err := polymerItemToCard(item)
+	require.NoError(t, err)
+
+	cached := peekOpusContent(card.GetDesc().GetDynamicIdStr())
+	require.NotNil(t, cached)
+	assert.NotEmpty(t, cached.Segments)
+	assert.Equal(t, 1, calls)
 }

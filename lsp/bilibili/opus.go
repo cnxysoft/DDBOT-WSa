@@ -28,6 +28,9 @@ const opusContentTTL = 10 * time.Minute
 // opusContentCacheLimit 限制缓存条目，避免长跑进程无限增长。
 const opusContentCacheLimit = 256
 
+// opusTextCap 是正文分段的总长度上限，与推送模板里的 4500 字保持一致。
+const opusTextCap = 4500
+
 // opusContent 是从详情接口还原出的正文。
 type opusContent struct {
 	// Text 是渲染后的正文：富文本节点展开为“标题 链接”，
@@ -35,6 +38,8 @@ type opusContent struct {
 	Text string
 	// Pics 是正文内嵌图片，顺序与 Text 中的 [图N] 标记一致。
 	Pics []*polymerPic
+	// Segments 是按原文顺序切好的图文分段，供模板把图片插回原位。
+	Segments []DynamicInfoSegment
 }
 
 type opusDetailResponse struct {
@@ -163,8 +168,24 @@ func loadOpusContent(idStr string) *opusContent {
 	return content
 }
 
-func requestOpusContent(idStr string) (*opusContent, error) {
-	url := BPath(PathPolymerOpusDetail)
+// peekOpusContent 只读缓存、不触发请求，供渲染阶段取图文分段。
+//
+// prepare() 与补全发生在同一张卡片的生命周期内，缓存必然命中；
+// 这里刻意不发请求，避免为每条动态再打一次接口。
+func peekOpusContent(idStr string) *opusContent {
+	if idStr == "" {
+		return nil
+	}
+	opusContentCache.Lock()
+	defer opusContentCache.Unlock()
+	entry, ok := opusContentCache.entries[idStr]
+	if !ok || time.Now().After(entry.expireAt) {
+		return nil
+	}
+	return entry.content
+}
+
+func requestOpusContent(idStr string) (*opusContent, error) {	url := BPath(PathPolymerOpusDetail)
 	params := map[string]string{"id": idStr}
 	var resp bytes.Buffer
 	opts := []requests.Option{
@@ -189,13 +210,14 @@ func requestOpusContent(idStr string) (*opusContent, error) {
 	return detail.Data.Item.render(), nil
 }
 
-// render 把按段落组织的正文还原成可读文本与图片列表。
+// render 把按段落组织的正文还原成可读文本、图片列表与图文分段。
 func (it *opusDetailItem) render() *opusContent {
 	content := new(opusContent)
 	if it == nil {
 		return content
 	}
-	var b strings.Builder
+	var text strings.Builder
+	var segments []DynamicInfoSegment
 	for _, module := range it.Modules {
 		if module == nil || module.ModuleContent == nil {
 			continue
@@ -209,15 +231,61 @@ func (it *opusDetailItem) render() *opusContent {
 			}
 			switch para.ParaType {
 			case 1:
-				renderOpusTextParagraph(&b, para.Text)
-				b.WriteString("\n")
+				var paragraph strings.Builder
+				renderOpusTextParagraph(&paragraph, para.Text)
+				line := strings.TrimRight(paragraph.String(), " \t\u3000")
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				text.WriteString(line)
+				text.WriteString("\n")
+				segments = append(segments, DynamicInfoSegment{Text: line + "\n"})
 			case 2:
-				renderOpusPicParagraph(&b, para.Pic, content)
+				before := len(content.Pics)
+				renderOpusPicParagraph(&text, para.Pic, content)
+				for _, pic := range content.Pics[before:] {
+					segments = append(segments, DynamicInfoSegment{Image: pic.URL})
+				}
 			}
 		}
 	}
-	content.Text = normalizeOpusText(b.String())
+	content.Text = normalizeOpusText(text.String())
+	content.Segments = capOpusSegments(segments, opusTextCap)
 	return content
+}
+
+// capOpusSegments 限制分段里正文的总长度，与推送模板的正文上限保持一致。
+// 超长时在最后一个能放下的分段处截断并加省略号，后面不再输出。
+func capOpusSegments(segments []DynamicInfoSegment, limit int) []DynamicInfoSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	var total int
+	out := make([]DynamicInfoSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Image == "" && segment.Text == "" {
+			continue
+		}
+		if segment.Image != "" {
+			out = append(out, segment)
+			continue
+		}
+		runes := []rune(segment.Text)
+		if total+len(runes) <= limit {
+			total += len(runes)
+			out = append(out, segment)
+			continue
+		}
+		rest := limit - total
+		if rest > 0 {
+			out = append(out, DynamicInfoSegment{Text: string(runes[:rest]) + "……\n"})
+		}
+		break
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func renderOpusTextParagraph(b *strings.Builder, para *opusParaText) {
