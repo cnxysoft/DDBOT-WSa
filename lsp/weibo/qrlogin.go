@@ -544,110 +544,12 @@ func WriteBackConfig(sub string) error {
 
 // writeBackConfigToPath writes SUB into the config file at cfgPath using atomic rename.
 // It touches only the weibo.sub field and preserves all other content and file permissions.
+// writeBackConfigToPath 把 SUB 写进 weibo.sub。
+//
+// 直接复用 lsp/cfg 的实现。两份写回逻辑各写各的必然漂移：cfg 那份修了缩进、键名
+// 大小写、CRLF、引号键、行内注释，微博这份没跟上 —— 段头匹配还只看字符串前缀、
+// 不看缩进，于是面板保存后按字母序排出来的 platform.weibo 被当成段头，SUB 写进了
+// platform.weibo，顶层 weibo 段永远是空的（登录成功，重启后却仍跑访客模式）。
 func writeBackConfigToPath(sub string, cfgPath string) error {
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return err
-	}
-
-	// 保留原文件权限
-	var fileMode os.FileMode = 0o644
-	if info, err := os.Stat(cfgPath); err == nil {
-		fileMode = info.Mode()
-	}
-
-	content := string(data)
-	lines := strings.Split(content, "\n")
-
-	// Line-by-line rewrite to avoid touching other blocks
-	var out []string
-	inWeibo := false
-	indentWeibo := ""
-	childIndent := "" // weibo 块内已有子键的缩进，插入 sub 时对齐它
-	inserted := false
-
-	// 大小写不敏感（viper 就是大小写不敏感），命中时保留原缩进与原键名写法，只换值
-	subLineRe := regexp.MustCompile("(?i)^(\\s*)(sub)(\\s*):(\\s*)(.*)$")
-
-	// 和 lsp/cfg 的 yamlutil 同一个坑：上面那个正则把行尾的 \r 吃进了第 5 组，
-	// 拼回时不补上就把 CRLF 改成了 LF，文件变成混合换行。
-	eol := ""
-	if strings.Contains(content, "\r\n") {
-		eol = "\r"
-	}
-	// 块里已有子键就照它的缩进插，没有才退回块头缩进 + 两空格。
-	// 写死两空格会把 4 空格缩进的块改成混合缩进、YAML 直接不合法 ——
-	// 和 lsp/cfg 的 yamlutil 是同一个坑。
-	insertKey := func() string {
-		indent := childIndent
-		if indent == "" {
-			indent = indentWeibo + "  "
-		}
-		return indent + "sub: \"" + sub + "\"" + eol
-	}
-
-	for _, line := range lines {
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "weibo:") && !inWeibo {
-			inWeibo = true
-			indentWeibo = line[:strings.Index(line, "weibo:")]
-			out = append(out, line)
-			continue
-		}
-
-		if inWeibo {
-			// 退出 weibo 块：遇到非缩进行
-			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
-				if !inserted {
-					out = append(out, insertKey())
-					inserted = true
-				}
-				inWeibo = false
-			} else if m := subLineRe.FindStringSubmatch(line); m != nil && strings.EqualFold(m[2], "sub") {
-				out = append(out, m[1]+m[2]+m[3]+":"+m[4]+"\""+sub+"\""+eol)
-				inserted = true
-				continue
-			} else if childIndent == "" && len(trim) > 0 && !strings.HasPrefix(trim, "#") {
-				if idx := strings.Index(line, trim); idx > len(indentWeibo) {
-					childIndent = line[:idx]
-				}
-			}
-		}
-		out = append(out, line)
-	}
-
-	// 块一直延伸到文件末尾且没找到 sub：插到块内最后一个非空行之后
-	if inWeibo && !inserted {
-		pos := len(out)
-		for pos > 0 && strings.TrimSpace(out[pos-1]) == "" {
-			pos--
-		}
-		out = append(out, "")
-		copy(out[pos+1:], out[pos:])
-		out[pos] = insertKey()
-		inserted = true
-	}
-
-	if !inserted {
-		// 未找到 weibo 块，追加新块
-		if len(out) > 0 && out[len(out)-1] != "" {
-			out = append(out, "")
-		}
-		out = append(out, "weibo:"+eol)
-		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub)+eol)
-	}
-
-	newData := []byte(strings.Join(out, "\n"))
-
-	// 使用临时文件 + 原子替换，避免写入中途崩溃导致配置损坏
-	tmpFile := cfgPath + ".tmp"
-	if err := os.WriteFile(tmpFile, newData, fileMode); err != nil {
-		return fmt.Errorf("写入临时文件失败: %w", err)
-	}
-	if err := os.Rename(tmpFile, cfgPath); err != nil {
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("原子替换配置文件失败: %w", err)
-	}
-
-	return nil
+	return cfg.WriteConfigKeyValueToPath("weibo.sub", sub, cfgPath)
 }

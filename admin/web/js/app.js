@@ -1344,6 +1344,7 @@ const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博' };
 
 let loginSession = null; // 服务端会话 id
 let loginTimer = null;   // 轮询定时器
+let loginReqSeq = 0;     // 建会话请求的序号，用来丢掉过期请求的迟到响应
 let loginSite = null;    // 当前平台，供「重新获取二维码」用
 
 // done=true 表示这次登录已经有结果了：按钮换成「重新扫码」+「关闭」。
@@ -1399,6 +1400,7 @@ async function startPlatformLogin(site) {
   renderLoginBody('<div class="login-qr-box"><div class="login-qr-loading">正在获取二维码…</div></div>');
   $('#login-modal').classList.remove('hidden');
 
+  const seq = ++loginReqSeq;
   let resp;
   try {
     resp = await apiJSON('/api/v1/login/qrcode', {
@@ -1406,26 +1408,37 @@ async function startPlatformLogin(site) {
       body: JSON.stringify({ platform: site }),
     });
   } catch (e) {
+    // 已经有更新的一次点击/切平台了，这次的结果作废
+    if (seq !== loginReqSeq || loginSite !== site) return;
     renderLoginBody('<div class="login-qr-box"><div class="login-qr-err">' + esc(e.message) + '</div></div>' + loginActionsHTML());
     return;
   }
 
+  if (seq !== loginReqSeq || loginSite !== site) return;
+  // 连点两次扫码时两个请求会先后回来：后一个把 loginSession 覆盖掉，
+  // 前一个挂的定时器就再也没人清了。这里先停一次再挂新的。
+  stopLoginPolling();
   loginSession = resp.session;
   renderLoginBody(
     '<div class="login-qr-box"><img class="login-qr" alt="登录二维码" src="' + resp.image + '"></div>' +
     '<div class="login-status" id="login-status">' + esc(resp.message || '请扫码') + '</div>' +
     loginActionsHTML());
-  loginTimer = setInterval(pollLoginStatus, 2000);
+  // 把会话 id 绑进定时器：轮询回调要靠它认出「这不是我该管的会话」
+  const sid = resp.session;
+  loginTimer = setInterval(() => pollLoginStatus(sid), 2000);
 }
 
-async function pollLoginStatus() {
-  if (!loginSession) return;
+// 轮询要认准自己的会话 id：切平台、重新扫码、关掉弹层之后，旧会话的迟到响应
+// 不能再来动界面 —— 否则它会劫持弹层、掐掉新会话的轮询，还弹一条莫名其妙的成功提示。
+async function pollLoginStatus(sid) {
+  if (!sid || loginSession !== sid) return;
   let r;
   try {
-    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(loginSession));
+    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(sid));
   } catch (e) {
     return; // 网络抖动，等下一次
   }
+  if (loginSession !== sid) return; // 等响应期间被切走/关掉了
   const el = $('#login-status');
   if (el && r.message) el.textContent = r.message;
 

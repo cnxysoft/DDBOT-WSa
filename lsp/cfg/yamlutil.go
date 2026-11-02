@@ -120,16 +120,20 @@ func writeConfigKeyValueToPath(key, value, cfgPath string) error {
 	keyRe := regexp.MustCompile(`^(\s*)("?)([A-Za-z0-9_.\-]+)("?)(\s*):(\s*)(.*)$`)
 	quoted := quoteYAMLValue(value)
 
-	// Windows 上编辑过的配置是 CRLF。上面那个正则把行尾的 \r 一起吃进了第 7 组，
-	// 拼回时如果不补上，这两行就从 CRLF 变成 LF —— 文件成了混合换行。
-	// YAML 仍合法，但 diff 会整段炸、编辑器显示也会异常。群友反馈的「排版被改」，
-	// 除了缩进和键名大小写，也包括这个。
-	eol := ""
-	if strings.Contains(string(data), "\r\n") {
-		eol = "\r"
+	// Windows 记事本存 UTF-8 会加 BOM。带着它，首行的段头就认不出来，会在文件末尾
+	// 追加第二个同名段 —— 重复顶层键让 yaml.v3 直接报错、进程起不来。
+	content := strings.TrimPrefix(string(data), "\ufeff")
+
+	// Windows 上编辑过的配置是 CRLF，正则会把行尾的 \r 一起吃进「值」那一组，
+	// 拼回时不补上就变成混合换行。但**不能整文件一个判断**：混合换行的文件里给本来
+	// 就是 LF 的行补 CR，等于换成另一种混合换行。逐行替换用该行原本的行尾（lineEOL），
+	// 只有追加新段才用文件整体约定。
+	fileEOL := ""
+	if strings.Contains(content, "\r\n") {
+		fileEOL = "\r"
 	}
 
-	lines := strings.Split(string(data), "\n")
+	lines := strings.Split(content, "\n")
 
 	var out []string
 	inSection := false
@@ -144,39 +148,52 @@ func writeConfigKeyValueToPath(key, value, cfgPath string) error {
 		if indent == "" {
 			indent = indentSection + "  "
 		}
-		return indent + keyName + ": " + quoted + eol
+		return indent + keyName + ": " + quoted + fileEOL
 	}
 
 	for _, line := range lines {
 		trim := strings.TrimSpace(line)
 
-		// 段头（如 "bilibili:"）
-		if !inSection && strings.HasPrefix(trim, section+":") {
+		// 该行原本的行尾：CRLF 文件里按行补 \r，混合换行的文件才不会被越改越乱
+		lineEOL := ""
+		if strings.HasSuffix(line, "\r") {
+			lineEOL = "\r"
+		}
+		lineBody := strings.TrimSuffix(line, "\r")
+
+		// 段头必须是顶格的 section:。不认缩进的话，面板保存后按字母序排出来的 platform
+		// 段里的 platform.weibo 会被当成段头，sub 就写进了 platform.weibo ——
+		// 顶层 weibo 段永远是空的，重启即复现「登录了还在跑访客模式」。
+		if !inSection && isSectionHeader(lineBody, section) {
 			inSection = true
-			indentSection = line[:strings.Index(line, section+":")]
+			indentSection = ""
 			out = append(out, line)
 			continue
 		}
 
 		if inSection {
-			// 段外：非空行且不比段头更深
-			if len(trim) > 0 && !strings.HasPrefix(line, indentSection+" ") && !strings.HasPrefix(line, indentSection+"\t") {
+			// 退出段：顶格的非注释行。注释不算 —— 顶格注释写在段中间很常见，
+			// 当成结束会把新键插到注释前面，和后面的真键撞成重复键，整份配置读不了。
+			if len(trim) > 0 && !strings.HasPrefix(trim, "#") &&
+				!strings.HasPrefix(lineBody, " ") && !strings.HasPrefix(lineBody, "\t") {
 				if !inserted {
 					out = append(out, insertKey())
 					inserted = true
 				}
 				inSection = false
-			} else if m := keyRe.FindStringSubmatch(line); m != nil && strings.EqualFold(m[3], keyName) {
-				out = append(out, m[1]+m[2]+m[3]+m[4]+m[5]+":"+m[6]+quoted+eol)
+			} else if m := keyRe.FindStringSubmatch(lineBody); m != nil && strings.EqualFold(m[3], keyName) {
+				// 只换值：缩进、键名大小写、冒号两侧写法、行内注释、行尾都按原样保留
+				out = append(out, m[1]+m[2]+m[3]+m[4]+m[5]+":"+m[6]+quoted+keepInlineComment(m[7])+lineEOL)
 				inserted = true
 				continue
 			} else if childIndent == "" && len(trim) > 0 && !strings.HasPrefix(trim, "#") {
-				if idx := strings.Index(line, trim); idx > len(indentSection) {
-					childIndent = line[:idx]
+				if idx := strings.Index(lineBody, trim); idx > 0 {
+					childIndent = lineBody[:idx]
 				}
 			}
 		}
 
+		// 没被替换的行原样保留
 		out = append(out, line)
 	}
 
@@ -198,13 +215,13 @@ func writeConfigKeyValueToPath(key, value, cfgPath string) error {
 		if len(out) > 0 && out[len(out)-1] != "" {
 			out = append(out, "")
 		}
-		out = append(out, section+":"+eol)
-		out = append(out, "  "+keyName+": "+quoted+eol)
+		out = append(out, section+":"+fileEOL)
+		out = append(out, "  "+keyName+": "+quoted+fileEOL)
 	}
 
 	// 追加新段时 out 的末尾会少一个空元素，这里补回原文件的结尾换行约定
 	joined := strings.Join(out, "\n")
-	if strings.HasSuffix(string(data), "\n") && !strings.HasSuffix(joined, "\n") {
+	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(joined, "\n") {
 		joined += "\n"
 	}
 	newData := []byte(joined)
