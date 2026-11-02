@@ -17,6 +17,9 @@ func TestExampleConfigValid(t *testing.T) {
 
 	// 抽查关键配置键存在且默认值正确
 	assert.Equal(t, "/", v.GetString("bot.commandPrefix"))
+	// 自定义命令前缀：键值之间的冒号必须是半角。写成全角「：」时 YAML 不把它当分隔符，
+	// 整块退化成一段字符串，cast.ToStringMapString 拿到空 map 且不报错——静默失效。
+	assert.Equal(t, map[string]string{"签到": ""}, v.GetStringMapString("customCommandPrefix"))
 	assert.Equal(t, "systemProxy", v.GetString("proxy.type"))
 	assert.Equal(t, "api", v.GetString("twitter.mode"))
 	assert.False(t, v.GetBool("twitter.translate.enabled"))

@@ -469,6 +469,10 @@ async function removeSub(s) {
 /* ===== 配置（schema 驱动表单） ===== */
 let configCache = null;
 let activeConfigTab = 'basic';
+// 高级页 textarea 渲染时的快照，作为该页 diff 的基准。
+// 不能用 configCache 当基准：textarea 是加载时的快照，期间别处（平台开关即时保存、
+// 基础页表单）改过的键在 configCache 里已经变了，拿它比会把这些旧值当成「用户改的」发出去。
+let advBase = null;
 
 /* 字段类型：text / number / bool(toggle) / select / credential(只读状态)。
  * 凭据类字段（cookie/token/password）后端 API 禁止修改（防 token 泄露后篡改凭据），
@@ -477,6 +481,8 @@ const CONFIG_SCHEMA = [
   { id: 'basic', label: '基础', groups: [
     { title: 'Bot 行为', fields: [
       { path: 'bot.commandPrefix', label: '命令前缀', type: 'text', def: '/' },
+      { path: 'customCommandPrefix', label: '自定义命令前缀', type: 'jsonmap', def: {},
+        hint: 'JSON 对象，形如 {"签到": ""}：给单个命令单独指定前缀，优先于全局前缀；前缀留空表示该命令不需要前缀。整表替换，删掉条目即取消。若框里显示的是带引号的字符串（如 "签到: "），说明 YAML 里冒号写成了全角「：」，整块退化成了字符串，改回半角冒号后重填即可。' },
       { path: 'bot.onJoinGroup.rename', label: '进群自动改名', type: 'text', def: '【bot】', hint: '留空则不改名' },
       { path: 'bot.onDisconnected', label: '断线后动作', type: 'select', options: ['', 'exit'], def: '', hint: 'exit=退出程序，留空=仅记录日志' },
       { path: 'bot.offlineQueue.enable', label: '离线消息缓存', type: 'bool', def: false, hint: '离线时暂存消息，上线补发（期间不能重启）' },
@@ -538,7 +544,7 @@ const CONFIG_SCHEMA = [
       { path: 'weibo.onlyOnlineNotify', label: '仅推送在线期间更新', type: 'bool', def: true },
     ]},
     { title: '运行模式', site: 'twitter', fields: [
-      { path: 'twitter.mode', label: '模式', type: 'select', options: ['mirror','api'], def: 'mirror', hint: 'mirror 镜像无需账号 / api 需真实账号' },
+      { path: 'twitter.mode', label: '模式', type: 'select', options: ['api','mirror'], def: 'api', hint: 'api 需真实账号（缺省，未配置 cookie 会私聊告警）；mirror 走 nitter 镜像、无需账号，但镜像生态已基本不可用' },
       { path: 'twitter.interval', label: '查询间隔', type: 'text', def: '30s' },
       { path: 'twitter.unsub', label: '取消订阅时取关', type: 'bool', def: false },
       { path: 'twitter.retweetFullText', label: '转发显示全文', type: 'bool', def: false },
@@ -676,6 +682,24 @@ function renderField(f) {
     row.appendChild(wrap);
     return row;
   }
+  if (f.type === 'jsonmap') {
+    // 子映射（如 customCommandPrefix）：用 JSON 文本编辑。浏览器端没有 YAML 解析器，
+    // 与「高级」页整份 JSON 编辑保持同一套写法。
+    const val = original !== undefined ? original : (f.def ?? {});
+    const ta = document.createElement('textarea');
+    ta.className = 'input code-area';
+    ta.rows = 4;
+    ta.spellcheck = false;
+    ta.dataset.path = f.path;
+    ta.value = JSON.stringify(val, null, 2);
+    // 记下渲染时的原文：collect 时若没被编辑过就整块跳过。
+    // 当前值可能本来就是坏的（例如全角冒号让它退化成字符串），
+    // 强行解析会把「保存同页其他设置」也一起挡下来。
+    ta.dataset.jsonmapOriginal = ta.value;
+    row.innerHTML = labelCol;
+    row.appendChild(ta);
+    return row;
+  }
   let input;
   if (f.type === 'select') {
     input = document.createElement('select');
@@ -718,7 +742,7 @@ function renderConfigForm() {
       renderTemplatesPanel(panel);
     } else if (tab.id === 'advanced') {
       panel.innerHTML = '<div class="tmpl-off-warn">⚠ 直接编辑完整 JSON：语法错误会导致保存失败，键名写错可能影响启动。不确定时优先使用上方分区表单。</div>' +
-        '<p class="config-note">当前完整配置（敏感值已脱敏）。修改将合并写入，未列出的键保持不变。</p>' +
+        '<p class="config-note">当前完整配置（敏感值已脱敏）。保存时只提交你改过的键，采用合并写入：新增和修改会生效，<strong>删掉整个键不会生效</strong>（要删键请直接编辑配置文件）。</p>' +
         '<textarea id="cfg-json" class="code-area" rows="18" spellcheck="false"></textarea>';
     } else if (tab.groups.some((g) => g.site)) {
       // 平台栏：卡片网格（左半图标区 + 右半操作区），细化配置经「配置」按钮进弹层
@@ -767,29 +791,69 @@ function renderConfigForm() {
     panelsEl.appendChild(panel);
   }
   const adv = $('#cfg-json');
-  if (adv && configCache) adv.value = JSON.stringify(configCache, null, 2);
+  if (adv && configCache) {
+    adv.value = JSON.stringify(configCache, null, 2);
+    advBase = JSON.parse(adv.value);
+  }
 }
 
 async function loadConfig() {
   try {
     const cfg = await apiJSON('/api/v1/config');
     configCache = cfg;
+    loadConfig._retried = false;
     renderConfigForm();
     loadPermOverview(); // 权限面板数据（面板由 renderConfigForm 生成）
   } catch (e) {
     if (e.message.includes('401')) { showLogin(); return; } // 登录失效直接回登录层
-    // 网络抖动自动重试一次；configCache 仍在则不重复 toast
+    // 网络抖动自动重试一次，重试再失败才提示。
+    // _retried 只能在「成功」或「最终失败」时复位：原来放在定时器回调开头复位，
+    // 递归调用永远看到 false，于是变成无限重试，用户永远等不到失败提示。
     if (!loadConfig._retried) {
       loadConfig._retried = true;
-      setTimeout(() => { loadConfig._retried = false; loadConfig(); }, 1500);
+      setTimeout(loadConfig, 1500);
       return;
     }
+    loadConfig._retried = false;
     toast('配置加载失败：' + e.message, false);
   }
 }
 
+// diffPatch 取 next 相对 base 的变化子集（递归；数组整体比较）。高级页编辑的是整份 JSON，
+// 但只能发真正改过的键：整份回发等于拿页面加载时的旧快照，把本会话里通过别处
+// （平台开关是即时保存的、基础页表单）做过的改动一起回退掉。
+function diffPatch(base, next) {
+  const out = {};
+  for (const k of Object.keys(next)) {
+    const b = base == null ? undefined : base[k];
+    const n = next[k];
+    if (n !== null && typeof n === 'object' && !Array.isArray(n) &&
+        b !== null && typeof b === 'object' && !Array.isArray(b)) {
+      const sub = diffPatch(b, n);
+      if (Object.keys(sub).length) out[k] = sub;
+    } else if (JSON.stringify(n) !== JSON.stringify(b)) {
+      out[k] = n;
+    }
+  }
+  return out;
+}
+
 function collectConfigPatch(tabId) {
-  if (tabId === 'advanced') return JSON.parse($('#cfg-json').value);
+  if (tabId === 'advanced') {
+    const full = JSON.parse($('#cfg-json').value.trim() || '{}');
+    if (full === null || typeof full !== 'object' || Array.isArray(full)) {
+      throw new Error('高级页必须是一个 JSON 对象');
+    }
+    const base = advBase || configCache;
+    const patch = diffPatch(base, full);
+    // customCommandPrefix 后端是整表替换（不做递归合并），不能走上面那套「只发变化的子键」：
+    // 子键变空（写成 {} 或把整个键删掉）在 diff 里等于「没变」，会变成
+    // 「提示保存成功、条目却还在」。只要和快照不同就整表发；键被删掉按清空处理。
+    if (base && JSON.stringify(base.customCommandPrefix) !== JSON.stringify(full.customCommandPrefix)) {
+      patch.customCommandPrefix = full.customCommandPrefix === undefined ? {} : full.customCommandPrefix;
+    }
+    return patch;
+  }
   return collectPatchFromContainer($('#config-' + tabId));
 }
 
@@ -835,10 +899,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       patch = collectConfigPatch(activeConfigTab);
     } catch (e) {
-      toast('JSON 解析失败：' + e.message, false);
+      toast('配置格式有误：' + e.message, false);
       return;
     }
-    if (activeConfigTab !== 'advanced' && !Object.keys(patch).length) {
+    if (!Object.keys(patch).length) {
       toast('没有需要保存的修改');
       return;
     }
@@ -1205,6 +1269,21 @@ function collectPatchFromContainer(container) {
     const f = SCHEMA_FIELDS[path];
     if (!f) return;
     const original = getPath(configCache, path);
+    if (f.type === 'jsonmap') {
+      if (el.value === el.dataset.jsonmapOriginal) return;
+      let obj;
+      try {
+        obj = el.value.trim() === '' ? {} : JSON.parse(el.value);
+      } catch (e) {
+        throw new Error('「' + f.label + '」不是合法 JSON：' + e.message);
+      }
+      if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        throw new Error('「' + f.label + '」必须是一个 JSON 对象，例如 {"签到": ""}');
+      }
+      const base = original !== undefined ? original : (f.def ?? {});
+      if (JSON.stringify(obj) !== JSON.stringify(base)) setPath(patch, path, obj);
+      return;
+    }
     if (f.type === 'credential') {
       if (el.dataset.cleared === '1') setPath(patch, path, '');
       else if (el.value !== '') setPath(patch, path, el.value);

@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/mattn/go-colorable"
@@ -512,10 +511,7 @@ func printQRCode(imgData []byte) {
 // WriteBackConfig writes SUB into application.yaml, touching only weibo.sub.
 // Uses global config write lock and atomic rename to prevent corruption.
 func WriteBackConfig(sub string) error {
-	cfgFile := config.GlobalConfig.ConfigFileUsed()
-	if cfgFile == "" {
-		cfgFile = "application.yaml"
-	}
+	cfgFile := cfg.ConfigFilePath()
 	// 使用全局配置写锁，防止与其他写操作并发
 	cfg.GetConfigWriteMutex().Lock()
 	defer cfg.GetConfigWriteMutex().Unlock()

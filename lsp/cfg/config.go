@@ -56,13 +56,31 @@ func GetCommandPrefix(commands ...string) string {
 
 var customCommandPrefixAtomic atomic.Value
 
-// ReloadCustomCommandPrefix TODO wtf
+// ConfigFilePath 返回 viper 实际加载的配置文件路径。
+//
+// 配置读写一律经此函数，不要硬编码 "application.yaml"：viper 的搜索路径含 "."
+// 与 "./config"（见 bot/config/config.go 的 Init），硬编码会在配置放在 ./config/
+// 下时读写到另一个文件——轻则改了不生效，重则往当前目录写出一份与生效配置无关的新文件。
+//
+// 配置尚未加载时（ConfigFileUsed 为空，例如单元测试）回退到 CWD 的 application.yaml。
+func ConfigFilePath() string {
+	if p := config.GlobalConfig.ConfigFileUsed(); p != "" {
+		return p
+	}
+	return "application.yaml"
+}
+
+// ReloadCustomCommandPrefix 重新读取 customCommandPrefix 并原子替换缓存。
+//
+// 这块最容易踩的坑是静默失效，所以失败一律落日志：
+// YAML 里冒号写成全角「：」时，整个块不构成映射而是退化成一段多行字符串，
+// cast.ToStringMapString 拿到空 map 且不报错，用户只会看到「自定义前缀不生效」。
 func ReloadCustomCommandPrefix() {
 	var result map[string]string
 	defer func() {
 		customCommandPrefixAtomic.Store(result)
 	}()
-	data, err := os.ReadFile("application.yaml")
+	data, err := os.ReadFile(ConfigFilePath())
 	if err != nil {
 		return
 	}
@@ -70,6 +88,7 @@ func ReloadCustomCommandPrefix() {
 
 	err = yaml.Unmarshal(data, &all)
 	if err != nil {
+		logger.Errorf("customCommandPrefix 读取失败：配置文件 %s 不是合法 YAML: %v", ConfigFilePath(), err)
 		return
 	}
 	var a interface{}
@@ -82,6 +101,21 @@ func ReloadCustomCommandPrefix() {
 		return
 	}
 	result = cast.ToStringMapString(a)
+	if len(result) == 0 {
+		// 显式写成空表（customCommandPrefix: {}）是合法配置——WebUI 里清空条目就是这个，
+		// 不能报错。只有「类型根本不是映射」才是要提醒的情况。
+		if _, isMap := a.(map[string]interface{}); isMap {
+			return
+		}
+		if str, isStr := a.(string); isStr && strings.TrimSpace(str) != "" {
+			// 全角冒号不是 YAML 键分隔符，整块会退化成一段字符串——这是最常见的踩坑形态，
+			// 报错必须点明原因，否则用户只会看到「自定义前缀不生效」。
+			logger.Errorf("customCommandPrefix 解析结果为空：期望「命令: 前缀」映射，实际是一段字符串。"+
+				"最常见的原因是键值之间的冒号写成了全角「：」（全角冒号不是 YAML 键分隔符）。实际值: %q", str)
+			return
+		}
+		logger.Errorf("customCommandPrefix 解析结果为空：期望「命令: 前缀」映射，实际类型 %T，值 %v", a, a)
+	}
 }
 
 func GetCustomCommandPrefix() map[string]string {
@@ -257,12 +291,6 @@ func GetWeiboAutoRefresh() bool {
 	return config.GlobalConfig.GetBool("weibo.autorefresh")
 }
 
-// GetWeiboAlertGroupId 获取 Cookie 告警通知的目标群号，0 表示不发群
-// Deprecated: 新告警逻辑改为通过 /config weibo_alert 逐群控制，此配置项已不再使用
-func GetWeiboAlertGroupId() int64 {
-	return config.GlobalConfig.GetInt64("weibo.alertGroupId")
-}
-
 // GetWeiboCookieAlertEnabled 检查是否启用 Cookie 失效告警通知
 // 默认关闭：仅当显式配置 weibo.disableCookieAlert: false 时才启用。
 // 自动生成的配置写的是 disableCookieAlert: true，与此默认一致；
@@ -272,40 +300,6 @@ func GetWeiboCookieAlertEnabled() bool {
 		return false
 	}
 	return !config.GlobalConfig.GetBool("weibo.disableCookieAlert")
-}
-
-// GetWeiboAlertQQList 获取 Cookie 告警通知的 QQ 列表（私聊）
-// 支持两种格式：
-// 1. 数组格式：[123456, 789012]
-// 2. 字符串格式："123456,789012" 或 "123456 789012"
-func GetWeiboAlertQQList() []int64 {
-	var result []int64
-
-	// 尝试从 viper 获取数组
-	list := config.GlobalConfig.GetStringSlice("weibo.alertQQList")
-	if len(list) > 0 {
-		for _, s := range list {
-			if id := cast.ToInt64(s); id > 0 {
-				result = append(result, id)
-			}
-		}
-		return result
-	}
-
-	// 尝试从字符串解析（逗号或空格分隔）
-	str := strings.TrimSpace(config.GlobalConfig.GetString("weibo.alertQQList"))
-	if str == "" {
-		return nil
-	}
-
-	// 替换逗号为空格，然后按空格分割
-	str = strings.ReplaceAll(str, ",", " ")
-	for _, s := range strings.Fields(str) {
-		if id := cast.ToInt64(s); id > 0 {
-			result = append(result, id)
-		}
-	}
-	return result
 }
 
 // GetSnapCastURL 获取 SnapCast 服务地址，用于生成微博 rid

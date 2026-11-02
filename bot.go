@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 
 	_ "github.com/cnxysoft/DDBOT-WSa/logging"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
@@ -72,16 +74,47 @@ func SetUpLog() {
 	))
 }
 
+// configFileInSearchPath 在 viper 的搜索路径里查找现有配置文件，规则逐条对齐 viper：
+//   - 先 "." 后 "./config"（viper 的 AddConfigPath 顺序，CWD 优先）；
+//   - 每个目录里按 viper.SupportedExts 试扩展名（json/toml/yaml/yml/... 都算）；
+//   - 目录不算配置（viper 的 exists 用 !IsDir 判定）；
+//   - Init 设了 SetConfigType("yaml")，所以无扩展名的 application 也算。
+//
+// 返回相对路径，以及是否找到。少认一种形态，首次运行就会在 CWD 生成一份示例配置，
+// 而 viper 优先读 CWD —— 用户真正写的那份被静默顶掉。
+func configFileInSearchPath() (string, bool) {
+	for _, dir := range []string{".", "config"} {
+		for _, ext := range viper.SupportedExts {
+			p := filepath.Join(dir, "application."+ext)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				return p, true
+			}
+		}
+		p := filepath.Join(dir, "application")
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
+}
+
 // Run 启动 bot，这个函数会阻塞直到收到退出信号
 func Run() {
 	if fi, err := os.Stat("application.yaml"); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
-			if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0600); err != nil {
-				warn.Warn(fmt.Sprintf("application.yaml 生成失败 - %v", err))
-				os.Exit(1)
+			// 与 viper 的搜索路径一致（config.Init 依次找 "." 和 "./config"，CWD 优先）：
+			// ./config/ 下已有配置时绝不能生成 CWD 这份示例，否则 viper 优先读 CWD，
+			// 用户真正写的那份会被静默顶掉。
+			if alt, ok := configFileInSearchPath(); ok && alt != "application.yaml" {
+				fmt.Printf("检测到 %s，使用该配置\n", alt)
 			} else {
-				fmt.Println("最小配置 application.yaml 已生成，请按需修改，如需高级配置请查看帮助文档")
+				fmt.Println("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
+				if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0600); err != nil {
+					warn.Warn(fmt.Sprintf("application.yaml 生成失败 - %v", err))
+					os.Exit(1)
+				} else {
+					fmt.Println("最小配置 application.yaml 已生成，请按需修改，如需高级配置请查看帮助文档")
+				}
 			}
 		} else {
 			warn.Warn(fmt.Sprintf("检查 application.yaml 文件失败 - %v", err))
@@ -147,7 +180,8 @@ func Run() {
 
 var exampleConfig = func() string {
 	s := `
-### 注意，填写时请把井号及后面的内容删除，并且冒号后需要加一个空格
+### 注意：填写时请把井号及后面的内容删除；键值之间的冒号必须是半角「:」，且冒号后加一个空格。
+### 写成全角「：」时 YAML 不把它当分隔符，该配置项会静默失效（自定义命令前缀最容易踩）。
 bot:
   commandPrefix: "/"     # 命令前缀，默认 "/"
   onJoinGroup: 
@@ -378,7 +412,7 @@ autoreply: # 自定义命令自动回复，自定义命令通过模板发送消�
 # 如果有多个，可填写多项，prefix 支持留空，可搭配自定义命令使用
 # 例如下面的配置为：<Q 命令 1> <命令 2> </help>
 customCommandPrefix:
-  签到：""
+  签到: ""
   
 # 通知配置
 notify:

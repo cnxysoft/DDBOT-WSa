@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/ghodss/yaml"
 	"github.com/sirupsen/logrus"
@@ -28,15 +27,6 @@ type SetupRequest struct {
 	ObMode  string `json:"obMode"`  // OneBot 连接模式：ws-server | ws-reverse；空 = 跳过
 	ObAddr  string `json:"obAddr"`  // 对应模式的地址
 	ObToken string `json:"obToken"` // OneBot Access Token，可空
-}
-
-// setupConfigPath 返回 viper 实际使用的配置文件路径（与 lsp/cfg 的写入约定一致，
-// 官方支持的搜索路径含 "./config"）；配置尚未加载时回退到 "application.yaml"。
-func setupConfigPath() string {
-	if p := config.GlobalConfig.ConfigFileUsed(); p != "" {
-		return p
-	}
-	return "application.yaml"
 }
 
 // validateSetupOb 在写入前校验向导的 OneBot 连接配置，规则与 adapter/wsclient.go
@@ -98,7 +88,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	// 读现有配置（向导只写受控白名单键，不做任意 merge）。
 	// 与 lsp/cfg 的写入约定一致：用 viper 实际路径（否则配置在 ./config/ 下时
 	// 会读写错文件），并持有全局配置写锁，避免与二维码登录的 cookie 回写并发覆盖。
-	cfgPath := setupConfigPath()
+	cfgPath := cfg.ConfigFilePath()
 	cfgMu := cfg.GetConfigWriteMutex()
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
@@ -114,7 +104,24 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	var oldData []byte
 	if data, err := os.ReadFile(cfgPath); err == nil {
 		oldData = data
-		_ = yaml.Unmarshal(data, &existing)
+		if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
+			// 解析失败时 existing 停在空 map，向导照常写白名单键 = 把用户原有配置清空。
+			// 宁可拒绝写入，让用户先修好 YAML。
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
+			})
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "读取现有配置失败: " + err.Error()})
+		return
+	}
+	if existing == nil {
+		// 同 handleConfig：空内容 / 纯注释 / 字面 null 会被解析成 nil map，
+		// setNested 往 nil map 写会 panic。
+		existing = make(map[string]interface{})
 	}
 
 	setNested := func(top, key string, val interface{}) {

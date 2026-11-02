@@ -17,6 +17,7 @@ import (
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
@@ -893,7 +894,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		// 获取完整配置（敏感键脱敏，防止密钥泄漏）
-		data, err := os.ReadFile("application.yaml")
+		data, err := os.ReadFile(cfg.ConfigFilePath())
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
@@ -904,6 +905,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to parse config file"})
 			return
+		}
+		if config == nil {
+			// 空内容 / 纯注释 / 字面 null 会被解析成 nil map，直接 Encode 出去是 JSON null，
+			// 前端 configCache 变成 null，高级页整份 JSON 编辑框拿不到值。
+			config = make(map[string]interface{})
 		}
 		maskSensitiveConfig(config)
 		_ = json.NewEncoder(w).Encode(config)
@@ -917,11 +923,37 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// 与其他写配置的地方（初始化向导 / 微博 cookie 回写）共用同一把写锁：
+		// 这里是「读整份 -> 改 -> 写整份」，不持锁与后台回写并发时会互相覆盖。
+		cfgMu := cfg.GetConfigWriteMutex()
+		cfgMu.Lock()
+		defer cfgMu.Unlock()
+		cfg.MarkConfigWriteStart()
+		defer cfg.MarkConfigWriteEnd()
+
 		existing := make(map[string]interface{})
 		var oldData []byte
-		if data, err := os.ReadFile("application.yaml"); err == nil {
+		cfgPath := cfg.ConfigFilePath()
+		if data, err := os.ReadFile(cfgPath); err == nil {
 			oldData = data
-			_ = yaml.Unmarshal(data, &existing)
+			if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
+				// 解析失败时 existing 停在空 map，merge 后整份写回 = 把用户配置清空。
+				// 宁可拒绝写入，让用户先修好 YAML。
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
+				})
+				return
+			}
+		} else if !os.IsNotExist(err) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
+			return
+		}
+		if existing == nil {
+			// ghodss/yaml 对空内容 / 纯注释 / 字面 null 不报错，却会把目标 map 置成 nil，
+			// 后面 mergeConfig 往 nil map 写会 panic（handler 里就是连接被直接掐断）。
+			existing = make(map[string]interface{})
 		}
 
 		// 安全：整体写挡掉受保护键（admin.token、websocket.token），
@@ -935,6 +967,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
+		// mergeConfig 是递归合并，用户删掉的命令会继续留在配置里，改不动。
+		if v, ok := req.Config["customCommandPrefix"]; ok {
+			existing["customCommandPrefix"] = v
+			delete(req.Config, "customCommandPrefix")
+		}
+
 		mergeConfig(existing, req.Config)
 
 		data, err := yaml.Marshal(existing)
@@ -946,12 +985,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// 写入前备份原配置
 		if len(oldData) > 0 {
-			if err := os.WriteFile("application.yaml.bak", oldData, 0600); err != nil {
+			if err := os.WriteFile(cfgPath+".bak", oldData, 0600); err != nil {
 				logrus.Warnf("配置备份失败: %v", err)
 			}
 		}
 
-		if err := writeFileAtomic("application.yaml", data, 0600); err != nil {
+		if err := writeFileAtomic(cfgPath, data, 0600); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
 			return

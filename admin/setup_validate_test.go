@@ -49,19 +49,6 @@ func TestValidateSetupOb(t *testing.T) {
 	}
 }
 
-// TestSetupConfigPathFollowsViper 覆盖 M3 的路径错位修复：
-// 写入路径必须跟随 viper 实际加载的配置文件，而不是硬编码 application.yaml。
-func TestSetupConfigPathFollowsViper(t *testing.T) {
-	const want = "/tmp/ddbot-test-config/application.yaml"
-	prev := config.GlobalConfig.ConfigFileUsed()
-	config.GlobalConfig.SetConfigFile(want)
-	defer config.GlobalConfig.SetConfigFile(prev)
-
-	if got := setupConfigPath(); got != want {
-		t.Fatalf("setupConfigPath() = %q, want %q", got, want)
-	}
-}
-
 // TestHandleSetupRejectsExposedWSServerWithoutToken 验证 M5 的接口接线：
 // 向导在写配置前返回 400 与明确提示，而不是"status: ok"后重启起不来。
 func TestHandleSetupRejectsExposedWSServerWithoutToken(t *testing.T) {

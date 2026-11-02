@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/Sora233/MiraiGo-Template/config"
 )
 
 // configWriteMu 全局配置文件写锁，所有配置写操作共用
@@ -58,10 +56,7 @@ func WriteConfigKeyValue(key, value string) error {
 	MarkConfigWriteStart()
 	defer MarkConfigWriteEnd()
 
-	cfgFile := config.GlobalConfig.ConfigFileUsed()
-	if cfgFile == "" {
-		cfgFile = "application.yaml"
-	}
+	cfgFile := ConfigFilePath()
 
 	return writeConfigKeyValueToPath(key, value, cfgFile)
 }
