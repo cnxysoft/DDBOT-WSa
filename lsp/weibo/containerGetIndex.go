@@ -10,6 +10,7 @@ import (
 
 	structpb "google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
@@ -538,7 +539,19 @@ func CreateGuestReferer(uid int64) string {
 	return "https://m.weibo.cn/u/" + strconv.FormatInt(uid, 10)
 }
 
+// isGuestMode 判断是否走访客模式。
+//
+// 与 cfg.GetWeiboMode 的差别：没显式配 weibo.mode 时，**运行时的 SUB 也算数**。
+// 扫码登录的流程是 setRuntimeSUB → 刷新 Cookie → 最后才落盘，只认配置的话，
+// 刷新 Cookie 那一刻会被判成 guest，白跑一次访客流程（那条路还要打外部服务，
+// 实测能拖出 30 多秒）。
 func isGuestMode() bool {
+	if mode := strings.TrimSpace(config.GlobalConfig.GetString("weibo.mode")); mode != "" {
+		return strings.EqualFold(mode, "guest")
+	}
+	if getRuntimeSUB() != "" {
+		return false
+	}
 	return strings.EqualFold(cfg.GetWeiboMode(), "guest")
 }
 

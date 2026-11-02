@@ -113,6 +113,10 @@ type Server struct {
 
 	startedAt time.Time
 	online    *atomic.Bool
+
+	// 扫码登录会话（懒初始化，见 login.go）
+	loginOnce sync.Once
+	login     *loginManager
 }
 
 func (s *Server) getToken() string {
@@ -180,6 +184,14 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
+
+	// 平台登录态（扫码登录开着时替换掉凭据输入框）
+	mux.HandleFunc("/api/v1/platform/account", s.withAuth(s.handlePlatformAccount))
+
+	// 扫码登录（B站 / 微博）：和面板其它接口一样只认 admin.token
+	mux.HandleFunc("/api/v1/login/qrcode", s.withAuth(s.handleLoginQRCode))
+	mux.HandleFunc("/api/v1/login/qrcode/status", s.withAuth(s.handleLoginQRCodeStatus))
+	mux.HandleFunc("/api/v1/login/qrcode/cancel", s.withAuth(s.handleLoginQRCodeCancel))
 
 	// 日志管理 API
 	mux.HandleFunc("/api/v1/logs/stream", s.withAuth(s.handleLogsStream))

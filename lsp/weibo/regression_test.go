@@ -235,3 +235,38 @@ func TestSanitizeLoginURL_MasksSensitiveParams(t *testing.T) {
 
 	assert.Equal(t, "", sanitizeLoginURL(nil))
 }
+
+// TestWriteBackConfig_InsertKeepsSiblingIndent 覆盖「weibo 块存在但没有 sub 键」这条路径：
+// 插入的 sub 必须与块内兄弟键同缩进。写死两空格会让 4 空格缩进的块变成混合缩进，
+// YAML 直接不合法 —— 和 lsp/cfg 的 yamlutil 是同一个坑。
+func TestWriteBackConfig_InsertKeepsSiblingIndent(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "application.yaml")
+
+	initialContent := "weibo:\n    mode: login\n    qrlogin: true\n"
+	assert.NoError(t, os.WriteFile(cfgPath, []byte(initialContent), 0o644))
+
+	assert.NoError(t, writeBackConfigToPath("sub_value", cfgPath))
+
+	data, err := os.ReadFile(cfgPath)
+	assert.NoError(t, err)
+	want := "weibo:\n    mode: login\n    qrlogin: true\n    sub: \"sub_value\"\n"
+	assert.Equal(t, want, string(data))
+}
+
+// 键名大小写不敏感（viper 如此）：文件里写的是大写 SUB 时要原地替换，
+// 不能在块尾另起一行小写 sub 造成两个等价键。
+func TestWriteBackConfig_ReplacesKeyCaseInsensitively(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "application.yaml")
+
+	initialContent := "weibo:\n  SUB: \"old\"\n  qrlogin: true\n"
+	assert.NoError(t, os.WriteFile(cfgPath, []byte(initialContent), 0o644))
+
+	assert.NoError(t, writeBackConfigToPath("new_value", cfgPath))
+
+	data, err := os.ReadFile(cfgPath)
+	assert.NoError(t, err)
+	want := "weibo:\n  SUB: \"new_value\"\n  qrlogin: true\n"
+	assert.Equal(t, want, string(data))
+}

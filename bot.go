@@ -139,6 +139,10 @@ func Run() {
 		warn.Warn(fmt.Sprintf("读取配置文件失败！请检查配置文件格式是否正确 - %v", err))
 		os.Exit(1)
 	}
+	// 启动时按行校对一遍配置格式。全角冒号、同层等价键这类问题不会让 YAML 解析失败，
+	// 但会让对应的键静默读不到，所以只警告不中断。
+	cfg.CheckConfigFormatFile(cfg.ConfigFilePath())
+
 	config.GlobalConfig.WatchConfig()
 
 	// 根据配置启用 EXT 数据库
@@ -341,11 +345,6 @@ weibo:
   # API 模式直接从外部 API 获取微博数据，无需 Cookie
   # API 返回的数据格式需与微博移动端 API 兼容
   apiModeBaseURL: "http://127.0.0.1:5000"  # API 模式基础地址，完整 URL 为 {baseURL}/api/Weibo/GetMobileCards?uid=uid
-
-  # SnapCast 服务地址，用于访客模式生成 rid
-  # 如果留空则使用默认地址 https://sc.znin.net/render
-  # 可配置为自建的 SnapCast 服务地址
-  snapcastURL: ""
 
   # Cookie 告警通知配置（告警发送对象通过 /config weibo_alert 指定）
   disableCookieAlert: true  # 设为 true 可关闭 Cookie/SUB 失效告警通知

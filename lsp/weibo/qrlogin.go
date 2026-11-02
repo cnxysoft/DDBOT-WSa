@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/mattn/go-colorable"
@@ -153,6 +154,7 @@ func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
 // QRLoginResult 扫码登录结果
 type QRLoginResult struct {
 	QRCodeImage    []byte // 二维码图片数据
+	Scanned        bool   // 已扫码，正在完成登录（中间态；此条 Sub 为空）
 	Sub            string // 登录成功后的 SUB
 	Error          error  // 错误信息
 	RuntimeLoaded  bool   // 运行时 Cookie 是否已加载到内存
@@ -196,6 +198,11 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 			return
 		}
 
+		// 先回一条中间态：扫码成功之后的「完成登录」要打外部接口换 Cookie，
+		// 网络不好时会卡几十秒，中间态能让调用方（Web 面板 / 私聊命令）知道进度，
+		// 而不是一直停在「请扫码」上。
+		resultChan <- QRLoginResult{Scanned: true}
+
 		// 完成登录
 		sub, err := finalizeLogin(client, rawCheck, ".")
 		if err != nil {
@@ -206,16 +213,12 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 		// 分别处理运行时加载和配置持久化
 		result := QRLoginResult{Sub: sub}
 
-		// 1. 运行时加载：更新运行时 SUB 并加载 Cookie 到内存
+		// 先更新运行时 SUB：后面刷新 Cookie 时模式判断要用到它
 		setRuntimeSUB(sub)
-		if err := freshCookieOpt(sub); err != nil {
-			qrLogger.Warnf("SUB 已获取，但加载 Cookie 到内存失败: %v", err)
-			result.RuntimeLoaded = false
-		} else {
-			result.RuntimeLoaded = true
-		}
 
-		// 2. 配置持久化：写回 application.yaml
+		// 1. 配置持久化：写回 application.yaml。
+		//    放在加载 Cookie 之前——SUB 先落盘，后面无论成败，下次启动/刷新都能
+		//    按 login 模式走，不会退化成访客流程。
 		if err := WriteBackConfig(sub); err != nil {
 			qrLogger.Warnf("SUB 已获取，但写入配置失败: %v", err)
 			result.PersistError = err
@@ -223,6 +226,14 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 		} else {
 			qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
 			result.PersistSuccess = true
+		}
+
+		// 2. 运行时加载：加载 Cookie 到内存
+		if err := freshCookieOpt(sub); err != nil {
+			qrLogger.Warnf("SUB 已获取，但加载 Cookie 到内存失败: %v", err)
+			result.RuntimeLoaded = false
+		} else {
+			result.RuntimeLoaded = true
 		}
 
 		resultChan <- result
@@ -520,7 +531,15 @@ func WriteBackConfig(sub string) error {
 	cfg.MarkConfigWriteStart()
 	defer cfg.MarkConfigWriteEnd()
 
-	return writeBackConfigToPath(sub, cfgFile)
+	if err := writeBackConfigToPath(sub, cfgFile); err != nil {
+		return err
+	}
+
+	// 同步到内存里的 viper。GetWeiboMode() 是看配置里有没有 weibo.sub 来判断
+	// guest/login 的，只写文件的话（热重载这会儿正被 MarkConfigWrite 挡着）
+	// 它会一直认为 SUB 是空的 —— 表现就是「扫码登录成功了，但还在跑访客 Cookie」。
+	config.GlobalConfig.Set("weibo.sub", sub)
+	return nil
 }
 
 // writeBackConfigToPath writes SUB into the config file at cfgPath using atomic rename.
@@ -544,9 +563,30 @@ func writeBackConfigToPath(sub string, cfgPath string) error {
 	var out []string
 	inWeibo := false
 	indentWeibo := ""
+	childIndent := "" // weibo 块内已有子键的缩进，插入 sub 时对齐它
 	inserted := false
 
-	for i, line := range lines {
+	// 大小写不敏感（viper 就是大小写不敏感），命中时保留原缩进与原键名写法，只换值
+	subLineRe := regexp.MustCompile("(?i)^(\\s*)(sub)(\\s*):(\\s*)(.*)$")
+
+	// 和 lsp/cfg 的 yamlutil 同一个坑：上面那个正则把行尾的 \r 吃进了第 5 组，
+	// 拼回时不补上就把 CRLF 改成了 LF，文件变成混合换行。
+	eol := ""
+	if strings.Contains(content, "\r\n") {
+		eol = "\r"
+	}
+	// 块里已有子键就照它的缩进插，没有才退回块头缩进 + 两空格。
+	// 写死两空格会把 4 空格缩进的块改成混合缩进、YAML 直接不合法 ——
+	// 和 lsp/cfg 的 yamlutil 是同一个坑。
+	insertKey := func() string {
+		indent := childIndent
+		if indent == "" {
+			indent = indentWeibo + "  "
+		}
+		return indent + "sub: \"" + sub + "\"" + eol
+	}
+
+	for _, line := range lines {
 		trim := strings.TrimSpace(line)
 		if strings.HasPrefix(trim, "weibo:") && !inWeibo {
 			inWeibo = true
@@ -556,32 +596,36 @@ func writeBackConfigToPath(sub string, cfgPath string) error {
 		}
 
 		if inWeibo {
-			// 退出 weibo 块：遇到非缩进行或空缩进变化
+			// 退出 weibo 块：遇到非缩进行
 			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
-				// 退出前若未插入sub则补一行
 				if !inserted {
-					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
+					out = append(out, insertKey())
 					inserted = true
 				}
 				inWeibo = false
-			} else {
-				// 在 weibo 块内
-				subLineRe := regexp.MustCompile(`^(\s*)sub:\s*`)
-				if matches := subLineRe.FindStringSubmatch(line); len(matches) > 1 {
-					// 保留原有缩进格式
-					out = append(out, fmt.Sprintf("%ssub: \"%s\"", matches[1], sub))
-					inserted = true
-					continue
+			} else if m := subLineRe.FindStringSubmatch(line); m != nil && strings.EqualFold(m[2], "sub") {
+				out = append(out, m[1]+m[2]+m[3]+":"+m[4]+"\""+sub+"\""+eol)
+				inserted = true
+				continue
+			} else if childIndent == "" && len(trim) > 0 && !strings.HasPrefix(trim, "#") {
+				if idx := strings.Index(line, trim); idx > len(indentWeibo) {
+					childIndent = line[:idx]
 				}
 			}
 		}
 		out = append(out, line)
+	}
 
-		// 最后一行且在weibo块且未插入
-		if i == len(lines)-1 && inWeibo && !inserted {
-			out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-			inserted = true
+	// 块一直延伸到文件末尾且没找到 sub：插到块内最后一个非空行之后
+	if inWeibo && !inserted {
+		pos := len(out)
+		for pos > 0 && strings.TrimSpace(out[pos-1]) == "" {
+			pos--
 		}
+		out = append(out, "")
+		copy(out[pos+1:], out[pos:])
+		out[pos] = insertKey()
+		inserted = true
 	}
 
 	if !inserted {
@@ -589,8 +633,8 @@ func writeBackConfigToPath(sub string, cfgPath string) error {
 		if len(out) > 0 && out[len(out)-1] != "" {
 			out = append(out, "")
 		}
-		out = append(out, "weibo:")
-		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub))
+		out = append(out, "weibo:"+eol)
+		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub)+eol)
 	}
 
 	newData := []byte(strings.Join(out, "\n"))

@@ -1,6 +1,8 @@
 package weibo
 
 import (
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -35,69 +37,31 @@ var (
 	freshCookiePauseUntil atomic.Int64 // 暂停截止时间戳（Unix），0表示未暂停
 )
 
-// getSnapCastURL 获取 SnapCast 服务地址
-func getSnapCastURL() string {
-	if url := cfg.GetSnapCastURL(); url != "" {
-		return url
-	}
-	return "https://sc.znin.net/render"
-}
-
-// SnapCastResult SnapCast JS 模式返回结果
-type SnapCastResult struct {
-	Status string `json:"status"`
-	Data   any    `json:"data"`
-}
-
-// SnapCastRidInfo rid 和 UA 信息
-type SnapCastRidInfo struct {
+// RidInfo 访客模式要的 rid 和配套 UA
+type RidInfo struct {
 	Rid string
 	UA  string
 }
 
-// getSnapCastRid 通过 SnapCast 浏览器渲染获取 rid 和 UA
-func getSnapCastRid(ua string) (*SnapCastRidInfo, error) {
-	payload := map[string]any{
-		"site":       "weibo",
-		"type":       "rid",
-		"output":     "json",
-		"user_agent": ua,
-		"data":       map[string]any{},
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("marshal payload failed: %w", err)
-	}
+// getRid 生成访客模式需要的 rid 和 UA。
+//
+// 本地随机生成就够：实测微博的 genvisitor2 接受任意字符串当 rid
+// （16 位 hex / 32 位 hex / 时间戳 / uuid 都返回 retcode 20000000 "succ"，
+// 并正常下发 sub / subp 访客凭据）。
+//
+// 以前这里会去调一个外部浏览器渲染服务（sc.znin.net）拿「真」rid ——
+// 那个服务已经彻底不可用，而且它给回来的 rid 跟本地随机的没有任何区别。
+func getRid(ua string) (*RidInfo, error) {
+	return &RidInfo{Rid: randomRid(), UA: ua}, nil
+}
 
-	client := &http.Client{Timeout: time.Second * 10}
-	resp, err := client.Post(getSnapCastURL(), "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("post to snapcast failed: %w", err)
+// randomRid 生成 32 位 hex 的 rid。
+func randomRid() string {
+	b := make([]byte, 16)
+	if _, err := crand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	defer resp.Body.Close()
-
-	var result SnapCastResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode snapcast response failed: %w", err)
-	}
-
-	if result.Status != "ok" {
-		return nil, fmt.Errorf("snapcast error: %v", result.Data)
-	}
-
-	data, ok := result.Data.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("invalid snapcast data type")
-	}
-
-	ridVal, ok := data["rid"].(string)
-	if !ok || ridVal == "" {
-		return nil, fmt.Errorf("rid not found in snapcast response")
-	}
-
-	uaVal, _ := data["ua"].(string)
-
-	return &SnapCastRidInfo{Rid: ridVal, UA: uaVal}, nil
+	return hex.EncodeToString(b)
 }
 
 func genvisitor(path string, params gout.H, externalOpts ...requests.Option) (*GenVisitorResponse, error) {
@@ -213,15 +177,13 @@ func FreshCookieGuest() ([]*http.Cookie, error) {
 	ua := requests.RandomUA(requests.Chrome)
 	visitorUA.Store(ua)
 
-	// 通过 SnapCast 获取 rid 和 UA
-	info, err := getSnapCastRid(ua)
+	// 取 rid 和 UA（本地随机生成）
+	info, err := getRid(ua)
 	if err != nil {
-		logger.Errorf("getSnapCastRid error %v", err)
+		logger.Errorf("getRid error %v", err)
 		return nil, err
-	} else if info.UA != ua {
-		logger.Warnf("getSnapCastRid Warning: UserAgent invalid, return UA: %v", info.UA)
-		ua = info.UA
 	}
+	ua = info.UA
 	uaPreview := info.UA
 	if len(uaPreview) > 20 {
 		uaPreview = uaPreview[:20]

@@ -8,7 +8,6 @@ import (
 
 // TestFreshCookie tests the FreshCookieGuest function - requires external network access
 // and is disabled in CI. To run locally:
-// 1. Ensure SnapCast service is available at the configured URL
 // 2. Run: go test -v -run TestFreshCookie ./lsp/weibo/...
 // func TestFreshCookie(t *testing.T) {
 // 	var cookies []*http.Cookie

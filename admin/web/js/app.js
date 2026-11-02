@@ -510,8 +510,8 @@ const CONFIG_SCHEMA = [
   ]},
   { id: 'platform', label: '平台', groups: [
     { title: '账号凭据', site: 'bilibili', fields: [
-      { path: 'bilibili.SESSDATA', label: 'SESSDATA Cookie', type: 'credential' },
-      { path: 'bilibili.bili_jct', label: 'bili_jct Cookie', type: 'credential' },
+      { path: 'bilibili.SESSDATA', label: 'SESSDATA Cookie', type: 'credential', qrLoginOf: 'bilibili' },
+      { path: 'bilibili.bili_jct', label: 'bili_jct Cookie', type: 'credential', qrLoginOf: 'bilibili' },
       { path: 'bilibili.qrlogin', label: '二维码登录', type: 'bool', def: true, hint: 'Cookie 失效后可扫码重登' },
     ]},
     { title: '轮询与推送', site: 'bilibili', fields: [
@@ -529,7 +529,7 @@ const CONFIG_SCHEMA = [
     ]},
     { title: '运行模式', site: 'weibo', fields: [
       { path: 'weibo.mode', label: '模式', type: 'select', options: ['guest','login','api'], def: 'guest', hint: 'guest 访客 / login 账号登录 / api 外部 API' },
-      { path: 'weibo.sub', label: 'SUB Cookie', type: 'credential', hint: 'login 模式凭据' },
+      { path: 'weibo.sub', label: 'SUB Cookie', type: 'credential', hint: 'login 模式凭据', qrLoginOf: 'weibo' },
       { path: 'weibo.qrlogin', label: '二维码登录', type: 'bool', def: true, hint: '仅 login 模式' },
       { path: 'weibo.autorefresh', label: 'SUB 自动刷新', type: 'bool', def: false, hint: 'login/api 模式生效' },
     ]},
@@ -655,6 +655,11 @@ function renderField(f) {
   const row = document.createElement('div');
   // set-row：一条一项的设置行——左侧标签列（含 hint），右侧控件列，行间分隔线
   row.className = 'form-row set-row';
+  // 开着扫码登录时不渲染凭据输入框：这时候用户关心的是「现在登的是谁」，
+  // 那两串 base64 摆在这儿没意义（登录态卡片在平台弹层顶部）。
+  // 把扫码登录关掉，字段就回来。
+  if (f.qrLoginOf && getPath(configCache, f.qrLoginOf + '.qrlogin') === true) return null;
+
   const original = getPath(configCache, f.path);
   const hintHTML = f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : '';
   const labelCol = `<div class="label-col"><label>${esc(f.label)}</label>${hintHTML}</div>`;
@@ -771,6 +776,7 @@ function renderConfigForm() {
           `<span class="toggle-slider"></span></label>` +
           `</div>` +
           `<div class="p-ops">` +
+          (LOGIN_PLATFORM_NAME[site] ? `<button class="btn ghost sm" data-login-platform="${esc(site)}">扫码登录</button>` : '') +
           `<button class="btn ghost sm" data-edit-platform="${esc(site)}">配置</button>` +
           `</div>`;
         grid.appendChild(card);
@@ -783,7 +789,7 @@ function renderConfigForm() {
         box.innerHTML = `<h4 class="form-group-title">${esc(g.title)}</h4>`;
         const grid = document.createElement('div');
         grid.className = 'form-grid';
-        for (const f of g.fields) grid.appendChild(renderField(f));
+        for (const f of g.fields) { const el = renderField(f); if (el) grid.appendChild(el); }
         box.appendChild(grid);
         panel.appendChild(box);
       }
@@ -1243,13 +1249,18 @@ function renderPlatformModal(site) {
   const body = $('#platform-modal-body');
   body.innerHTML = '';
   body.dataset.site = site;
+  // 顶部先放登录态卡片；下面被 qrLoginOf 标记的凭据字段会自动跳过
+  const acctBox = document.createElement('div');
+  acctBox.id = 'platform-account';
+  body.appendChild(acctBox);
+  loadPlatformAccount(site, 'platform-account');
   for (const g of groups) {
     const box = document.createElement('div');
     box.className = 'form-group';
     box.innerHTML = `<h4 class="form-group-title">${esc(g.title)}</h4>`;
     const grid = document.createElement('div');
     grid.className = 'form-grid';
-    for (const f of g.fields) grid.appendChild(renderField(f));
+    for (const f of g.fields) { const el = renderField(f); if (el) grid.appendChild(el); }
     box.appendChild(grid);
     body.appendChild(box);
   }
@@ -1324,6 +1335,158 @@ async function setPlatformEnabled(site, enabled) {
 function closeSidebar() {
   $('#sidebar').classList.remove('open');
   $('#sidebar-backdrop').classList.remove('show');
+}
+
+/* ===== 扫码登录 ===== */
+// 面板侧只做出码与轮询：真正的登录流程在服务端（B站走 lsp/bilibili 的原语，
+// 微博直接接 lsp/weibo 的 RunQRLoginForQQ），成功后由服务端写配置文件。
+const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博' };
+
+let loginSession = null; // 服务端会话 id
+let loginTimer = null;   // 轮询定时器
+let loginSite = null;    // 当前平台，供「重新获取二维码」用
+
+// done=true 表示这次登录已经有结果了：按钮换成「重新扫码」+「关闭」。
+function loginActionsHTML(done, site) {
+  return '<div class="login-actions">' +
+    (done
+      ? '<button class="btn" data-login-platform="' + esc(site || '') + '">重新扫码</button>'
+      : '<button class="btn" id="login-refresh">重新获取二维码</button>') +
+    '<button class="btn' + (done ? ' primary' : '') + '" id="login-cancel">' + (done ? '关闭' : '取消') + '</button>' +
+    '</div>' +
+    (done ? '' : '<p class="config-note">扫码成功后服务端会直接把凭据写入配置文件并热生效，不需要再点保存。</p>');
+}
+
+// 有结果之后就把二维码换掉：码已经没用了，留着会让人以为还没走完。
+// 成功时再挂一张登录态卡片，让用户能确认自己扫的是不是想登的那个号。
+function loginResultHTML(kind, message, site) {
+  return '<div class="login-result ' + kind + '">' +
+    '<div class="login-result-icon">' + (kind === 'ok' ? '&#10003;' : '&#10005;') + '</div>' +
+    '<div class="login-result-text">' + esc(message) + '</div>' +
+    '</div>' +
+    (kind === 'ok' && site ? '<div id="login-result-account"></div>' : '') +
+    loginActionsHTML(true, site);
+}
+
+function renderLoginBody(html) {
+  $('#login-modal-body').innerHTML = html;
+}
+
+function cancelLoginSession() {
+  if (!loginSession) return;
+  const sid = loginSession;
+  loginSession = null;
+  api('/api/v1/login/qrcode/cancel', { method: 'POST', body: JSON.stringify({ session: sid }) }).catch(() => {});
+}
+
+function stopLoginPolling() {
+  if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+}
+
+function closeLoginModal() {
+  $('#login-modal').classList.add('hidden');
+  stopLoginPolling();
+  cancelLoginSession();
+}
+
+async function startPlatformLogin(site) {
+  const name = LOGIN_PLATFORM_NAME[site] || site;
+  stopLoginPolling();
+  cancelLoginSession();
+  loginSite = site;
+
+  $('#login-modal-title').textContent = name + ' 扫码登录';
+  renderLoginBody('<div class="login-qr-box"><div class="login-qr-loading">正在获取二维码…</div></div>');
+  $('#login-modal').classList.remove('hidden');
+
+  let resp;
+  try {
+    resp = await apiJSON('/api/v1/login/qrcode', {
+      method: 'POST',
+      body: JSON.stringify({ platform: site }),
+    });
+  } catch (e) {
+    renderLoginBody('<div class="login-qr-box"><div class="login-qr-err">' + esc(e.message) + '</div></div>' + loginActionsHTML());
+    return;
+  }
+
+  loginSession = resp.session;
+  renderLoginBody(
+    '<div class="login-qr-box"><img class="login-qr" alt="登录二维码" src="' + resp.image + '"></div>' +
+    '<div class="login-status" id="login-status">' + esc(resp.message || '请扫码') + '</div>' +
+    loginActionsHTML());
+  loginTimer = setInterval(pollLoginStatus, 2000);
+}
+
+async function pollLoginStatus() {
+  if (!loginSession) return;
+  let r;
+  try {
+    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(loginSession));
+  } catch (e) {
+    return; // 网络抖动，等下一次
+  }
+  const el = $('#login-status');
+  if (el && r.message) el.textContent = r.message;
+
+  if (r.state === 'confirmed') {
+    stopLoginPolling();
+    loginSession = null; // 服务端已经收尾，不用再发 cancel
+    renderLoginBody(loginResultHTML('ok', r.message || '登录成功，凭据已写入配置', r.platform));
+    // 服务端在登录成功时已经把账号缓存失效了，这里拿到的是新账号
+    loadPlatformAccount(r.platform, 'login-result-account');
+    toast((LOGIN_PLATFORM_NAME[r.platform] || r.platform) + ' 登录成功，配置已更新');
+    loadConfig();
+  } else if (r.state === 'failed' || r.state === 'expired') {
+    stopLoginPolling();
+    loginSession = null;
+    renderLoginBody(loginResultHTML('err', r.message || '登录未完成，请重新扫码', r.platform));
+  } else if (r.state === 'scanned') {
+    if (el) el.className = 'login-status scanned';
+  }
+}
+
+/* ===== 平台登录态 ===== */
+// 开着扫码登录时用它替掉凭据输入框：显示当前登的是谁，而不是那两串 base64。
+async function loadPlatformAccount(site, mountId) {
+  const box = document.getElementById(mountId);
+  if (!box) return;
+  let acc;
+  try {
+    acc = await apiJSON('/api/v1/platform/account?site=' + encodeURIComponent(site));
+  } catch (e) {
+    box.innerHTML = '<div class="acct-card err"><div class="acct-main">' +
+      '<div class="acct-name">登录态查询失败</div><div class="acct-sub">' + esc(e.message) + '</div></div></div>';
+    return;
+  }
+  box.innerHTML = accountCardHTML(site, acc);
+}
+
+function accountCardHTML(site, acc) {
+  const label = LOGIN_PLATFORM_NAME[site] || site;
+  const initial = (acc.name || label).slice(0, 1);
+  const avatar = acc.avatar
+    ? '<img class="acct-avatar" alt="" src="' + esc(acc.avatar) + '" referrerpolicy="no-referrer">'
+    : '<div class="acct-avatar acct-avatar-empty">' + esc(initial) + '</div>';
+
+  if (!acc.loggedIn) {
+    return '<div class="acct-card">' + avatar +
+      '<div class="acct-main"><div class="acct-name">未登录</div>' +
+      '<div class="acct-sub">' + esc(acc.message || '尚未登录') + '</div></div>' +
+      '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">扫码登录</button>' +
+      '</div>';
+  }
+
+  const meta = [];
+  if (acc.uid) meta.push('UID ' + acc.uid);
+  if (acc.mode) meta.push({ login: '登录模式', guest: '访客模式', api: 'API 模式' }[acc.mode] || acc.mode);
+  if (acc.level) meta.push('LV' + acc.level);
+  if (acc.vip) meta.push(acc.vip);
+  return '<div class="acct-card ok">' + avatar +
+    '<div class="acct-main"><div class="acct-name">' + esc(acc.name || '已登录') + '</div>' +
+    '<div class="acct-sub">' + esc(meta.join(' · ') || acc.message || '已登录') + '</div></div>' +
+    '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">重新登录</button>' +
+    '</div>';
 }
 
 /* ===== 启动 ===== */
@@ -1465,6 +1628,16 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (e.target.closest('#platform-modal-save')) savePlatformModal();
     else if (e.target === $('#platform-modal')) closePlatformModal();
   });
+
+  // 扫码登录：平台卡片上的按钮 + 弹层里的操作，统一委托到 document
+  document.addEventListener('click', (e) => {
+    const startBtn = e.target.closest('[data-login-platform]');
+    if (startBtn) { startPlatformLogin(startBtn.dataset.loginPlatform); return; }
+    if (e.target.closest('#login-refresh')) { startPlatformLogin(loginSite); return; }
+    if (e.target.closest('#login-modal-close') || e.target.closest('#login-cancel') || e.target === $('#login-modal')) {
+      closeLoginModal();
+    }
+  });
   $('#template-modal').addEventListener('click', async (e) => {
     if (e.target.closest('#template-modal-close') || e.target === $('#template-modal')) { closeTemplateModal(); return; }
     const modal = $('#template-modal');
@@ -1500,7 +1673,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('#platform-modal').classList.contains('hidden')) closePlatformModal();
+    if (e.key !== 'Escape') return;
+    if (!$('#platform-modal').classList.contains('hidden')) closePlatformModal();
+    else if (!$('#login-modal').classList.contains('hidden')) closeLoginModal();
   });
 
   $('#log-search').addEventListener('input', rerenderLogs);

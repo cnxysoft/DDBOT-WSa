@@ -48,7 +48,9 @@ func NewQRLoginSession() *QRLoginSession {
 	return &QRLoginSession{jar: jar}
 }
 
-func GetQRCode(session *QRLoginSession) (*GetQRCodeResponse, error) {
+// GetQRCodeQuiet 取二维码，但不写 qrcode.png、也不往控制台打字符画。
+// Web 面板会把二维码直接画给用户看，控制台再打一份只是噪音（还会写进日志页）。
+func GetQRCodeQuiet(session *QRLoginSession) (*GetQRCodeResponse, error) {
 	var opts []requests.Option
 	opts = append(opts,
 		requests.ProxyOption(proxy_pool.PreferNone),
@@ -67,6 +69,15 @@ func GetQRCode(session *QRLoginSession) (*GetQRCodeResponse, error) {
 	}
 	if GetQRCodeResp.Code != 0 {
 		return nil, errors.New(GetQRCodeResp.Message)
+	}
+	return GetQRCodeResp, nil
+}
+
+// GetQRCode 取二维码并输出到控制台（终端场景：写 qrcode.png + 打字符画）。
+func GetQRCode(session *QRLoginSession) (*GetQRCodeResponse, error) {
+	GetQRCodeResp, err := GetQRCodeQuiet(session)
+	if err != nil {
+		return nil, err
 	}
 	err = qrcode.WriteFile(GetQRCodeResp.Data.Url, qrcode.Low, 256, "qrcode.png")
 	if err != nil {
