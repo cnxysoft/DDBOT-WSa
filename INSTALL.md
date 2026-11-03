@@ -47,6 +47,21 @@ Windows版可以双击运行DDBOT程序。
 
 DDBOT的配置文件为`application.yaml`，该文件可以用文本编辑器（windows的记事本/vscode，linux的nano/vim等）打开。
 
+### Web 管理面板
+
+next-dev 自带一个网页管理面板，可以不用登录 QQ 就在浏览器里完成初始化、管理订阅与权限、改配置、编辑模板、实时看日志。默认关闭，在 `application.yaml` 里打开：
+
+```yaml
+admin:
+  enable: true
+  addr: "127.0.0.1:15631"   # 监听地址
+  token: ""                 # 访问密码；留空时第一次打开面板会进入初始化向导
+```
+
+重启后访问 `http://127.0.0.1:15631/`。启动日志里会打印面板的实际地址，没启用时也会有一行提示。想从其它机器或手机访问，把 `addr` 改成 `0.0.0.0:15631` 并务必设置 token。
+
+完整说明见 [Web 管理面板](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/)。
+
 ### 设置BOT管理员
 
 **方法一**

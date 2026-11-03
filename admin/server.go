@@ -147,14 +147,50 @@ type Health struct {
 	Version   string `json:"version"`
 }
 
+const (
+	// defaultAdminAddr 与示例配置保持一致：默认只监听本机，不把面板暴露到局域网。
+	defaultAdminAddr = "127.0.0.1:15631"
+	// docsWebUI 面板说明文档。面板默认关闭，未启用时若不给出入口，用户升级后
+	// 完全无从发现这个功能（老 application.yaml 里通常没有 admin 段）。
+	docsWebUI = "https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/"
+)
+
+// panelURL 把监听地址转成浏览器里能直接打开的地址。
+// 0.0.0.0 / :: 表示监听所有网卡，从本机打开仍然是 127.0.0.1。
+func panelURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr + "/"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
+
+// adminTokenHint 说明本次启动的鉴权状态，免得用户打开面板后对着 401 发懵。
+func adminTokenHint(addr, token string) string {
+	switch {
+	case token != "":
+		return "登录密码为配置里的 admin.token"
+	case !isLoopbackAddr(addr):
+		return "admin.token 未配置且监听非回环地址，数据接口会返回 401，请配置 token 后重启"
+	default:
+		return "admin.token 未配置，首次打开会进入初始化向导"
+	}
+}
+
 func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	enable := config.GlobalConfig.GetBool("admin.enable")
 	if !enable {
+		// 面板默认关闭，关闭时没有其它任何日志。这一行是用户发现自己有这个功能的
+		// 唯一线索，别删。
+		logrus.Infof("Web 管理面板未启用（admin.enable 未开启）；如需在浏览器里管理，请在 application.yaml 中设置 admin.enable: true 后重启，说明见 %s", docsWebUI)
 		return nil, nil
 	}
 	addr := config.GlobalConfig.GetString("admin.addr")
 	if addr == "" {
-		addr = "127.0.0.1:15631"
+		addr = defaultAdminAddr
 	}
 	token := config.GlobalConfig.GetString("admin.token")
 	if token == "" {
@@ -230,12 +266,20 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	// ServeMux 最长匹配保证 /api/* 不会被这里吞掉。静态资源见 static.go 的说明）
 	mux.Handle("/", http.HandlerFunc(serveWebFile))
 
-	server := &http.Server{Addr: addr, Handler: mux}
+	// 先同步绑定端口，再把 Serve 丢到后台：端口被占用之类的问题必须当场可见，
+	// 否则用户只会看到「面板没起来」，日志里却一个字都没有。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logrus.Errorf("Web 管理面板启动失败(addr=%s)：%v；请检查端口是否被占用，或修改 admin.addr", addr, err)
+		return nil, err
+	}
+	server := &http.Server{Handler: mux}
 	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logrus.Errorf("admin server 启动失败(addr=%s): %v", addr, err)
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logrus.Errorf("admin server 异常退出(addr=%s): %v", addr, err)
 		}
 	}()
+	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, token))
 	return s, nil
 }
 

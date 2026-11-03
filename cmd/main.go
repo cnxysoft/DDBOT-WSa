@@ -82,6 +82,7 @@ func main() {
 	fmt.Println("DDBOT交流群：755612788（已满）、980848391")
 	fmt.Println("二次修改:https://github.com/Hoshinonyaruko/DDBOT-ws")
 	fmt.Println("三次修改:https://github.com/cnxysoft/DDBOT-WSa")
+	fmt.Println("文档站:https://kizunerwe.github.io/DDBOT-WSa-docs/")
 	fmt.Println("本分支版本主要以修复功能并接入OneBot协议的BOT框架为目的")
 	fmt.Println("主流框架：LLOneBot、NapCat、Lagrange")
 	fmt.Println("LLOneBot:https://llonebot.github.io/")
