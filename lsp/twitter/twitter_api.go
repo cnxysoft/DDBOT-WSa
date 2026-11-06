@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/andybalholm/brotli"
@@ -1345,7 +1346,7 @@ func (t *TwitterAPI) doGetJSON(ctx context.Context, apiURL string, variables, fe
 			return fmt.Errorf("rate limit exceeded (429)")
 		}
 		apiError()
-		return fmt.Errorf("GET request failed: %w", err)
+		return fmt.Errorf("GET request failed: %w", classifyTwitterHTTPError(httpCode, err))
 	}
 
 	decompressed, err := decompressResponse(rawResp)
@@ -1360,31 +1361,136 @@ func (t *TwitterAPI) doGetJSON(ctx context.Context, apiURL string, variables, fe
 		return fmt.Errorf("rate limit exceeded (429)")
 	}
 
+	// 登录态失效单独打标记：只有这类错误才允许触发 Cookie 失效告警。
+	// 只在响应看起来是错误信封时才解析，避免对正常的大响应（时间线可达 1MB）重复解一遍。
+	if bytes.HasPrefix(trimResponsePrefix(decompressed), []byte(`{"errors"`)) {
+		if code, ok := twitterAuthErrorCode(decompressed); ok {
+			apiError()
+			return fmt.Errorf("%w（错误码 %d）", ErrTwitterAuth, code)
+		}
+	}
+
 	err = json.Unmarshal(decompressed, out)
 	if err != nil {
 		apiError()
-		return fmt.Errorf("failed to parse response: %w", err)
+		return fmt.Errorf("failed to parse response: %w (head=%s)", err, twitterResponseHead(decompressed, 16))
 	}
 
 	apiSuccess()
 	return nil
 }
 
+// decompressResponse 解压响应体。
+//
+// 早期实现按“魔数”嗅探编码后只解一种：gzip/zlib 有固定魔数可行，但 brotli 根本没有魔数
+// （原实现的 br 判断 CE B2 CF FA 是错的，永远不会命中），于是 brotli 响应被原样交给
+// json.Unmarshal，线上表现为每次都报 `invalid character '\u0083'`。
+// 现在按内容依次尝试：已是文本/JSON 直接返回；gzip/zlib 带校验和，解压失败即可排除；
+// brotli 没有校验，只有解出的内容仍是文本时才接受，避免把二进制误判成成功。
 func decompressResponse(data []byte) ([]byte, error) {
-	if len(data) < 2 {
+	if len(data) == 0 {
 		return data, nil
 	}
+	// 未压缩响应最常见，json.Valid 能给出确定结论。
+	// 不能只看首字节：brotli 压缩体也可能恰好以 '{' / '[' / '<' 开头（实测 60KB 正文就是如此）。
+	if json.Valid(data) {
+		return data, nil
+	}
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		if out, err := decompressGzip(data); err == nil {
+			return out, nil
+		}
+	}
+	if len(data) >= 2 && data[0] == 0x78 {
+		if out, err := decompressDeflate(data); err == nil {
+			return out, nil
+		}
+	}
+	// 未压缩的文本响应（x.com 首页、sw.js 这类 JavaScript、风控 HTML）原样返回。
+	// 先判文本再试 brotli：避免把本来就是文本的内容当成压缩体再解一遍。
+	if looksLikeTextResponse(data) {
+		return data, nil
+	}
+	// brotli 没有校验和，解出来必须仍是文本才采纳，否则随机二进制也可能“解压成功”并返回垃圾。
+	if out, err := decompressBrotli(data); err == nil && looksLikeTextResponse(out) {
+		return out, nil
+	}
+	return nil, fmt.Errorf("无法识别的响应编码（疑似未解压的压缩响应），head=%s", twitterResponseHead(data, 16))
+}
 
-	switch {
-	case data[0] == 0x1f && data[1] == 0x8b:
-		return decompressGzip(data)
-	case data[0] == 0x78 && (data[1] == 0x9c || data[1] == 0xda || data[1] == 0x01):
-		return decompressDeflate(data)
-	case len(data) >= 4 && data[0] == 0xce && data[1] == 0xb2 && data[2] == 0xcf && data[3] == 0xfa:
-		return decompressBrotli(data)
-	default:
-		return data, nil
+// looksLikeTextResponse 判断字节流是否是可直接使用的文本（JSON、HTML、JavaScript 都算）。
+// 判据是“整段是合法 UTF-8 且不含除制表/换行/回车以外的控制字符”——压缩体的字节几乎不可能
+// 同时满足这两点，因此可以据此区分文本响应与未解压的压缩响应。
+func looksLikeTextResponse(data []byte) bool {
+	if len(data) == 0 || !utf8.Valid(data) {
+		return false
 	}
+	for _, b := range data {
+		if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+			return false
+		}
+	}
+	return true
+}
+
+// trimResponsePrefix 去掉响应开头的空白与 UTF-8 BOM。
+func trimResponsePrefix(data []byte) []byte {
+	b := bytes.TrimLeft(data, " \t\r\n")
+	if len(b) >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
+		b = b[3:]
+	}
+	return b
+}
+
+// twitterResponseHead 返回响应体的十六进制前缀，用于在解析失败时直接看出真实内容：
+// 压缩体首字节、HTML 拦截页的 0x3c 等一眼可辨，不必再靠猜。
+func twitterResponseHead(data []byte, n int) string {
+	if len(data) > n {
+		data = data[:n]
+	}
+	return fmt.Sprintf("% x", data)
+}
+
+// ErrTwitterAuth 表示登录态失效（Cookie 无效/被撤销/账号受限），上层据此判定是否为
+// “Cookie 失效”。网络超时、响应无法解析等一律不归入此类，避免误报。
+var ErrTwitterAuth = errors.New("twitter 登录态失效")
+
+// twitterAuthErrorCodes 是 Twitter 表示鉴权失败的 GraphQL/REST 错误码：
+// 32 无法鉴权、89 令牌失效、215 鉴权数据错误、326 账号被限制。
+var twitterAuthErrorCodes = []int{32, 89, 215, 326}
+
+// classifyTwitterHTTPError 给 HTTP 层失败分类：401/403 视为登录态失效，其余保持原样。
+func classifyTwitterHTTPError(httpCode int, err error) error {
+	switch httpCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("%w: %w (http %d)", ErrTwitterAuth, err, httpCode)
+	}
+	return err
+}
+
+// twitterAuthErrorCode 从响应体里识别鉴权错误码；命中返回该错误码。
+func twitterAuthErrorCode(body []byte) (int, bool) {
+	var resp struct {
+		Errors []struct {
+			Code int `json:"code"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return 0, false
+	}
+	for _, e := range resp.Errors {
+		for _, code := range twitterAuthErrorCodes {
+			if e.Code == code {
+				return e.Code, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// isTwitterAuthError 判断错误链上是否带登录态失效标记。
+func isTwitterAuthError(err error) bool {
+	return errors.Is(err, ErrTwitterAuth)
 }
 
 // isRateLimited 判断响应是否命中限速（429）
@@ -1990,7 +2096,7 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 			return nil, fmt.Errorf("rate limit exceeded (429)")
 		}
 		apiError()
-		return nil, fmt.Errorf("ProfileSpotlightsQuery request failed: %w", err)
+		return nil, fmt.Errorf("ProfileSpotlightsQuery request failed: %w", classifyTwitterHTTPError(httpCode, err))
 	}
 
 	decompressed, err := decompressResponse(rawResp)
@@ -2003,6 +2109,11 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 	if isRateLimited(httpCode, decompressed) {
 		api429()
 		return nil, fmt.Errorf("rate limit exceeded (429)")
+	}
+
+	if code, ok := twitterAuthErrorCode(decompressed); ok {
+		apiError()
+		return nil, fmt.Errorf("%w（错误码 %d）", ErrTwitterAuth, code)
 	}
 
 	var resp struct {
@@ -2115,7 +2226,7 @@ func (t *TwitterAPI) getUserByScreenNameWithRefresh(ctx context.Context, screenN
 			return nil, fmt.Errorf("rate limit exceeded (429)")
 		}
 		apiError()
-		return nil, fmt.Errorf("ProfileSpotlightsQuery request failed: %w", err)
+		return nil, fmt.Errorf("ProfileSpotlightsQuery request failed: %w", classifyTwitterHTTPError(httpCode, err))
 	}
 
 	decompressed, err := decompressResponse(rawResp)
@@ -2128,6 +2239,11 @@ func (t *TwitterAPI) getUserByScreenNameWithRefresh(ctx context.Context, screenN
 	if isRateLimited(httpCode, decompressed) {
 		api429()
 		return nil, fmt.Errorf("rate limit exceeded (429)")
+	}
+
+	if code, ok := twitterAuthErrorCode(decompressed); ok {
+		apiError()
+		return nil, fmt.Errorf("%w（错误码 %d）", ErrTwitterAuth, code)
 	}
 
 	var resp struct {

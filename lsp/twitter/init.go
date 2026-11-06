@@ -1,7 +1,9 @@
 package twitter
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
@@ -117,7 +119,7 @@ func setCookies() {
 						reason = err.Error()
 					}
 					logger.Errorf("Twitter Cookie验证失败：%v，进入自动恢复模式", err)
-					enterTwitterRecovering(reason)
+					enterTwitterRecovering(twitterIncidentAuth, reason)
 				}
 			} else {
 				logger.Infof("使用配置的screenName: %s", screenName)
@@ -176,12 +178,51 @@ func verifyTwitterAPI() (screenName, mainJsUrl string, err error) {
 	} else {
 		logger.Infof("成功获取 queryId: %s", twitterAPI.GetQueryId())
 	}
+	// 首页 HTML 能打开不代表接口可用：线上曾出现首页正常、时间线响应无法解码，
+	// 而恢复校验只看首页，于是 15 秒就判定“已恢复”，告警每 100 分钟复发一次。
+	// 这里补一次真实时间线请求，自检不过就继续留在恢复模式。
+	if err := verifyTimelineAPI(); err != nil {
+		return "", "", err
+	}
 	return sn, mjUrl, nil
+}
+
+// verifyTimelineAPI 用真实接口自检：解析自身 userId 并实际拉一次时间线。
+// 失败面比首页 HTML 更接近真实抓取路径，能拦住“首页正常但接口不可用”的假恢复。
+// queryId 失效属于另一条自愈路径（接口内部会自动刷新），不作为Cookie判定依据。
+func verifyTimelineAPI() error {
+	if twitterAPI == nil {
+		return errors.New("Twitter API 未配置 Cookie")
+	}
+	sn := twitterAPI.GetScreenName()
+	if sn == "" {
+		return errors.New("screenName为空，无法自检时间线接口")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	userID, err := twitterAPI.ResolveUserID(ctx, sn)
+	if err != nil {
+		if IsQueryNotFoundError(err) {
+			logger.Warnf("解析自身userId时遇到queryId失效，跳过时间线自检: %v", err)
+			return nil
+		}
+		return fmt.Errorf("解析自身userId失败: %w", err)
+	}
+	if _, err := twitterAPI.UserTweets(ctx, userID, ""); err != nil {
+		if IsQueryNotFoundError(err) {
+			logger.Warnf("时间线自检遇到queryId失效，跳过: %v", err)
+			return nil
+		}
+		return fmt.Errorf("时间线接口自检失败: %w", err)
+	}
+	return nil
 }
 
 var (
 	twitterRecovering      atomic.Bool
 	twitterRecoveringSince atomic.Int64
+	twitterRecoveringKind  atomic.Int32
 	twitterVerifyFunc      = func() (string, string, error) { return verifyTwitterAPI() }
 	// twitterRecoveryBackoff 自动恢复重试的退避序列，超出后按最后一项封顶
 	twitterRecoveryBackoff = []time.Duration{
@@ -190,15 +231,19 @@ var (
 	}
 )
 
-// enterTwitterRecovering 进入自动恢复模式：暂停Twitter刷新、向管理员发一次告警，
+// enterTwitterRecovering 进入自动恢复模式：暂停Twitter刷新、按故障类型向管理员发一次告警，
 // 并后台按退避节奏重试验证，成功后自动恢复推送并通知。重复调用只会启动一个恢复循环。
-func enterTwitterRecovering(reason string) {
+func enterTwitterRecovering(kind twitterIncidentKind, reason string) {
 	if !twitterRecovering.CompareAndSwap(false, true) {
 		return
 	}
 	twitterRecoveringSince.Store(time.Now().Unix())
-	logger.Errorf("Twitter进入自动恢复模式：%v", reason)
-	notifyTwitterLoginExpired(reason)
+	twitterRecoveringKind.Store(int32(kind))
+	// 恢复期间不抓取，旧的退避窗口没有意义，清掉以免拖慢首次校验
+	apiReset()
+	logger.Errorf("Twitter进入自动恢复模式（%s）：%v", kind.label(), reason)
+	resetTwitterFetchFailures()
+	notifyTwitterIncident(kind, reason)
 	go twitterRecoveryLoop()
 }
 
@@ -214,10 +259,12 @@ func twitterRecoveryLoop() {
 			logger.Warnf("Twitter自动恢复第%d次重试失败: %v", attempt+1, err)
 			continue
 		}
+		kind := twitterIncidentKind(twitterRecoveringKind.Load())
 		downtime := time.Since(time.Unix(twitterRecoveringSince.Load(), 0))
 		twitterRecovering.Store(false)
-		notifyTwitterLoginRecovered(downtime)
-		logger.Infof("Twitter已自动恢复，本次中断时长 %v", downtime)
+		resetTwitterFetchFailures()
+		notifyTwitterIncidentRecovered(downtime)
+		logger.Infof("Twitter已自动恢复（%s），本次中断时长 %v", kind.label(), downtime)
 		return
 	}
 }
