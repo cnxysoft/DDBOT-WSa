@@ -57,7 +57,33 @@ func TestRenderOpusTextParagraph(t *testing.T) {
 	}}
 	var b strings.Builder
 	renderOpusTextParagraph(&b, para)
+	// 只有视频/专栏这类内容卡片才展开链接；网页链接只保留文字
 	assert.Equal(t, "看这个：某个视频 https://b23.tv/abc网页链接 https://example.com/xhttps://example.com/y", b.String())
+}
+
+// 话题(#tag#)、@、抽奖这类节点只带搜索或站内跳转，不能把 jump_url 写进正文，
+// 否则一条动态会被几十条 search.bilibili.com 链接撑成一长串。
+func TestRenderOpusTextParagraphSkipsTagLinks(t *testing.T) {
+	para := &opusParaText{Nodes: []*opusTextNode{
+		{Type: "TEXT_NODE_TYPE_RICH", Rich: &opusTextRich{
+			Type: "RICH_TEXT_NODE_TYPE_TOPIC", Text: "#绝区零#", OrigText: "#绝区零#",
+			JumpURL: "//search.bilibili.com/all?keyword=%E7%BB%9D%E5%8C%BA%E9%9B%B6",
+		}},
+		{Type: "TEXT_NODE_TYPE_WORD", Word: &opusTextWord{Words: " 抽个奖"}},
+		{Type: "TEXT_NODE_TYPE_RICH", Rich: &opusTextRich{
+			Type: "RICH_TEXT_NODE_TYPE_AT", Text: "@某人", JumpURL: "//space.bilibili.com/123",
+		}},
+		{Type: "TEXT_NODE_TYPE_RICH", Rich: &opusTextRich{
+			Type: "RICH_TEXT_NODE_TYPE_LOTTERY", Text: "互动抽奖", JumpURL: "//t.bilibili.com/xxx",
+		}},
+	}}
+	var b strings.Builder
+	renderOpusTextParagraph(&b, para)
+
+	out := b.String()
+	assert.Equal(t, "#绝区零# 抽个奖@某人互动抽奖", out)
+	assert.NotContains(t, out, "search.bilibili.com")
+	assert.NotContains(t, out, "//space.bilibili.com")
 }
 
 // 图片段落按出现顺序编号，空 URL 的图片要跳过。
@@ -320,4 +346,12 @@ func TestEnrichThenPeekKeepsSegments(t *testing.T) {
 	require.NotNil(t, cached)
 	assert.NotEmpty(t, cached.Segments)
 	assert.Equal(t, 1, calls)
+}
+
+// 网页链接节点常给协议相对地址，展开时要补上 https:，否则推送里是半截 URL。
+func TestNormalizeOpusJumpURL(t *testing.T) {
+	assert.Equal(t, "https://example.com/x", normalizeOpusJumpURL("//example.com/x"))
+	assert.Equal(t, "https://example.com/x", normalizeOpusJumpURL(" https://example.com/x "))
+	assert.Equal(t, "", normalizeOpusJumpURL("   "))
+	assert.Equal(t, "https://b23.tv/abc", normalizeOpusJumpURL("https://b23.tv/abc"))
 }

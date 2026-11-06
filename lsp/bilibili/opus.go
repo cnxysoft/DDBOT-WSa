@@ -185,7 +185,8 @@ func peekOpusContent(idStr string) *opusContent {
 	return entry.content
 }
 
-func requestOpusContent(idStr string) (*opusContent, error) {	url := BPath(PathPolymerOpusDetail)
+func requestOpusContent(idStr string) (*opusContent, error) {
+	url := BPath(PathPolymerOpusDetail)
 	params := map[string]string{"id": idStr}
 	var resp bytes.Buffer
 	opts := []requests.Option{
@@ -288,6 +289,19 @@ func capOpusSegments(segments []DynamicInfoSegment, limit int) []DynamicInfoSegm
 	return out
 }
 
+// opusLinkNodeTypes 列出正文里要展开跳转链接的节点类型：视频、专栏、动态引用
+// 这些内容卡片，以及作者手动插入的网页链接（RICH_TEXT_NODE_TYPE_WEB）——这几类
+// 光看文字不知道该点哪里。话题(#tag#)、@用户、抽奖节点带的只是站内搜索/个人页
+// 跳转，一条动态几十个 tag 会把正文撑成一长串，所以只保留原文文字。
+var opusLinkNodeTypes = map[string]bool{
+	"RICH_TEXT_NODE_TYPE_AV":      true,
+	"RICH_TEXT_NODE_TYPE_BV":      true,
+	"RICH_TEXT_NODE_TYPE_CV":      true,
+	"RICH_TEXT_NODE_TYPE_OPUS":    true,
+	"RICH_TEXT_NODE_TYPE_ARTICLE": true,
+	"RICH_TEXT_NODE_TYPE_WEB":     true,
+}
+
 func renderOpusTextParagraph(b *strings.Builder, para *opusParaText) {
 	if para == nil {
 		return
@@ -310,15 +324,31 @@ func renderOpusTextParagraph(b *strings.Builder, para *opusParaText) {
 				text = node.Rich.OrigText
 			}
 			b.WriteString(text)
-			if node.Rich.JumpURL == "" || strings.Contains(text, node.Rich.JumpURL) {
+			if !opusLinkNodeTypes[node.Rich.Type] {
+				continue
+			}
+			link := normalizeOpusJumpURL(node.Rich.JumpURL)
+			if link == "" || strings.Contains(text, link) {
 				continue
 			}
 			if strings.TrimSpace(text) != "" {
 				b.WriteString(" ")
 			}
-			b.WriteString(node.Rich.JumpURL)
+			b.WriteString(link)
 		}
 	}
+}
+
+// normalizeOpusJumpURL 补全协议：网页链接节点常给 "//example.com/x" 这种协议相对的地址。
+func normalizeOpusJumpURL(raw string) string {
+	link := strings.TrimSpace(raw)
+	if link == "" {
+		return ""
+	}
+	if strings.HasPrefix(link, "//") {
+		return "https:" + link
+	}
+	return link
 }
 
 func renderOpusPicParagraph(b *strings.Builder, para *opusParaPic, content *opusContent) {
