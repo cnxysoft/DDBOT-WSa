@@ -2,13 +2,11 @@
 package twitter
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/rand"
 	"net/http/cookiejar"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -53,11 +51,7 @@ const (
 var (
 	logger          = templUtils.GetModuleLogger(ConcernName)
 	requestInterval = time.Second * 5 // 每个请求之间的间隔
-	buildProfileURL = func(screenName string) *url.URL {
-		Url, _ := url.Parse(BaseURL[rand.Intn(len(BaseURL))] + screenName)
-		return Url
-	}
-	Cookie *cookiejar.Jar
+	Cookie          *cookiejar.Jar
 )
 
 type StateManager struct {
@@ -110,7 +104,8 @@ func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
 
 type twitterConcern struct {
 	*StateManager
-	homeTimelineCursor string // 保存 HomeTimeline 翻页 cursor
+	homeTimelineCursor string        // 保存 HomeTimeline 翻页 cursor
+	mirrorNext         atomic.Uint64 // 上次成功的镜像下标
 
 	// manualRefreshCh 手动刷新触发通道，值为目标群代码（0 表示全部）
 	// 由 RefreshCommand 等外部命令触发，实现"强制拉取最新并重置计时"
@@ -148,47 +143,16 @@ func CSTTime(t time.Time) time.Time {
 }
 
 func (t *twitterConcern) FindUserInfo(id string, refresh bool) (*UserInfo, error) {
-retry:
-	var info *UserInfo
 	if refresh {
-		Url := buildProfileURL(id)
-		opts := SetRequestOptions()
-		var resp bytes.Buffer
-		var respHeaders requests.RespHeader
-		if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-			if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-				logger.WithField("Mirror", Url.Hostname()).Errorf("查找用户失败：%v", err)
-				return nil, err
-			}
-		}
-
-		// 解压缩HTML
-		body, err := localutils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-		if err != nil {
-			logger.WithField("Mirror", Url.Hostname()).
-				WithField("User", id).Errorf("解压缩HTML失败：%v", err)
-			return nil, err
-		}
-
-		// 解析用户信息
-		profile, _, challenge, err := ParseResp(body, Url.String())
+		profile, _, err := t.fetchMirror(id)
 		if err != nil {
 			return nil, err
-		} else if challenge != nil && challenge.Type == "anubis" {
-			FreshCookie(challenge.Anubis)
-			goto retry
-		} else if challenge != nil && challenge.Type == "poast" {
-			time.Sleep(time.Second * 3)
-			goto retry
-		} else if profile == nil {
-			return nil, errors.New("用户不存在或返回结果为空")
 		}
-		info = &UserInfo{
-			Id:   profile.ScreenName,
+		info := &UserInfo{
+			Id:   id,
 			Name: profile.Name,
 		}
-		err = t.AddUserInfo(info)
-		if err != nil {
+		if err := t.AddUserInfo(info); err != nil {
 			return nil, err
 		}
 	}
@@ -316,7 +280,7 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 		}
 		if len(tweets) < 1 {
 			log.Errorf("GetTweets not ok")
-			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户微博")
+			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户推文")
 		}
 		for _, tweet := range tweets {
 			_ = t.filterTweet(tweet)
@@ -818,8 +782,8 @@ func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
 // 连续失败达到阈值说明会话/网络级别故障，进入自动恢复模式并告警，
 // 避免像以前那样只刷日志静默停摆。
 var (
-	twitterFetchFailures       atomic.Int32
-	twitterFetchFailThreshold  int32 = 20
+	twitterFetchFailures      atomic.Int32
+	twitterFetchFailThreshold int32 = 20
 )
 
 func recordTwitterFetchResult(ok bool) {
@@ -873,44 +837,8 @@ func SetRequestOptions() []requests.Option {
 }
 
 func (t *twitterConcern) GetTweets(id string) ([]*Tweet, error) {
-retry:
-	Url := buildProfileURL(id)
-	opts := SetRequestOptions()
-	var resp bytes.Buffer
-	var respHeaders requests.RespHeader
-	if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-		if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-			logger.WithField("Mirror", Url.Hostname()).WithField("userId", id).Errorf("获取推文列表失败：%v", err)
-			return nil, err
-		}
-	}
-
-	// 解压缩HTML
-	body, err := localutils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解压缩HTML失败：%v", err)
-		return nil, err
-	}
-
-	// 解析解压后的数据
-	_, tweets, challenge, err := ParseResp(body, Url.String())
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解析HTML失败：%v", err)
-		return nil, err
-	} else if challenge != nil && challenge.Type == "anubis" {
-		FreshCookie(challenge.Anubis)
-		goto retry
-	} else if challenge != nil && challenge.Type == "poast" {
-		time.Sleep(time.Second * 3)
-		goto retry
-	} else if tweets == nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Warn("获取推文列表失败：无法解析数据或推文列表为空")
-		return nil, nil
-	}
-	return tweets, nil
+	_, tweets, err := t.fetchMirror(id)
+	return tweets, err
 }
 
 func (t *twitterConcern) Start() error {

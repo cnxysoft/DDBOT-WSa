@@ -21,7 +21,13 @@ const (
 )
 
 var (
-	BaseURL     = []string{"https://nitter.tiekoetter.com/", "https://nitter.catsarch.com/"}
+	BaseURL = []string{
+		"https://nitter.tiekoetter.com/",
+		"https://nitter.mizuki.st/",
+		"https://nitter.ip6arpa.uk/",
+		"https://nitter.jaydenha.uk/",
+		"https://nitter.click/",
+	}
 	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 	twitterAPI  *TwitterAPI
 	TwitterMode = ModeMirror
@@ -144,15 +150,12 @@ func IsMirrorMode() bool {
 }
 
 // resolveTwitterMode 解析twitter.mode配置。
-// 仅显式配置 mirror 时使用 mirror，缺省与未知值一律回退 api：
-// mirror 依赖的 nitter 镜像生态已基本死亡（多环境实测全灭：TCP 不通/Anubis 拦截），
-// 默认 mirror 等于默认一个静默死模式；默认 api 会引导用户配置 cookie，
-// 未配置时进入自动恢复模式并私聊告警，而不是静默停摆。
+// 默认使用免账号的镜像模式，仅显式配置 api 时启用账号 API。
 func resolveTwitterMode(mode string) string {
-	if mode == ModeMirror {
-		return ModeMirror
+	if mode == ModeAPI {
+		return ModeAPI
 	}
-	return ModeAPI
+	return ModeMirror
 }
 
 // verifyTwitterAPI 单次验证Cookie：拉取账号信息并刷新queryId缓存。

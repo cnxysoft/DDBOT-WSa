@@ -267,24 +267,23 @@ acfun:
   disableSub: false   # 禁止 A 站自动关注账号
 
 # Twitter 推送支持两种模式：
-# 1. api 模式（默认）：使用 Twitter API，需要配置 cookie 和 Bearer Token
-# 2. mirror 模式：使用 nitter 镜像获取推文，无需账号
+# 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
+# 2. api 模式：使用 Twitter API，需要配置 cookie 和 Bearer Token
 # 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
 
 # mirror 模式配置
-# 支持使用多个 nitter 镜像，默认使用官方镜像（第三方镜像可能有额外校验）
-# 使用 lightbrd 镜像请自行先访问 https://lightbrd.com/进行 cookies 的获取
-# 填入你访问网站时提交的 user_agent，可在浏览器中查看
-# 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
+# 镜像按列表顺序尝试，优先复用上次成功的实例；验证失败或网络错误时自动切换。
+# 支持现有 Anubis fast/slow、Poast 以及 nitter.click 的继续链接验证。
+# RSS 缺少视频播放地址等模板字段，暂不作为完整推送后端。
 twitter:
-  mode: api  # 模式选择：api（默认）或 mirror；mirror 依赖的 nitter 镜像生态已基本不可用
+  mode: mirror  # mirror（默认）无需账号；使用账号 Cookie 时可改为 api
   apiFetchMode: per_user       # API 查询方式：home_timeline 或 per_user
   baseUrl:     # mirror 模式下的 nitter 镜像列表
-    - "https://nitter.net/"
-    - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
-    - "https://nitter.poast.org/"
-    - "https://nitter.catsarch.com/"
+    - "https://nitter.mizuki.st/"
+    - "https://nitter.ip6arpa.uk/"
+    - "https://nitter.jaydenha.uk/"
+    - "https://nitter.click/"
   interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
   userAgent:      # 浏览器 User-Agent
   unsub: false    # 是否自动取消关注（当取消订阅时）

@@ -68,9 +68,10 @@ type Media struct {
 
 type AnubisChallenge struct {
 	Rules struct {
-		Algorithm  string `json:"algorithm"`
-		Difficulty int    `json:"difficulty"`
-		ReportAs   int    `json:"report_as"`
+		Algorithm  string   `json:"algorithm"`
+		Difficulty int      `json:"difficulty"`
+		ReportAs   int      `json:"report_as"`
+		Extensions []string `json:"extensions"`
 	} `json:"rules"`
 	Challenge any `json:"challenge"`
 }
@@ -139,7 +140,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			return nil, nil, nil, errors.New(message)
 		}
 		return nil, nil, nil, errors.New("Twitter has been Error.")
-	} else if strings.HasPrefix(title, "正在确认你是不是机器人！") {
+	} else if doc.Find("script#anubis_challenge").Length() > 0 {
 		challengeJson := doc.Find("script[id='anubis_challenge']").Text()
 		challenge := new(AnubisChallenge)
 		var challengeTarget string
@@ -147,6 +148,15 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		err = json.Unmarshal([]byte(challengeJson), &challenge)
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		if challenge.Rules.Algorithm != "fast" && challenge.Rules.Algorithm != "slow" {
+			return nil, nil, nil, fmt.Errorf("不支持的 Anubis 算法 %q", challenge.Rules.Algorithm)
+		}
+		if len(challenge.Rules.Extensions) > 0 {
+			return nil, nil, nil, fmt.Errorf("不支持的 Anubis 扩展 %v", challenge.Rules.Extensions)
+		}
+		if challenge.Rules.Difficulty < 1 || challenge.Rules.Difficulty > 6 {
+			return nil, nil, nil, fmt.Errorf("Anubis 难度超出支持范围: %d", challenge.Rules.Difficulty)
 		}
 		switch challenge.Challenge.(type) {
 		case string:
@@ -230,6 +240,9 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 	doc.Find("meta[property='og:title']").Each(func(i int, s *goquery.Selection) {
 		title := s.AttrOr("content", "")
 		subTitle := strings.LastIndex(title, " (")
+		if subTitle < 0 {
+			return
+		}
 		parts := []string{
 			title[:subTitle],
 			title[subTitle:],
@@ -241,6 +254,10 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			}
 		}
 	})
+	if profile.ScreenName == "" {
+		profile.ScreenName = strings.TrimPrefix(strings.TrimSpace(doc.Find(".profile-card-username").First().Text()), "@")
+		profile.Name = strings.TrimSpace(doc.Find(".profile-card-fullname").First().Text())
+	}
 
 	// 解析用户说明
 	doc.Find("meta[property='og:description']").Each(func(i int, s *goquery.Selection) {
@@ -289,6 +306,9 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 
 		// 解析基础信息
 		tweet.ID = ExtractTweetID(item.Find(".tweet-link").AttrOr("href", ""))
+		if tweet.ID == "" {
+			return
+		}
 		tweet.Content = strings.TrimSpace(item.Find(".tweet-content").Text())
 
 		// 解析时间
@@ -364,7 +384,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		if tweet.IsRetweet {
 			// 解析被转推用户基本信息
 			var reProfile UserProfile
-			item.Find(".fullname-and-username a").Each(func(i int, s *goquery.Selection) {
+			item.Find(".tweet-header .fullname-and-username a").First().Parent().Find("a").Each(func(i int, s *goquery.Selection) {
 				if i == 0 {
 					reProfile.Name = strings.TrimSpace(s.Text())
 				} else {
@@ -541,11 +561,20 @@ func checkNibbles(hash [32]byte, difficulty int) bool {
 }
 
 func FreshCookie(anubis *AnubisResult) {
+	if err := refreshAnubisCookie(anubis); err != nil {
+		logger.WithError(err).Error("刷新 Twitter 镜像 Anubis Cookie 失败")
+	}
+}
+
+func refreshAnubisCookie(anubis *AnubisResult) error {
+	if anubis == nil {
+		return errors.New("Anubis 挑战为空")
+	}
 	opts := []requests.Option{
 		requests.RequestAutoHostOption(),
 		requests.ProxyOption(proxy_pool.PreferOversea),
 		requests.AddUAOption(UserAgent),
-		requests.RetryOption(3),
+		requests.TimeoutOption(10 * time.Second),
 		requests.WithCookieJar(Cookie),
 		requests.HeaderOption("accept-language", "zh-CN,zh;q=0.9"),
 	}
@@ -556,10 +585,7 @@ func FreshCookie(anubis *AnubisResult) {
 	path := fmt.Sprintf("https://%s/.within.website/x/cmd/anubis/api/pass-challenge?"+
 		"%sresponse=%s&nonce=%d&redir=https://%s/&elapsedTime=%d", anubis.Host, addAnubisId, anubis.Hash, anubis.Nonce, url.QueryEscape(anubis.Host), anubis.Time)
 	var resp bytes.Buffer
-	err := requests.Get(path, nil, &resp, opts...)
-	if err != nil {
-		logger.Errorf("twitter: fresh %s cookie error %v", anubis.Host, err)
-	}
+	return requests.Get(path, nil, &resp, opts...)
 }
 
 // extractScripts collects inline <script> contents from a goquery document.

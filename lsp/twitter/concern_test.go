@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 )
 
@@ -89,13 +88,9 @@ func TestTwitterConcern_GetUserInfo(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			// 替换 buildProfileURL
-			originalBuildProfileURL := buildProfileURL
-			buildProfileURL = func(screenName string) *url.URL {
-				Url, _ := url.Parse(ts.URL)
-				return Url
-			}
-			defer func() { buildProfileURL = originalBuildProfileURL }()
+			originalBaseURL := BaseURL
+			BaseURL = []string{ts.URL}
+			defer func() { BaseURL = originalBaseURL }()
 
 			tc := &twitterConcern{
 				StateManager: &StateManager{
@@ -337,13 +332,9 @@ TVアニメは7月6日(日)放送開始です！
 	}))
 	defer ts.Close()
 
-	// 替换 buildProfileURL 函数（需要修改 production 代码以支持此操作）
-	originalBuildProfileURL := buildProfileURL
-	buildProfileURL = func(screenName string) *url.URL {
-		Url, _ := url.Parse(ts.URL)
-		return Url
-	}
-	defer func() { buildProfileURL = originalBuildProfileURL }()
+	originalBaseURL := BaseURL
+	BaseURL = []string{ts.URL}
+	defer func() { BaseURL = originalBaseURL }()
 
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
@@ -361,7 +352,7 @@ TVアニメは7月6日(日)放送開始です！
 	defer test.DestroyJar(Cookie)
 
 	// 执行测试
-	tweets, err := tc.GetTweets("testuser")
+	tweets, err := tc.GetTweets("YY749649883736")
 
 	assert.NoError(t, err)
 	assert.NotNil(t, tweets)

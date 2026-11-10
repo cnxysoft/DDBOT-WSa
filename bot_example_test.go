@@ -21,7 +21,7 @@ func TestExampleConfigValid(t *testing.T) {
 	// 整块退化成一段字符串，cast.ToStringMapString 拿到空 map 且不报错——静默失效。
 	assert.Equal(t, map[string]string{"签到": ""}, v.GetStringMapString("customCommandPrefix"))
 	assert.Equal(t, "systemProxy", v.GetString("proxy.type"))
-	assert.Equal(t, "api", v.GetString("twitter.mode"))
+	assert.Equal(t, "mirror", v.GetString("twitter.mode"))
 	assert.False(t, v.GetBool("twitter.translate.enabled"))
 	assert.False(t, v.GetBool("twitter.retweetFullText"))
 	assert.Equal(t, "168h", v.GetString("twitter.queryIdRefreshInterval"))

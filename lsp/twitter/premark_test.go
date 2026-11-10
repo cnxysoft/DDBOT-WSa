@@ -8,18 +8,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestResolveTwitterMode twitter.mode 缺省必须回退 api，仅显式 mirror 才用 mirror：
-// nitter 镜像生态已基本死亡，默认 mirror 等于默认一个静默死模式。
+// TestResolveTwitterMode twitter.mode 缺省使用免账号镜像，仅显式 api 才要求登录。
 func TestResolveTwitterMode(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{name: "未配置缺省回退api", in: "", want: ModeAPI},
+		{name: "未配置缺省使用mirror", in: "", want: ModeMirror},
 		{name: "显式api", in: "api", want: ModeAPI},
 		{name: "显式mirror", in: "mirror", want: ModeMirror},
-		{name: "未知值回退api", in: "whatever", want: ModeAPI},
+		{name: "未知值回退mirror", in: "whatever", want: ModeMirror},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
