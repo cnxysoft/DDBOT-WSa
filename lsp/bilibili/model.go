@@ -466,9 +466,15 @@ func NewCacheCard(card *Card) *CacheCard {
 	return cacheCard
 }
 
-func (c *CacheCard) resetRenderCache() {
-	c.renderOnce = sync.Once{}
+func (c *CacheCard) resetRenderCache() {	c.renderOnce = sync.Once{}
 	c.msgCache = nil
+}
+
+// DynamicInfoSegment 是动态正文里的一小段：要么是文本，要么是一张图片。
+// 模板按顺序输出，图片就能落在原文对应的位置上，而不是统一堆到正文末尾。
+type DynamicInfoSegment struct {
+	Text  string `json:"text,omitempty"`
+	Image string `json:"image,omitempty"`
 }
 
 type DynamicInfo struct {
@@ -503,6 +509,9 @@ type DynamicInfo struct {
 		ImageUrls   []string `json:"image_urls,omitempty"`
 		Bytes       []byte   `json:"-"`
 		Description string   `json:"description,omitempty"`
+		// Segments 是按原文顺序排列的图文段落，模板据此把图片插在原来的位置；
+		// 为空时模板退回 Description + ImageUrls 的老排版。
+		Segments []DynamicInfoSegment `json:"segments,omitempty"`
 	} `json:"image,omitempty"`
 
 	Text struct {
@@ -1018,6 +1027,11 @@ func (c *CacheCard) prepare() {
 			urls[index] = pic.GetImgSrc()
 		}
 		c.dynamic.Image.ImageUrls = urls
+		// opus 动态补全时已经把正文按段落拆好，这里直接取缓存（不再发请求），
+		// 让模板能把图片插回 [图N] 原来的位置。
+		if content := peekOpusContent(c.GetDesc().GetDynamicIdStr()); content != nil {
+			c.dynamic.Image.Segments = content.Segments
+		}
 		// 多图合一
 		if shouldCombineImage(cardImage.GetItem().GetPictures()) {
 			var urls = make([]string, len(cardImage.GetItem().GetPictures()))
