@@ -14,6 +14,7 @@
 			"options": {
 				"cwd": "${workspaceRoot}\\cmd",
 				"env": {
+					"CGO_ENABLED": "0",
 					"GOOS": "windows",
 					"GOARCH": "amd64"
 				}
@@ -40,6 +41,7 @@
 			"options": {
 				"cwd": "${workspaceRoot}\\cmd",
 				"env": {
+					"CGO_ENABLED": "0",
 					"GOOS": "windows",
 					"GOARCH": "arm64"
 				}
@@ -66,6 +68,7 @@
 			"options": {
 				"cwd": "${workspaceRoot}\\cmd",
 				"env": {
+					"CGO_ENABLED": "0",
 					"GOOS": "linux",
 					"GOARCH": "amd64"
 				}
@@ -92,6 +95,7 @@
 			"options": {
 				"cwd": "${workspaceRoot}\\cmd",
 				"env": {
+					"CGO_ENABLED": "0",
 					"GOOS": "linux",
 					"GOARCH": "arm64"
 				}
