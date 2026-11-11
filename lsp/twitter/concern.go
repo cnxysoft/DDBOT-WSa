@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -106,6 +107,8 @@ type twitterConcern struct {
 	*StateManager
 	homeTimelineCursor string        // 保存 HomeTimeline 翻页 cursor
 	mirrorNext         atomic.Uint64 // 上次成功的镜像下标
+	mirrorMu           sync.Mutex
+	mirrorFailures     map[string]mirrorFailure
 
 	// manualRefreshCh 手动刷新触发通道，值为目标群代码（0 表示全部）
 	// 由 RefreshCommand 等外部命令触发，实现"强制拉取最新并重置计时"

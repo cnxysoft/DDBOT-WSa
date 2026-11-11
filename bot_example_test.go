@@ -22,6 +22,7 @@ func TestExampleConfigValid(t *testing.T) {
 	assert.Equal(t, map[string]string{"签到": ""}, v.GetStringMapString("customCommandPrefix"))
 	assert.Equal(t, "systemProxy", v.GetString("proxy.type"))
 	assert.Equal(t, "mirror", v.GetString("twitter.mode"))
+	assert.Contains(t, v.GetStringSlice("twitter.baseUrl"), "https://nitter.catsarch.com/")
 	assert.False(t, v.GetBool("twitter.translate.enabled"))
 	assert.False(t, v.GetBool("twitter.retweetFullText"))
 	assert.Equal(t, "168h", v.GetString("twitter.queryIdRefreshInterval"))

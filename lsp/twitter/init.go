@@ -25,6 +25,7 @@ var (
 		"https://nitter.tiekoetter.com/",
 		"https://nitter.mizuki.st/",
 		"https://nitter.ip6arpa.uk/",
+		"https://nitter.catsarch.com/",
 		"https://nitter.jaydenha.uk/",
 		"https://nitter.click/",
 	}

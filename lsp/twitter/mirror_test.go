@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
-
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/stretchr/testify/require"
 )
@@ -119,8 +119,8 @@ func TestMirrorRejectsFalseSuccessPages(t *testing.T) {
 
 func TestMirrorRejectsUnsupportedAnubis(t *testing.T) {
 	for _, rules := range []string{
-		`{"algorithm":"hashx","difficulty":1,"extensions":["css-load"]}`,
-		`{"algorithm":"fast","difficulty":1,"extensions":["css-load"]}`,
+		`{"algorithm":"unknown","difficulty":1}`,
+		`{"algorithm":"fast","difficulty":1,"extensions":["unknown-extension"]}`,
 	} {
 		t.Run(rules, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +133,73 @@ func TestMirrorRejectsUnsupportedAnubis(t *testing.T) {
 			require.ErrorContains(t, err, "不支持的 Anubis")
 		})
 	}
+}
+
+func TestMirrorCooldownSkipsFailedInstancesAndRecovers(t *testing.T) {
+	var calls atomic.Int32
+	var recovered atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if recovered.Load() {
+			fmt.Fprint(w, mirrorTestHTML)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	useTestMirrors(t, server.URL)
+	tc := &twitterConcern{}
+	_, err := tc.GetTweets("testuser")
+	require.Error(t, err)
+	_, err = tc.GetTweets("testuser")
+	require.ErrorContains(t, err, "冷却中")
+	require.EqualValues(t, 1, calls.Load())
+	key := server.URL + "/"
+	tc.mirrorMu.Lock()
+	failure := tc.mirrorFailures[key]
+	failure.retryAfter = time.Now().Add(-time.Second)
+	tc.mirrorFailures[key] = failure
+	tc.mirrorMu.Unlock()
+	recovered.Store(true)
+	posts, err := tc.GetTweets("testuser")
+	require.NoError(t, err)
+	require.Len(t, posts, 1)
+	require.EqualValues(t, 2, calls.Load())
+	require.True(t, tc.mirrorRetryAfter(key).IsZero())
+}
+
+func TestMirrorCooldownBackoffIsCapped(t *testing.T) {
+	tc := &twitterConcern{}
+	now := time.Now()
+	for i := 0; i < 20; i++ {
+		tc.recordMirrorResult("https://example.org/", now, fmt.Errorf("network unavailable"))
+		delay := tc.mirrorRetryAfter("https://example.org/").Sub(now)
+		require.GreaterOrEqual(t, delay, mirrorCooldownMin)
+		require.LessOrEqual(t, delay, mirrorCooldownMax)
+	}
+	require.Equal(t, mirrorCooldownMax, tc.mirrorRetryAfter("https://example.org/").Sub(now))
+}
+
+func TestMissingAccountDoesNotCoolDownInstance(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/missing" {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `<title>Error</title><div class="error-panel">User not found</div>`)
+			return
+		}
+		fmt.Fprint(w, mirrorTestHTML)
+	}))
+	defer server.Close()
+	useTestMirrors(t, server.URL)
+	tc := &twitterConcern{}
+	_, err := tc.GetTweets("missing")
+	require.ErrorContains(t, err, "User not found")
+	posts, err := tc.GetTweets("testuser")
+	require.NoError(t, err)
+	require.Len(t, posts, 1)
+	require.EqualValues(t, 2, calls.Load())
 }
 
 func TestMirrorAnubisDetectionDoesNotDependOnLanguage(t *testing.T) {

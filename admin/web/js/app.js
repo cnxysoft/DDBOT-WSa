@@ -544,7 +544,7 @@ const CONFIG_SCHEMA = [
       { path: 'weibo.onlyOnlineNotify', label: '仅推送在线期间更新', type: 'bool', def: true },
     ]},
     { title: '运行模式', site: 'twitter', fields: [
-      { path: 'twitter.mode', label: '模式', type: 'select', options: ['mirror','api'], def: 'mirror', hint: 'mirror 默认无需账号，使用可配置的 Nitter 实例并在失败时自动切换；api 需账号 Cookie' },
+      { path: 'twitter.mode', label: '模式', type: 'select', options: ['mirror','api'], def: 'mirror', hint: 'mirror 默认无需账号，使用可配置的 Nitter 实例，失败时自动切换并暂时跳过故障实例；api 需账号 Cookie' },
       { path: 'twitter.interval', label: '查询间隔', type: 'text', def: '30s' },
       { path: 'twitter.unsub', label: '取消订阅时取关', type: 'bool', def: false },
       { path: 'twitter.retweetFullText', label: '转发显示全文', type: 'bool', def: false },

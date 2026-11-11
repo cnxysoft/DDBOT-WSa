@@ -273,7 +273,8 @@ acfun:
 
 # mirror 模式配置
 # 镜像按列表顺序尝试，优先复用上次成功的实例；验证失败或网络错误时自动切换。
-# 支持现有 Anubis fast/slow、Poast 以及 nitter.click 的继续链接验证。
+# 失败实例会冷却 30 秒至 15 分钟，成功后重置；支持 Anubis fast/slow/hashx、css-load、Poast 和 click 验证。
+# NitterTS 的视频/GIF/引用媒体也已兼容；xitter 与 NitterTS 可用性波动，暂不列入默认列表。
 # RSS 缺少视频播放地址等模板字段，暂不作为完整推送后端。
 twitter:
   mode: mirror  # mirror（默认）无需账号；使用账号 Cookie 时可改为 api
@@ -282,8 +283,10 @@ twitter:
     - "https://nitter.tiekoetter.com/"
     - "https://nitter.mizuki.st/"
     - "https://nitter.ip6arpa.uk/"
+    - "https://nitter.catsarch.com/"
     - "https://nitter.jaydenha.uk/"
     - "https://nitter.click/"
+  # 可选备用："https://nitter.xitter.cc/"、"https://nitterts.pages.dev/"；加入 baseUrl 列表即可尝试
   interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
   userAgent:      # 浏览器 User-Agent
   unsub: false    # 是否自动取消关注（当取消订阅时）
