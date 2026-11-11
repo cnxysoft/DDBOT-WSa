@@ -1,9 +1,13 @@
 package twitter
 
 import (
+	"encoding/base64"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"github.com/stretchr/testify/require"
 )
@@ -70,4 +74,59 @@ func TestMirrorTemplateFieldsForRetweetQuoteAndVideo(t *testing.T) {
 	preview, err = template.RenderPreview(content, map[string]interface{}{"dynamic": dynamic})
 	require.NoError(t, err)
 	require.Contains(t, preview, "订阅作者转发了原作者的推文")
+}
+
+func TestTwitterTemplateKeepsContentAfterVideo(t *testing.T) {
+	// Media is already downloaded at this boundary; only template ordering and
+	// message segmentation are under test here.
+	video := TwitterMedia{Type: "video", Base64: base64.StdEncoding.EncodeToString([]byte("video"))}
+	image := TwitterMedia{Type: "image", Base64: base64.StdEncoding.EncodeToString([]byte("image"))}
+	for _, tc := range []struct {
+		name       string
+		media      []TwitterMedia
+		quoteMedia []TwitterMedia
+		images     int
+		videos     int
+	}{
+		{name: "video followed by quote", media: []TwitterMedia{video}, quoteMedia: []TwitterMedia{image}, images: 1, videos: 1},
+		{name: "multiple videos", media: []TwitterMedia{video, video}, videos: 2},
+		{name: "image after video", media: []TwitterMedia{video, image}, images: 1, videos: 1},
+		{name: "quote image after quote video", quoteMedia: []TwitterMedia{video, image}, images: 1, videos: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dynamic := TwitterDynamic{
+				User: TwitterUser{Name: "作者", Id: "author"}, Content: "主文正文",
+				Date: "2026-11-11 12:00:00", Url: "https://x.com/author/status/2119846862286930036",
+				Media: tc.media, WithQuote: tc.quoteMedia != nil,
+				Quote: TwitterQuote{User: TwitterUser{Name: "引用作者", Id: "quoted"},
+					Content: "引用正文", Date: "2026-11-10 12:00:00", Media: tc.quoteMedia},
+			}
+			msg, err := template.LoadAndExec("notify.group.twitter.news.tmpl", map[string]interface{}{"dynamic": dynamic})
+			require.NoError(t, err)
+			var content strings.Builder
+			images, videos := 0, 0
+			for _, packet := range msg.ToMessage(mmsg.NewGroupTarget(123)) {
+				for _, element := range packet.Elements {
+					switch value := element.(type) {
+					case *adapter.TextSegment:
+						content.WriteString(value.Content)
+					case *adapter.ImageSegment:
+						images++
+					case *adapter.VideoSegment:
+						videos++
+						require.Len(t, packet.Elements, 1, "video must have its own message")
+					}
+				}
+			}
+			require.Equal(t, tc.images, images)
+			require.Equal(t, tc.videos, videos)
+			require.Contains(t, content.String(), "主文正文")
+			require.Equal(t, 1, strings.Count(content.String(), dynamic.Url), "tweet link should appear once")
+			if dynamic.WithQuote {
+				require.Contains(t, content.String(), "引用了引用作者")
+				require.Contains(t, content.String(), "引用正文")
+				require.Contains(t, content.String(), dynamic.Quote.Date)
+			}
+		})
+	}
 }

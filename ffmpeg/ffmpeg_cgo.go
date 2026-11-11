@@ -152,6 +152,9 @@ func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
 		if ret := C.avcodec_parameters_copy(outStream.codecpar, inStream.codecpar); ret < 0 {
 			return fmt.Errorf("copy codec parameters failed: %s", avErr2Str(ret))
 		}
+		// MPEG-TS codec tags from HLS are not valid MP4 sample entry tags.
+		// Let the output muxer choose a tag for the copied codec instead.
+		outStream.codecpar.codec_tag = 0
 		outStream.time_base = inStream.time_base
 	}
 

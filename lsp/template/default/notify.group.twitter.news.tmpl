@@ -1,4 +1,5 @@
 {{ $dynamic := .dynamic -}}
+{{ $urlAdded := false -}}
 
 {{ if $dynamic.ShouldCompact -}}
     {{ if .msg -}}
@@ -58,14 +59,17 @@
                 {{ pic $media.Url -}}
             {{ end -}}
         {{ else if or (eq $media.Type "video") (eq $media.Type "video(m3u8)") -}}
-            {{ printf "%s\n" $dynamic.Url -}}
+            {{ if not $urlAdded -}}
+                {{ printf "%s\n" $dynamic.Url -}}
+                {{ $urlAdded = true -}}
+            {{ end -}}
             {{ cut -}}
             {{ if ne $media.Base64 "" -}}
                 {{ video $media.Base64 -}}
             {{ else -}}
                 {{ video $media.Url -}}
             {{ end -}}
-            {{ fin -}}
+            {{ cut -}}
         {{ end -}}
     {{ end -}}
 
@@ -97,16 +101,21 @@
                     {{ pic $media.Url -}}
                 {{ end -}}
             {{ else if or (eq $media.Type "video") (eq $media.Type "video(m3u8)") -}}
-                {{ printf "%s\n" $dynamic.Url -}}
+                {{ if not $urlAdded -}}
+                    {{ printf "%s\n" $dynamic.Url -}}
+                    {{ $urlAdded = true -}}
+                {{ end -}}
                 {{ cut -}}
                 {{ if ne $media.Base64 "" -}}
                     {{ video $media.Base64 -}}
                 {{ else -}}
                     {{ video $media.Url -}}
                 {{ end -}}
-                {{ fin -}}
+                {{ cut -}}
             {{ end -}}
         {{ end -}}
     {{ end -}}
 {{ end -}}
-{{ printf "%s\n" $dynamic.Url -}}
+{{ if not $urlAdded -}}
+    {{ printf "%s\n" $dynamic.Url -}}
+{{ end -}}

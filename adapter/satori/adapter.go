@@ -274,11 +274,7 @@ func (a *SatoriAdapter) SendGroupMessage(groupID int64, message interface{}) (in
 	if msgID == "" {
 		return 0, nil
 	}
-	parsed := a.rememberID(msgID)
-	a.mu.Lock()
-	a.messageChannelMap[int32(parsed)] = channelID
-	a.mu.Unlock()
-	return int32(parsed), nil
+	return a.rememberSentMessage(msgID, channelID), nil
 }
 
 func (a *SatoriAdapter) SendPrivateMessage(userID int64, message interface{}) (int32, error) {
@@ -301,11 +297,7 @@ func (a *SatoriAdapter) SendPrivateMessage(userID int64, message interface{}) (i
 	if msgID == "" {
 		return 0, nil
 	}
-	parsed := a.rememberID(msgID)
-	a.mu.Lock()
-	a.messageChannelMap[int32(parsed)] = channelID
-	a.mu.Unlock()
-	return int32(parsed), nil
+	return a.rememberSentMessage(msgID, channelID), nil
 }
 
 func (a *SatoriAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
@@ -342,11 +334,7 @@ func (a *SatoriAdapter) SendGroupForwardMessage(groupCode int64, nodes []map[str
 	if msgID == "" {
 		return 0, "", nil
 	}
-	parsed := a.rememberID(msgID)
-	a.mu.Lock()
-	a.messageChannelMap[int32(parsed)] = channelID
-	a.mu.Unlock()
-	return int32(parsed), "", nil
+	return a.rememberSentMessage(msgID, channelID), "", nil
 }
 
 func (a *SatoriAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
@@ -384,11 +372,7 @@ func (a *SatoriAdapter) SendPrivateForwardMessage(userID int64, nodes []map[stri
 	if msgID == "" {
 		return 0, "", nil
 	}
-	parsed := a.rememberID(msgID)
-	a.mu.Lock()
-	a.messageChannelMap[int32(parsed)] = channelID
-	a.mu.Unlock()
-	return int32(parsed), "", nil
+	return a.rememberSentMessage(msgID, channelID), "", nil
 }
 
 // renderForwardContent renders forward message nodes to satori format
@@ -937,17 +921,17 @@ func (a *SatoriAdapter) GetMsg(msgId int32) (*adapter.GetMsgResult, error) {
 		if nick, ok := member["nick"].(string); ok {
 			result.Sender.Nickname = nick
 		}
-// member 也可能包含 user 信息
-			if memberUser, ok := member["user"].(map[string]interface{}); ok {
-				if result.Sender.UserID == 0 {
-					if userID, ok := memberUser["id"].(string); ok {
-						if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
-							result.Sender.UserID = parsed
-							result.Sender.Uin = parsed
-							result.UserID = parsed
-						}
+		// member 也可能包含 user 信息
+		if memberUser, ok := member["user"].(map[string]interface{}); ok {
+			if result.Sender.UserID == 0 {
+				if userID, ok := memberUser["id"].(string); ok {
+					if parsed, err := strconv.ParseInt(userID, 10, 64); err == nil {
+						result.Sender.UserID = parsed
+						result.Sender.Uin = parsed
+						result.UserID = parsed
 					}
 				}
+			}
 			if result.Sender.Nickname == "" {
 				if nickname, ok := memberUser["name"].(string); ok {
 					result.Sender.Nickname = nickname
@@ -1477,6 +1461,17 @@ func (a *SatoriAdapter) rememberID(raw string) int64 {
 	a.idMap[hashed] = raw
 	a.mu.Unlock()
 	return hashed
+}
+
+// Satori message IDs can be nonnumeric or wider than the internal int32 ID.
+// Keep the original ID for lookups and replies even without a message event.
+func (a *SatoriAdapter) rememberSentMessage(rawID, channelID string) int32 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := int32(a.rememberIDLocked(rawID))
+	a.messageChannelMap[id] = channelID
+	a.msgIDMap[id] = rawID
+	return id
 }
 
 // rememberIDLocked 在持有 mu.Lock() 的情况下调用，避免重入死锁
