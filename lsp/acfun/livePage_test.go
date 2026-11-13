@@ -1,13 +1,16 @@
 package acfun
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLivePage(t *testing.T) {
+	useHTTPFixture(t, LiveUrl(19372766), livePageFixture)
 	result, err := LivePage(19372766)
-	assert.Nil(t, err)
-	assert.NotEmpty(t, result.GetLiveInfo().GetUser().GetName())
-	assert.NotEmpty(t, result.GetLiveInfo().GetUser().GetHeadUrl())
+	require.NoError(t, err)
+	assert.Equal(t, "admin", result.GetLiveInfo().GetUser().GetName())
+	assert.Equal(t, "https://example.invalid/avatar.jpg", result.GetLiveInfo().GetUser().GetHeadUrl())
 }
