@@ -54,6 +54,18 @@ jobs:
       - name: go vet
         run: |
           go vet ./...
+      - name: Install FFmpeg for CLI pipeline tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          command -v ffmpeg
+      - name: Run Twitter, template and FFmpeg tests with CLI backend
+        env:
+          CGO_ENABLED: 0
+          DDBOT_REQUIRE_MEDIA_TESTS: 1
+        run: |
+          go test -v ./lsp/twitter ./lsp/template ./ffmpeg
+          go vet ./lsp/twitter ./lsp/template ./ffmpeg
       - name: Run adapter module tests and vet
         working-directory: adapter
         run: |

@@ -59,6 +59,9 @@ GIF、视频后接引用、引用视频、多个视频和真实转推视频。�
 实例切换成功会记录信息日志。打开 debug 日志可查看每次请求、解析耗时和冷却跳过情况。
 媒体日志另含 `media_host`、`media_type`、`via_proxy`、耗时及成功文件大小，便于区分
 镜像抓取失败和媒体下载转换失败。
+同一次媒体下载最终失败只记录一条 Twitter 警告，图片尺寸回退成功时只记录 debug；
+正文和引用媒体均保留 URL 回退。普通下载、读取和临时文件清理错误不附加堆栈。
+FFmpeg 自身的诊断仍由 `ffmpeg.logLevel` 控制，并以 `module=ffmpeg` 纳入 DD 日志。
 
 CLI 与内置 FFmpeg 均设置 30 秒网络读写超时，直连同样生效；CLI 转换限时 3 分钟，
 内置 FFmpeg 的探测及输入读取通过中断回调限时 3 分钟。
@@ -69,3 +72,20 @@ HLS 的首次打开仍可能访问其他码率的初始化分片；选流不保�
 2026-11-13 在系统 FFmpeg CLI 与 `v7.1.5-1` 精简 CGO 后端下复验，Twitter、模板和 FFmpeg
 包测试及 vet 均通过。上述 10 类本地完整推送场景在两种后端下全部通过，
 包括首次订阅、重复轮询及镜像切换后的去重；本轮消息由本地适配器截获。
+
+## 持续回归
+
+`TestMirrorNotificationPipeline` 已固化到包测试，使用仓库中的合成媒体和本地 HTTP 镜像，
+验证解析、订阅、媒体下载转换、默认模板和适配器消息包。覆盖纯文本、图片、MP4、HLS、GIF、
+转发、引用图片、视频后接引用、引用视频和多视频，检查换行、作者、日期、唯一原文链接、
+GIF 动画及视频独立分段，并验证镜像切换不重复推送且仍能接收新推文。
+
+```sh
+# CLI：需要 PATH 中的 ffmpeg；设置此变量可让缺失依赖直接失败，CI 使用同样设置。
+CGO_ENABLED=0 DDBOT_REQUIRE_MEDIA_TESTS=1 go test ./lsp/twitter ./lsp/template ./ffmpeg
+# 精简 CGO：按 ffmpeg/README.md 安装匹配的静态库和 C 工具链，无需外部 ffmpeg/ffprobe。
+CGO_ENABLED=1 go test ./lsp/twitter ./lsp/template ./ffmpeg
+```
+
+CI 对两种后端均运行这些场景。测试不连接公共镜像或真实 IM 服务；公共实例的实际可用性
+仍以运行日志和按需联网复测为准。
