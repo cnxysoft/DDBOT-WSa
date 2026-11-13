@@ -117,11 +117,13 @@ jobs:
           - go: '1.26.2'
             goos: darwin
             goarch: amd64
-            runner: macos-latest
+            # Standard Intel runners can build both Darwin architectures with clang.
+            # Avoid the ARM hosted-runner capacity limit behind macos-latest.
+            runner: macos-26-intel
           - go: '1.26.2'
             goos: darwin
             goarch: arm64
-            runner: macos-latest
+            runner: macos-26-intel
       fail-fast: true
     runs-on: ${{ matrix.runner }}
 
@@ -313,6 +315,16 @@ jobs:
                   assert required and max(required) <= (2, 35), versions
                   print(f"PASS {binary}: highest GLIBC symbol " + ".".join(map(str, max(required))))
           PY
+
+      - name: Check macOS target architectures
+        if: matrix.goos == 'darwin'
+        run: |
+          case "${{ matrix.goarch }}" in
+            amd64) DARWIN_ARCH=x86_64 ;;
+            arm64) DARWIN_ARCH=arm64 ;;
+          esac
+          lipo -verify_arch "$DARWIN_ARCH" DDBOT-cli
+          lipo -verify_arch "$DARWIN_ARCH" DDBOT-cgo
 
       - name: List build artifacts
         run: ls -la
