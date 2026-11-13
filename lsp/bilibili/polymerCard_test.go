@@ -26,7 +26,7 @@ func TestPolymerItemToCard_Opus(t *testing.T) {
 
 	assert.Equal(t, DynamicDescType_WithImage, card.GetDesc().GetType())
 	assert.Equal(t, "1247415702868983809", card.GetDesc().GetDynamicIdStr())
-	assert.EqualValues(t, 1247415702868983809, card.GetDesc().GetDynamicId())
+	assert.EqualValues(t, int64(1247415702868983809), card.GetDesc().GetDynamicId())
 	assert.EqualValues(t, 174501086, card.GetDesc().GetUid())
 	assert.EqualValues(t, 1789275001, card.GetDesc().GetTimestamp())
 	assert.Equal(t, "哔哩哔哩会员购", card.GetDesc().GetUserProfile().GetInfo().GetUname())

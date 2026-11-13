@@ -1,33 +1,34 @@
-#include "_cgo_export.h"   // 由 cgo 生成，包含 go 导出函数声明
+#include "_cgo_export.h"
 
 #include <libavutil/log.h>
 #include <stdarg.h>
-#include <string.h>
+#include <stdatomic.h>
+#include <stdio.h>
 
-// helper
-static const char* lvl_tag(int level) {
-    if (level >= AV_LOG_PANIC)   return "PANIC";
-    if (level >= AV_LOG_FATAL)   return "FATAL";
-    if (level >= AV_LOG_ERROR)   return "ERROR";
-    if (level >= AV_LOG_WARNING) return "WARN";
-    if (level >= AV_LOG_INFO)    return "INFO";
-    if (level >= AV_LOG_VERBOSE) return "VERB";
-    if (level >= AV_LOG_DEBUG)   return "DEBUG";
-    return "TRACE";
-}
+static _Atomic int bridge_log_level = AV_LOG_WARNING;
 
-static void bridge_log_callback(void* ptr, int level, const char* fmt, va_list vl) {
-    char buf[1024];
+static void bridge_log_callback(void *ptr, int level, const char *fmt, va_list vl) {
+    char buf[4096];
+    const char *component = "";
+    level &= 0xff;
+    // Custom callbacks must enforce filtering themselves. av_log() does not
+    // apply av_log_get_level() before invoking a registered callback.
+    if (level > atomic_load_explicit(&bridge_log_level, memory_order_relaxed))
+        return;
+    if (ptr) {
+        const AVClass *avc = *(const AVClass **)ptr;
+        if (avc && avc->item_name)
+            component = avc->item_name(ptr);
+    }
     vsnprintf(buf, sizeof(buf), fmt, vl);
-    size_t n = strlen(buf);
-    if (n && buf[n-1] == '\n') buf[n-1] = '\0';
-    // _cgo_export.h declares: void goLogCallbackTagged(char* tag, char* msg);
-    goLogCallbackTagged((char*)lvl_tag(level), buf);
+    goLogCallback(level, (char *)(component ? component : ""), buf);
 }
 
-// optional: a C function to install the callback so Go can call it
-void enable_ffmpeg_log_callback_with_level(int level) {
+void install_ffmpeg_log_callback(void) {
     av_log_set_callback(bridge_log_callback);
-    av_log_set_flags(AV_LOG_SKIP_REPEATED);
+}
+
+void set_ffmpeg_log_level(int level) {
+    atomic_store_explicit(&bridge_log_level, level, memory_order_relaxed);
     av_log_set_level(level);
 }

@@ -34,4 +34,5 @@ func TestExampleConfigValid(t *testing.T) {
 	assert.Equal(t, "onebot-v11", v.GetString("adapter.mode"))
 	assert.Equal(t, "ws-server", v.GetString("websocket.mode"))
 	assert.Equal(t, "info", v.GetString("logLevel"))
+	assert.Equal(t, "warning", v.GetString("ffmpeg.logLevel"))
 }

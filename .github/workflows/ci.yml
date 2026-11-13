@@ -7,31 +7,41 @@ on:
     branches:
       - '**'
 
+env:
+  FFMPEG_STATIC_RELEASE: v7.1.5-1
+  LLVM_MINGW_ASSET: llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz
+  LLVM_MINGW_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
+
 jobs:
   # run unittest
   test:
     runs-on: ubuntu-latest
-    env:
-      RUNNER_TOOL_CACHE: /toolcache
     strategy:
       fail-fast: false
       matrix:
         go: [ '1.26.2' ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup FFMPEG static library for tests
         run: |
           mkdir -p ffmpeg/ffmpeg-static
           cd ffmpeg/ffmpeg-static
           PLATFORM_FILE="ffmpeg-linux-amd64.zip"
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           unzip -o "$PLATFORM_FILE" -d .
           ls -la
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          cache-dependency-path: |
+            **/go.sum
+            .github/ffmpeg-static-*.sha256
       - name: Run tests with cgo
         env:
           CGO_ENABLED: 1
@@ -59,8 +69,6 @@ jobs:
   build:
     needs: test
     name: Build binary CI
-    env:
-      RUNNER_TOOL_CACHE: /toolcache
     strategy:
       matrix:
         include:
@@ -104,7 +112,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup FFMPEG static library for current platform
         run: |
@@ -116,7 +124,11 @@ jobs:
           export PLATFORM_FILE="ffmpeg-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           
           echo "Downloading $PLATFORM_FILE for ${{ matrix.goos }}/${{ matrix.goarch }}..."
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           
           echo "Verifying $PLATFORM_FILE..."
           if [ -f "$PLATFORM_FILE" ]; then
@@ -142,11 +154,14 @@ jobs:
       - name: Setup LLVM-mingw toolchain
         if: matrix.goos == 'windows'
         run: |
-          mkdir -p /tmp/llvm-mingw
-          cd /tmp/llvm-mingw
-          curl -L -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20240820/llvm-mingw-20240820-ucrt-ubuntu-20.04-x86_64.tar.xz"
-          tar -xf llvm-mingw.tar.xz
-          export LLVM_MINGW_PATH=$(find /tmp/llvm-mingw -type d -name "llvm-mingw-*" -maxdepth 1)
+          set -euo pipefail
+          TOOLCHAIN_DIR="${RUNNER_TEMP}/ddbot-llvm-mingw"
+          mkdir -p "$TOOLCHAIN_DIR"
+          cd "$TOOLCHAIN_DIR"
+          curl --fail --location --retry 3 -o "$LLVM_MINGW_ASSET" "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/$LLVM_MINGW_ASSET"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$LLVM_MINGW_ASSET" | shasum -a 256 -c -
+          tar -xf "$LLVM_MINGW_ASSET"
+          export LLVM_MINGW_PATH="$TOOLCHAIN_DIR/${LLVM_MINGW_ASSET%.tar.xz}"
           echo "$LLVM_MINGW_PATH/bin" >> $GITHUB_PATH
           echo "LLVM_MINGW_PATH=$LLVM_MINGW_PATH" >> $GITHUB_ENV
 
@@ -167,10 +182,12 @@ jobs:
           esac
 
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache-dependency-path: "**/*.sum"
+          cache-dependency-path: |
+            **/*.sum
+            .github/ffmpeg-static-*.sha256
       
       - name: Set env
         run: |
@@ -179,6 +196,7 @@ jobs:
       
       - name: Build CLI version (no cgo)
         env:
+          CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
@@ -201,9 +219,9 @@ jobs:
           # set CC per target - use exact cross-compiler executable names (no extra flags in CC)
           if [ "$GOOS" = "windows" ]; then
             case "$GOARCH" in
-              amd64)  export CC="x86_64-w64-mingw32-gcc"; export CXX="x86_64-w64-mingw32-g++" ;;
-              386)    export CC="i686-w64-mingw32-gcc"; export CXX="i686-w64-mingw32-g++" ;;
-              arm64)  export CC="aarch64-w64-mingw32-gcc"; export CXX="aarch64-w64-mingw32-g++" ;;
+              amd64)  export CC="x86_64-w64-mingw32-clang"; export CXX="x86_64-w64-mingw32-clang++" ;;
+              386)    export CC="i686-w64-mingw32-clang"; export CXX="i686-w64-mingw32-clang++" ;;
+              arm64)  export CC="aarch64-w64-mingw32-clang"; export CXX="aarch64-w64-mingw32-clang++" ;;
               arm)    # likely unsupported in many toolchains: fallback or error out
                     echo "Warning: windows/arm cross-compiler may not be available; ensure toolchain exists"
                     export CC="${CC:-armv7-w64-mingw32-gcc}"

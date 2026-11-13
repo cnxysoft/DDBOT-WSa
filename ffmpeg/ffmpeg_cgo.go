@@ -6,9 +6,10 @@ package ffmpeg
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"sync"
+	"time"
 	"unsafe"
-
-	templUtils "github.com/Sora233/MiraiGo-Template/utils"
 )
 
 /*
@@ -16,16 +17,16 @@ import (
 #cgo LDFLAGS: -L${SRCDIR}/ffmpeg-static/lib
 
 // macOS
-#cgo darwin LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
+#cgo darwin LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil
 #cgo darwin LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 
 // Linux
-#cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
+#cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil
 #cgo linux LDFLAGS: -lssl -lcrypto -lpthread -ldl -lm
 
 // Windows (static)
-#cgo windows LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil -lx264
+#cgo windows LDFLAGS: -static -lavfilter -lswscale -lavformat -lavcodec -lavutil
 #cgo windows LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo windows LDFLAGS: -lws2_32 -lwinmm -lole32 -lshlwapi -lbcrypt -lcrypt32 -lkernel32 -luser32 -ladvapi32 -lmsvcrt -lucrtbase
 
@@ -42,12 +43,23 @@ import (
 #include <libavutil/imgutils.h>
 #include <libavutil/frame.h>
 #include <libavutil/log.h>
+#include <libavutil/time.h>
 #include <stdarg.h>
 #include <string.h>
 
 // helpers
 static inline int averror_eagain() { return AVERROR(EAGAIN); }
 static inline int averror_eof()    { return AVERROR_EOF; }
+
+static int input_deadline_exceeded(void *opaque) {
+    return av_gettime_relative() >= *(int64_t *)opaque;
+}
+
+static void set_input_deadline(AVFormatContext *ctx, int64_t *deadline, int64_t timeout) {
+    *deadline = av_gettime_relative() + timeout;
+    ctx->interrupt_callback.callback = input_deadline_exceeded;
+    ctx->interrupt_callback.opaque = deadline;
+}
 
 static int make_buffer_src(AVFilterGraph *g, AVFilterContext **src,
                            const char *name, int w, int h, enum AVPixelFormat pix,
@@ -68,55 +80,67 @@ static int make_buffer_sink(AVFilterGraph *g, AVFilterContext **sink,
     return avfilter_graph_create_filter(sink, buffersink, name, NULL, NULL, g);
 }
 
-// 声明由 bridge.c 提供的 helper 函数，供 Go 侧通过 C.enable_ffmpeg_log_callback_with_level 调用
-void enable_ffmpeg_log_callback_with_level(int level);
+void install_ffmpeg_log_callback(void);
+void set_ffmpeg_log_level(int level);
 */
 import "C"
 
-var logger = templUtils.GetModuleLogger("ffmpeg")
+var nativeLoggingOnce sync.Once
 
-//export goLogCallbackTagged
-func goLogCallbackTagged(tag, msg *C.char) {
-	logger.Debugf("[FF %s] %s\n", C.GoString(tag), C.GoString(msg))
+//export goLogCallback
+func goLogCallback(level C.int, component, msg *C.char) {
+	logFFmpeg(int(level), "cgo", C.GoString(component), C.GoString(msg))
 }
 
-// wrapper to call the C helper that sets the callback
-func EnableFFmpegLog(level int) {
-	C.enable_ffmpeg_log_callback_with_level(C.int(level))
+func configureNativeLogging(level int) {
+	nativeLoggingOnce.Do(func() { C.install_ffmpeg_log_callback() })
+	C.set_ffmpeg_log_level(C.int(level))
 }
 
 func ConvMediaWithProxy(url, outputPath, proxyURL, mediaType string) error {
-	// Use INFO in normal runs; switch to DEBUG if investigating
-	EnableFFmpegLog(C.AV_LOG_INFO)
+	return convMediaWithTimeout(url, outputPath, proxyURL, mediaType, mediaConversionTimeout)
+}
 
+func convMediaWithTimeout(url, outputPath, proxyURL, mediaType string, timeout time.Duration) error {
 	cUrl := C.CString(url)
 	defer C.free(unsafe.Pointer(cUrl))
 	cOut := C.CString(outputPath)
 	defer C.free(unsafe.Pointer(cOut))
 
-	var inFmt *C.AVFormatContext
+	inFmt := C.avformat_alloc_context()
+	if inFmt == nil {
+		return fmt.Errorf("alloc input context failed")
+	}
+	deadline := (*C.int64_t)(C.av_malloc(C.size_t(unsafe.Sizeof(C.int64_t(0)))))
+	if deadline == nil {
+		C.avformat_close_input(&inFmt)
+		return fmt.Errorf("alloc input deadline failed")
+	}
+	defer func() {
+		C.avformat_close_input(&inFmt)
+		C.av_free(unsafe.Pointer(deadline))
+	}()
+	C.set_input_deadline(inFmt, deadline, C.int64_t(timeout.Microseconds()))
 	var opts *C.AVDictionary
+	defer C.av_dict_free(&opts)
+	setOption := func(key, value string) {
+		cKey, cValue := C.CString(key), C.CString(value)
+		defer C.free(unsafe.Pointer(cKey))
+		defer C.free(unsafe.Pointer(cValue))
+		C.av_dict_set(&opts, cKey, cValue, 0)
+	}
 
-	// Proxy + timeout
+	// Set timeouts for direct requests as well as proxied requests. The interrupt
+	// callback also bounds HLS probing and the complete multi-segment download.
+	setOption("rw_timeout", strconv.FormatInt(min(timeout, inputReadTimeout).Microseconds(), 10))
 	if proxyURL != "" {
-		cProxy := C.CString(proxyURL)
-		defer C.free(unsafe.Pointer(cProxy))
-		// av_dict_set 默认会复制 key/value，此处临时 CString 用完即释放，避免泄漏
-		cKey1 := C.CString("http_proxy")
-		defer C.free(unsafe.Pointer(cKey1))
-		cKey2 := C.CString("rw_timeout")
-		defer C.free(unsafe.Pointer(cKey2))
-		cVal2 := C.CString("30000000") // 30s
-		defer C.free(unsafe.Pointer(cVal2))
-		C.av_dict_set(&opts, cKey1, cProxy, 0)
-		C.av_dict_set(&opts, cKey2, cVal2, 0)
+		setOption("http_proxy", proxyURL)
 	}
 
 	// Open input
 	if ret := C.avformat_open_input(&inFmt, cUrl, nil, &opts); ret < 0 {
 		return fmt.Errorf("open input failed: %s", avErr2Str(ret))
 	}
-	defer C.avformat_close_input(&inFmt)
 
 	if ret := C.avformat_find_stream_info(inFmt, nil); ret < 0 {
 		return fmt.Errorf("find stream info failed: %s", avErr2Str(ret))
@@ -132,7 +156,7 @@ func ConvMediaWithProxy(url, outputPath, proxyURL, mediaType string) error {
 	}
 }
 
-func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
+func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) (resultErr error) {
 	var outFmt *C.AVFormatContext
 	format := C.CString("mp4")
 	defer C.free(unsafe.Pointer(format))
@@ -142,9 +166,21 @@ func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
 	}
 	defer C.avformat_free_context(outFmt)
 
-	// Copy streams with time_base preservation
+	// Match the CLI's default stream selection: one video and its related audio,
+	// rather than every rendition exposed by an HLS master playlist.
+	videoIndex := C.av_find_best_stream(inFmt, C.AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
+	audioIndex := C.av_find_best_stream(inFmt, C.AVMEDIA_TYPE_AUDIO, -1, videoIndex, nil, 0)
+	if videoIndex < 0 && audioIndex < 0 {
+		return fmt.Errorf("no audio or video stream found")
+	}
+	streamMap := make([]int, int(inFmt.nb_streams))
 	for i := 0; i < int(inFmt.nb_streams); i++ {
 		inStream := getStream(inFmt, i)
+		streamMap[i] = -1
+		if C.int(i) != videoIndex && C.int(i) != audioIndex {
+			inStream.discard = C.AVDISCARD_ALL
+			continue
+		}
 		outStream := C.avformat_new_stream(outFmt, nil)
 		if outStream == nil {
 			return fmt.Errorf("failed to create new stream")
@@ -156,13 +192,19 @@ func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
 		// Let the output muxer choose a tag for the copied codec instead.
 		outStream.codecpar.codec_tag = 0
 		outStream.time_base = inStream.time_base
+		streamMap[i] = int(outStream.index)
 	}
 
 	if (outFmt.oformat.flags & C.AVFMT_NOFILE) == 0 {
 		if ret := C.avio_open(&outFmt.pb, cOut, C.AVIO_FLAG_WRITE); ret < 0 {
 			return fmt.Errorf("open output file failed: %s", avErr2Str(ret))
 		}
-		defer C.avio_closep(&outFmt.pb)
+		defer func() {
+			C.avio_closep(&outFmt.pb)
+			if resultErr != nil {
+				os.Remove(C.GoString(cOut))
+			}
+		}()
 	}
 
 	if ret := C.avformat_write_header(outFmt, nil); ret < 0 {
@@ -170,20 +212,25 @@ func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
 	}
 
 	var pkt C.AVPacket
-	for C.av_read_frame(inFmt, &pkt) >= 0 {
+	for {
+		ret := C.av_read_frame(inFmt, &pkt)
+		if ret == C.averror_eof() {
+			break
+		}
+		if ret < 0 {
+			return fmt.Errorf("read input failed: %s", avErr2Str(ret))
+		}
 		inStream := getStream(inFmt, int(pkt.stream_index))
-		outStream := getStream(outFmt, int(pkt.stream_index))
+		mapped := streamMap[int(pkt.stream_index)]
+		if mapped < 0 {
+			C.av_packet_unref(&pkt)
+			continue
+		}
+		outStream := getStream(outFmt, mapped)
 
-		if pkt.pts != C.int64_t(-1) {
-			pkt.pts = C.av_rescale_q(pkt.pts, inStream.time_base, outStream.time_base)
-		}
-		if pkt.dts != C.int64_t(-1) {
-			pkt.dts = C.av_rescale_q(pkt.dts, inStream.time_base, outStream.time_base)
-		}
-		if pkt.duration > 0 {
-			pkt.duration = C.av_rescale_q(pkt.duration, inStream.time_base, outStream.time_base)
-		}
-		pkt.stream_index = C.int(pkt.stream_index)
+		C.av_packet_rescale_ts(&pkt, inStream.time_base, outStream.time_base)
+		pkt.stream_index = C.int(mapped)
+		pkt.pos = -1
 
 		if ret := C.av_interleaved_write_frame(outFmt, &pkt); ret < 0 {
 			C.av_packet_unref(&pkt)
@@ -192,7 +239,9 @@ func copyToMP4(inFmt *C.AVFormatContext, cOut *C.char) error {
 		C.av_packet_unref(&pkt)
 	}
 
-	C.av_write_trailer(outFmt)
+	if ret := C.av_write_trailer(outFmt); ret < 0 {
+		return fmt.Errorf("write trailer failed: %s", avErr2Str(ret))
+	}
 
 	fi, err := os.Stat(C.GoString(cOut))
 	if err != nil {
@@ -224,7 +273,7 @@ type RGBFrame struct {
 }
 
 func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
-	logger.Debug("[GIF] start transcode")
+	logFFmpeg(avLogVerbose, "cgo", "gif", "start transcode")
 
 	// Find video stream
 	var videoStream *C.AVStream
@@ -298,22 +347,38 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 	if ret := C.avformat_write_header(outFmt, nil); ret < 0 {
 		return fmt.Errorf("write header failed: %s", avErr2Str(ret))
 	}
-	logger.Debug("[GIF] header written OK")
+	logFFmpeg(avLogVerbose, "cgo", "gif", "header written")
 
 	// Decoder
 	dec := C.avcodec_find_decoder(videoStream.codecpar.codec_id)
+	if dec == nil {
+		return fmt.Errorf("video decoder not found")
+	}
 	decCtx := C.avcodec_alloc_context3(dec)
-	C.avcodec_parameters_to_context(decCtx, videoStream.codecpar)
-	C.avcodec_open2(decCtx, dec, nil)
+	if decCtx == nil {
+		return fmt.Errorf("alloc decoder context failed")
+	}
+	defer C.avcodec_free_context(&decCtx)
+	if ret := C.avcodec_parameters_to_context(decCtx, videoStream.codecpar); ret < 0 {
+		return fmt.Errorf("copy decoder parameters failed: %s", avErr2Str(ret))
+	}
+	if ret := C.avcodec_open2(decCtx, dec, nil); ret < 0 {
+		return fmt.Errorf("open decoder failed: %s", avErr2Str(ret))
+	}
 
 	frame := C.av_frame_alloc()
 	defer C.av_frame_free(&frame)
 
 	var swsYuv2Rgb *C.struct_SwsContext
 	var cachedFrames []RGBFrame
+	defer func() {
+		for _, cf := range cachedFrames {
+			C.av_frame_free(&cf.frame)
+		}
+	}()
 
 	// Build single-pass filter graph
-	logger.Debug("[GIF] build single-pass graph")
+	logFFmpeg(avLogVerbose, "cgo", "gif", "build single-pass graph")
 	graph := C.avfilter_graph_alloc()
 	if graph == nil {
 		return fmt.Errorf("avfilter_graph_alloc failed")
@@ -371,11 +436,18 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 	}
 	C.avfilter_inout_free(&ins)
 	C.avfilter_inout_free(&outs)
-	logger.Debug("[GIF] graph ready")
+	logFFmpeg(avLogVerbose, "cgo", "gif", "graph ready")
 
 	// Decode → RGB → push
 	var pkt C.AVPacket
-	for C.av_read_frame(inFmt, &pkt) >= 0 {
+	for {
+		ret := C.av_read_frame(inFmt, &pkt)
+		if ret == C.averror_eof() {
+			break
+		}
+		if ret < 0 {
+			return fmt.Errorf("read input failed: %s", avErr2Str(ret))
+		}
 		if pkt.stream_index != streamIndex {
 			C.av_packet_unref(&pkt)
 			continue
@@ -499,7 +571,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		C.av_frame_unref(frame)
 	}
 	C.av_buffersrc_add_frame_flags(srcCtx, nil, 0)
-	logger.Debug("[GIF] source flushed; drain and encode")
+	logFFmpeg(avLogVerbose, "cgo", "gif", "source flushed; drain and encode")
 
 	// Drain sink and encode
 	var passFrames, passPkts int
@@ -524,7 +596,7 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		out.pict_type = C.AV_PICTURE_TYPE_NONE
 
 		passFrames++
-		logger.Debugf("[GIF] got PAL8 frame pts = %d", int64(out.pts))
+		logFFmpeg(avLogTrace, "cgo", "gif", fmt.Sprintf("PAL8 frame pts=%d", int64(out.pts)))
 
 		if er := C.avcodec_send_frame(codecCtx, out); er < 0 {
 			C.av_frame_free(&out)
@@ -554,12 +626,10 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 			}
 			C.av_packet_unref(&encPkt)
 			passPkts++
-			logger.Debug("[GIF] packet written, total =", passPkts)
+			logFFmpeg(avLogTrace, "cgo", "gif", fmt.Sprintf("packet written, total=%d", passPkts))
 		}
 		C.av_frame_free(&out)
 	}
-
-	logger.Debugf("[GIF] done: frames=%d, packets=%d\n", passFrames, passPkts)
 
 	// Flush encoder + trailer
 	C.avcodec_send_frame(codecCtx, nil)
@@ -584,10 +654,6 @@ func transcodeToGIF(inFmt *C.AVFormatContext, cOut *C.char) error {
 		return fmt.Errorf("write trailer failed: %s", avErr2Str(tr))
 	}
 
-	for _, cf := range cachedFrames {
-		C.av_frame_free(&cf.frame)
-	}
-
-	logger.Debug("[GIF] transcode done")
+	logFFmpeg(avLogVerbose, "cgo", "gif", fmt.Sprintf("transcode done: frames=%d, packets=%d", passFrames, passPkts))
 	return nil
 }

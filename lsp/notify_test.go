@@ -1,6 +1,9 @@
 package lsp
 
 import (
+	"testing"
+	"time"
+
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
@@ -10,7 +13,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestLsp_ConcernNotify(t *testing.T) {
@@ -23,8 +25,7 @@ func TestLsp_ConcernNotify(t *testing.T) {
 	}()
 
 	testEventChan := make(chan concern.Event, 16)
-	testNotifyChan := make(chan concern.Notify)
-	defer close(testNotifyChan)
+	testNotifyChan := make(chan concern.Notify, 2)
 
 	Instance.concernNotify = testNotifyChan
 
@@ -50,11 +51,24 @@ func TestLsp_ConcernNotify(t *testing.T) {
 
 	testEventChan <- tc1.NewTestEvent(test.T1, 0, test.NAME1)
 
-	go Instance.ConcernNotify()
+	// Receive both dispatched notifications before closing their input. Waiting
+	// for the consumer before closing it deadlocks whenever its goroutine has
+	// already registered with Instance.wg.
+	notifications := make([]concern.Notify, 0, 2)
+	for len(notifications) < 2 {
+		select {
+		case notification := <-testNotifyChan:
+			notifications = append(notifications, notification)
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for both subscribed groups' notifications")
+		}
+	}
+	for _, notification := range notifications {
+		testNotifyChan <- notification
+	}
+	close(testNotifyChan)
+	Instance.ConcernNotify()
 	Instance.notifyWg.Wait()
-	Instance.wg.Wait()
-
-	close(testEventChan)
 }
 
 func TestNewAtAllMsg(t *testing.T) {
