@@ -18,18 +18,15 @@ import (
 
 // macOS
 #cgo darwin LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil
-#cgo darwin,!ffmpeg_minimal LDFLAGS: -lx264
 #cgo darwin LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework VideoToolbox -framework CoreMedia -framework CoreVideo
 
 // Linux
 #cgo linux LDFLAGS: -lavfilter -lswscale -lavformat -lavcodec -lavutil
-#cgo linux,!ffmpeg_minimal LDFLAGS: -lx264
 #cgo linux LDFLAGS: -lssl -lcrypto -lpthread -ldl -lm
 
 // Windows (static)
 #cgo windows LDFLAGS: -static -lavfilter -lswscale -lavformat -lavcodec -lavutil
-#cgo windows,!ffmpeg_minimal LDFLAGS: -lx264
 #cgo windows LDFLAGS: -lssl -lcrypto -lm -lpthread
 #cgo windows LDFLAGS: -lws2_32 -lwinmm -lole32 -lshlwapi -lbcrypt -lcrypt32 -lkernel32 -luser32 -ladvapi32 -lmsvcrt -lucrtbase
 
