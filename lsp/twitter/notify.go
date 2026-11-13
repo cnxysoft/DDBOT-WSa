@@ -19,6 +19,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // TwitterDynamic 推文动态数据结构，用于模板渲染
@@ -726,6 +727,7 @@ func addTweetUrl(msg *mmsg.MSG, url string, added *bool) {
 }
 
 func downloadMedia(Url string, IsGif bool) (string, error) {
+	started := time.Now()
 	var proxyStr string
 	proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
 	if err != nil {
@@ -745,15 +747,25 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	if IsGif {
 		fileExt = "gif"
 	}
-	filePath, _ := filepath.Abs("./tmp/" + uuid.New().String() + "." + fileExt)
-
-	if IsGif {
-		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
-	} else {
-		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
-	}
+	filePath, err := filepath.Abs("./tmp/" + uuid.New().String() + "." + fileExt)
 	if err != nil {
 		return "", err
+	}
+	mediaHost := ""
+	if parsed, parseErr := url.Parse(Url); parseErr == nil {
+		mediaHost = parsed.Host
+	}
+	entry := logger.WithFields(logrus.Fields{"stage": "media", "media_host": mediaHost,
+		"media_type": fileExt, "via_proxy": proxyStr != ""})
+	err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	entry = entry.WithField("duration_ms", time.Since(started).Milliseconds())
+	if err != nil {
+		os.Remove(filePath)
+		entry.WithError(err).Warn("Twitter 媒体下载转换失败，回退到 URL")
+		return "", err
+	}
+	if info, statErr := os.Stat(filePath); statErr == nil {
+		entry.WithField("bytes", info.Size()).Debug("Twitter 媒体下载转换成功")
 	}
 	go func(path string) {
 		time.Sleep(time.Second * 180)

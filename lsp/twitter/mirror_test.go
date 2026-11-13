@@ -1,10 +1,12 @@
 package twitter
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,6 +31,36 @@ func useTestMirrors(t *testing.T, urls ...string) {
 	Cookie, _ = cookiejar.New(nil)
 	proxy_pool.Init(nil)
 	t.Cleanup(func() { BaseURL, Cookie = oldURLs, oldCookie })
+}
+
+func TestMirrorFailurePreservesStageAndAccountClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, stage string
+		status            int
+		account           bool
+	}{
+		{name: "server failure", status: http.StatusBadGateway, body: "unavailable", stage: "request"},
+		{name: "missing account", status: http.StatusNotFound, body: `<div class="error-panel">User not found</div>`, stage: "account", account: true},
+		{name: "challenge", status: http.StatusOK, body: `<title>Checking your browser</title>`, stage: "challenge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+			useTestMirrors(t, server.URL)
+			target, err := url.Parse(server.URL + "/testuser")
+			require.NoError(t, err)
+			_, _, err = fetchMirrorPage(target)
+			var fetchErr *mirrorFetchError
+			require.ErrorAs(t, err, &fetchErr)
+			require.Equal(t, tc.stage, fetchErr.stage)
+			require.Equal(t, tc.status, fetchErr.status)
+			var accountErr *mirrorAccountError
+			require.Equal(t, tc.account, errors.As(err, &accountErr))
+		})
+	}
 }
 
 func TestMirrorFailoverRemembersSuccessfulInstance(t *testing.T) {
