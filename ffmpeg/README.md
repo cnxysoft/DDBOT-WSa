@@ -47,3 +47,5 @@ CLI 后端仍使用系统 FFmpeg。默认构建不再需要 `ffmpeg_minimal` 标
 
 支持当前 Go 工具链的 9 个目标：Linux amd64 / 386 / ARMv7 hard-float / ARM64，
 macOS Intel / Apple Silicon，Windows amd64 / 386 / ARM64。Go 不支持 Windows ARM32。
+Linux 发布构建固定 Ubuntu 22.04；amd64/ARM/ARM64 成品检查为静态可执行文件，
+386 保留系统 libc 动态链接并要求最高 GLIBC 符号不超过 2.35。检查失败会阻止上传及预览发布。

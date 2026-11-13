@@ -17,7 +17,7 @@ env:
 jobs:
   # run unittest
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -77,19 +77,19 @@ jobs:
           - go: '1.26.2'
             goos: linux
             goarch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - go: '1.26.2'
             goos: linux
             goarch: 386
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - go: '1.26.2'
             goos: linux
             goarch: arm
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - go: '1.26.2'
             goos: linux
             goarch: arm64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - go: '1.26.2'
             goos: windows
             goarch: 386
@@ -275,6 +275,32 @@ jobs:
           # use env form to avoid writing go env -w
           env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED="$CGO_ENABLED" CC="$CC" \
             go build -v -trimpath -pgo=auto -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
+
+      - name: Check Linux runtime dependencies
+        if: matrix.goos == 'linux'
+        run: |
+          python3 - "${{ matrix.goarch }}" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          arch = sys.argv[1]
+          for backend in ("cli", "cgo"):
+              binary = "DDBOT-" + backend
+              info = subprocess.check_output(["go", "version", "-m", binary], text=True)
+              assert f"CGO_ENABLED={int(backend == 'cgo')}" in info, info
+              program = subprocess.check_output(["readelf", "-lW", binary], text=True)
+              dynamic = subprocess.check_output(["readelf", "-dW", binary], text=True)
+              assert not re.search(r"Shared library: \[lib(?:av|swscale|ssl|crypto|x264)", dynamic), dynamic
+              if backend == "cli" or arch != "386":
+                  assert "INTERP" not in program, program
+                  print(f"PASS {binary}: static executable")
+              else:
+                  versions = subprocess.check_output(["readelf", "--version-info", binary], text=True)
+                  required = {tuple(map(int, v.split("."))) for v in re.findall(r"\bGLIBC_(\d+(?:\.\d+)+)", versions)}
+                  assert required and max(required) <= (2, 35), versions
+                  print(f"PASS {binary}: highest GLIBC symbol " + ".".join(map(str, max(required))))
+          PY
 
       - name: List build artifacts
         run: ls -la
