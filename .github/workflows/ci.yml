@@ -323,8 +323,8 @@ jobs:
             amd64) DARWIN_ARCH=x86_64 ;;
             arm64) DARWIN_ARCH=arm64 ;;
           esac
-          lipo -verify_arch "$DARWIN_ARCH" DDBOT-cli
-          lipo -verify_arch "$DARWIN_ARCH" DDBOT-cgo
+          lipo DDBOT-cli -verify_arch "$DARWIN_ARCH"
+          lipo DDBOT-cgo -verify_arch "$DARWIN_ARCH"
 
       - name: List build artifacts
         run: ls -la
