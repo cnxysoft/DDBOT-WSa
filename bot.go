@@ -63,6 +63,7 @@ func SetUpLog() {
 	admin.InstallLogHook()
 	logrus.AddHook(lfshook.NewHook(
 		lfshook.WriterMap{
+			logrus.TraceLevel: os.Stdout,
 			logrus.DebugLevel: os.Stdout,
 			logrus.InfoLevel:  os.Stdout,
 			logrus.WarnLevel:  os.Stderr,
@@ -443,6 +444,12 @@ message-marker:
 
 # 日志等级，可选值：trace / debug / info / warn / error
 logLevel: info
+
+# FFmpeg 原生日志等级；热更新，同时受上面的全局 logLevel 过滤
+# quiet / panic / fatal / error / warning / info / verbose / debug / trace
+# verbose、debug 对应 DD debug；trace 对应 DD trace；panic/fatal 只记错误，不退出 DD
+ffmpeg:
+  logLevel: warning
 
 # QQ 消息日志，记录收发的 QQ 消息，输出到 qq-logs 文件夹
 # enable: true 启用，false 禁用（默认启用）

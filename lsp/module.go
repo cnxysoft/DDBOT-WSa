@@ -12,6 +12,7 @@ import (
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/local_pool"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
@@ -81,7 +82,7 @@ func (l *Lsp) MiraiGoModule() bot.ModuleInfo {
 	}
 }
 
-func (l *Lsp) Init() {
+func configureLogLevels() {
 	log := logger.WithField("log_level", config.GlobalConfig.GetString("logLevel"))
 	lev, err := logrus.ParseLevel(config.GlobalConfig.GetString("logLevel"))
 	if err != nil {
@@ -92,6 +93,14 @@ func (l *Lsp) Init() {
 		log.Infof("设置logLevel为%v", lev.String())
 	}
 
+	if err := ffmpeg.SetLogLevel(config.GlobalConfig.GetString("ffmpeg.logLevel")); err != nil {
+		logger.WithError(err).Warn("无法识别 ffmpeg.logLevel，保留原日志等级")
+	}
+}
+
+func (l *Lsp) Init() {
+	configureLogLevels()
+	log := logger
 	l.msgLimit = semaphore.NewWeighted(int64(cfg.GetNotifyParallel()))
 
 	if Tags != "UNKNOWN" {
@@ -106,7 +115,7 @@ func (l *Lsp) Init() {
 
 	db := localdb.MustGetClient()
 	var count int
-	err = db.View(func(tx *buntdb.Tx) error {
+	err := db.View(func(tx *buntdb.Tx) error {
 		return tx.Ascend("", func(key, value string) bool {
 			count++
 			return true
@@ -257,6 +266,7 @@ func (l *Lsp) Init() {
 			return
 		}
 		go cfg.ReloadCustomCommandPrefix()
+		configureLogLevels()
 		l.CronjobReload()
 	})
 }

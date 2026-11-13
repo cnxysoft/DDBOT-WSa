@@ -7,6 +7,9 @@ on:
     branches:
       - '**'
 
+env:
+  FFMPEG_STATIC_RELEASE: v7.1-131
+
 jobs:
   # run unittest
   test:
@@ -19,17 +22,21 @@ jobs:
         go: [ '1.26.2' ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup FFMPEG static library for tests
         run: |
           mkdir -p ffmpeg/ffmpeg-static
           cd ffmpeg/ffmpeg-static
           PLATFORM_FILE="ffmpeg-linux-amd64.zip"
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           unzip -o "$PLATFORM_FILE" -d .
           ls -la
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
       - name: Run tests with cgo
@@ -104,7 +111,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup FFMPEG static library for current platform
         run: |
@@ -116,7 +123,11 @@ jobs:
           export PLATFORM_FILE="ffmpeg-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           
           echo "Downloading $PLATFORM_FILE for ${{ matrix.goos }}/${{ matrix.goarch }}..."
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           
           echo "Verifying $PLATFORM_FILE..."
           if [ -f "$PLATFORM_FILE" ]; then
@@ -167,7 +178,7 @@ jobs:
           esac
 
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: "**/*.sum"
