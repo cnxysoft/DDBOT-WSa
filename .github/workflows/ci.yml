@@ -11,6 +11,8 @@ env:
   FFMPEG_STATIC_RELEASE: v7.1.5-1
   LLVM_MINGW_ASSET: llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz
   LLVM_MINGW_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
+  LLVM_MINGW_MSVCRT_ASSET: llvm-mingw-20261104-msvcrt-ubuntu-22.04-x86_64.tar.xz
+  LLVM_MINGW_MSVCRT_SHA256: 6e3342e2e0dfa56e9178f3c34b198f278bd5e603db4a759455d1439cc2230630
 
 jobs:
   # run unittest
@@ -155,6 +157,11 @@ jobs:
         if: matrix.goos == 'windows'
         run: |
           set -euo pipefail
+          # The published 32-bit libraries use MSVCRT; amd64/ARM64 use UCRT.
+          if [ "${{ matrix.goarch }}" = "386" ]; then
+            LLVM_MINGW_ASSET="$LLVM_MINGW_MSVCRT_ASSET"
+            LLVM_MINGW_SHA256="$LLVM_MINGW_MSVCRT_SHA256"
+          fi
           TOOLCHAIN_DIR="${RUNNER_TEMP}/ddbot-llvm-mingw"
           mkdir -p "$TOOLCHAIN_DIR"
           cd "$TOOLCHAIN_DIR"
@@ -246,7 +253,7 @@ jobs:
 
           case "${GOOS}_${GOARCH}" in
             windows_arm|windows_386|windows_arm64)
-              # use internal link mode (no external extldflags) to avoid unsupported reloc on some windows/arm toolchains
+              # Package cgo flags already request static runtime libraries.
               GO_LDFLAGS="-linkmode external -s -w ${COMMON_XFLAGS}"
               ;;
             darwin_amd64|darwin_arm64)

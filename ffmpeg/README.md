@@ -35,6 +35,7 @@ GIF 转换内部的阶段日志同样受此配置控制，逐帧和逐包信息�
 Windows 内置 FFmpeg 显式使用 `-static`，将 MinGW 运行库一同静态链接，避免
 新版工具链的时间函数引入 `libwinpthread-1.dll` 分发依赖。候选静态库与配套头文件
 必须同时替换；本地在原路径替换 `.a` 后，应强制重建，Go 缓存不会自动跟踪外部静态库内容。
+交叉编译工具链也须匹配静态库的 C 运行时：Windows 386 使用 MSVCRT，amd64/ARM64 使用 UCRT。
 
 内置 FFmpeg 默认使用精简静态库 `v7.1.5-1`：FFmpeg 7.1.5 / OpenSSL 3.5.9。
 MP4 复制压缩流，GIF 使用 H.264 解码和 GIF 编码；不链接未使用的 x264 或 AAC 编码器。
