@@ -15,6 +15,8 @@ template:
 
 如果配置成功，启动时将显示日志信息：`已启用模板`。
 
+> **注意：这是覆盖任何模板的前提。** 开关关着的时候，内置模板（编译进二进制的那份）照常可用，但工作目录下的 `template/*.tmpl` **完全不加载**——覆盖文件写了也不生效，而且不会有任何模板相关报错。所有「自定义 / 覆盖模板」的操作都必须在 `template.enable: true` 下才生效。
+
 配置成功后，DDBOT将会自动创建一个`template`文件夹，用于存放所有的模板文件。
 
 DDBOT会**监控**该文件夹目录，这意味着对模板的创建/修改/删除等操作，无需重启BOT即可生效，DDBOT会自动使用最新的模板。
@@ -1668,6 +1670,33 @@ ACFUN-{{ .name }}直播结束了
 | group_name  | string | 群名称      |
 | member_code | int64  | 退出的成员QQ号 |
 | member_name | string | 退出的成员昵称  |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- bot被拉进群
+
+模板名：`trigger.group.bot_joined.tmpl`
+
+| 模板变量       | 类型     | 含义         |
+|------------|--------|------------|
+| group_code | int64  | 群号码        |
+| group_name | string | 群名称        |
+| bot_code   | int64  | 机器人自己的QQ号  |
+| bot_name   | string | 机器人自己的名字（取值链：bot 昵称 → 适配器自报的 /users/@me 名字 → 群成员表，取不到为空串） |
+
+机器人被拉进群时发送一条**自我介绍**（自报家门，告诉这个群它能干什么 —— 不是欢迎某个人）。**只有 `adapter.mode: qqofficial` 会触发**：onebot / satori 通道没有这条能力，行为与以前完全一样。
+
+这条消息走的是进群事件的**被动回复通道**（event_id），所以在没有「允许机器人主动在群聊内发言」的群里也发得出去。同一次进群，adapter 会**先**发一条由 `qqofficial.join-intro-tip` 配置的短提示，**再**发这条模板文案：两条在同一次调用里按顺序发出、共用同一个 event_id（不靠运气）。短提示发送失败不影响这条；模板为空时只发短提示。
+
+**不写内容就是不发：** 内置的 `trigger.group.bot_joined.tmpl` 是 0 字节空模板，所以默认情况下进群只发短提示（短提示也没配就一条都不发）。想让它说话，除了写模板内容，还必须开 `template.enable: true`（见本文开头「配置」），否则你写的 `template/trigger.group.bot_joined.tmpl` 根本不会被加载。
 
 <details>
   <summary>默认模板</summary>
