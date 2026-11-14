@@ -183,6 +183,12 @@ type Messenger struct {
 
 	// listLoaded 标记好友/群/群成员列表是否已完成首次加载
 	listLoaded atomic.Bool
+
+	// memberRefreshMu / memberRefreshing / memberRefreshPending 保护「成员缓存失效通知」：
+	// 同一群同时只跑一次刷新，期间到来的通知记 pending，等这次结束后补一次，避免刷新风暴。
+	memberRefreshMu      sync.Mutex
+	memberRefreshing     map[int64]bool
+	memberRefreshPending map[int64]bool
 }
 
 // 列表加载重试参数
@@ -193,13 +199,22 @@ var (
 
 func NewMessenger(adapter Adapter) *Messenger {
 	m := &Messenger{
-		Adapter:    adapter,
-		stopChan:   make(chan struct{}),
-		GroupList:  make([]*GroupInfo, 0),
-		FriendList: make([]*FriendInfo, 0),
+		Adapter:              adapter,
+		stopChan:             make(chan struct{}),
+		GroupList:            make([]*GroupInfo, 0),
+		FriendList:           make([]*FriendInfo, 0),
+		memberRefreshing:     make(map[int64]bool),
+		memberRefreshPending: make(map[int64]bool),
 	}
 
 	m.registerEventHandlers()
+
+	// 把 Messenger 自己回传给「靠事件自学成员」的 adapter（QQ 官方就是这种）：
+	// 它们学到新成员/角色变化后调 InvalidateGroupMembers 催一次成员缓存重建。
+	// 没实现 MemberListSinkSetter 的 adapter（onebot-v11 / satori）拿不到它，行为完全不变。
+	if setter, ok := adapter.(MemberListSinkSetter); ok {
+		setter.SetMemberListSink(m)
+	}
 
 	// 启动统计汇总定时器
 	go m.summaryTicker()
@@ -987,6 +1002,107 @@ func (m *Messenger) ReloadFriendList() error {
 
 	messengerLogger.Infof("Reloaded %d friends", len(m.FriendList))
 	return nil
+}
+
+// MemberListSink 是「群成员缓存失效」通知的接收端，由 Messenger 实现。
+//
+// 为什么需要它：QQ 官方这种 adapter 拿不到群成员列表接口（实测 11253），成员只能靠事件自学；
+// 而权限判定（lsp/permission/stateManager.go:199-218 的 CheckGroupAdministrator）读的是
+// messenger 的 group.Members 缓存。自学到的成员若不催一次缓存重建，缓存会永远是空的 ——
+// 实测现象就是「群主执行 /watch 被判成没有权限」。
+//
+// 依赖方向是 messenger → adapter，adapter 不能反向依赖 messenger，所以用这个可选接口
+// 把 Messenger 自己回传给它。
+type MemberListSink interface {
+	// InvalidateGroupMembers 让该群的成员缓存失效并重建，**会阻塞到重建完成**。
+	// 因此 adapter 需要「命令执行前缓存就是新的」时可以同步调用，否则自己丢后台调用。
+	InvalidateGroupMembers(groupID int64)
+}
+
+// MemberListSinkSetter 由「靠事件自学成员」的 adapter 实现，用来接收 MemberListSink。
+// 没实现它的 adapter 不会收到任何通知，刷新语义与既有实现完全一致。
+type MemberListSinkSetter interface {
+	SetMemberListSink(sink MemberListSink)
+}
+
+// InvalidateGroupMembers 重建某群的成员缓存（实现 MemberListSink）。
+//
+// 并发策略：同一群同时只跑一次刷新；刷新期间到来的通知记 pending，等这次结束后
+// 在新 goroutine 里补一次（不用递归，避免深栈），高频通知也不会堆积。
+func (m *Messenger) InvalidateGroupMembers(groupID int64) {
+	if m == nil || groupID == 0 {
+		return
+	}
+	m.memberRefreshMu.Lock()
+	if m.memberRefreshing[groupID] {
+		m.memberRefreshPending[groupID] = true
+		m.memberRefreshMu.Unlock()
+		return
+	}
+	m.memberRefreshing[groupID] = true
+	m.memberRefreshMu.Unlock()
+	defer m.finishMemberRefresh(groupID)
+
+	// 成员缓存是挂在群列表条目上的，没有条目就没地方写 Members。
+	m.ensureGroupForMemberRefresh(groupID)
+
+	if _, err := m.GetGroupMembersByID(groupID); err != nil {
+		messengerLogger.WithError(err).Debugf("成员缓存刷新失败 (group=%d)", groupID)
+		return
+	}
+	m.groupMu.RLock()
+	count := 0
+	if g := m.FindGroupByUinLocked(groupID); g != nil {
+		count = len(g.Members)
+	}
+	m.groupMu.RUnlock()
+	messengerLogger.Debugf("成员缓存已刷新 (group=%d, 成员 %d 个)", groupID, count)
+}
+
+// ensureGroupForMemberRefresh 保证成员缓存有落点：群还不在 GroupList 里时补一个「占位条目」。
+//
+// 【不变量例外】GroupList 平时只由 ReloadGroupList 从 adapter.GetGroupList() 整体重建；
+// 这里是**唯一**的例外路径，而且只在 adapter 靠事件自学成员时才可能走到（见 MemberListSinkSetter）：
+// 存量群可能还没有 GROUP_ADD_ROBOT 事件，于是「先学到成员、后进群列表」，此时没有条目可挂 Members，
+// 就补一条最小条目（Name 空、MemberCount 0、Members 空）。
+//
+// 三条约束，改动这里时别破坏：
+//  1. 不发起任何网络请求 —— 本函数在事件处理路径上被同步调用（adapter 学到成员后要立刻刷缓存，
+//     好让同一条消息里的权限判定看见发送者）；
+//  2. 不覆盖已存在条目的任何字段 —— 只补不存在的那一条；
+//  3. 条目是临时的 —— 下一次 ReloadGroupList 会用 adapter 的结果整体替换 GroupList，
+//     占位条目（连同空名字）随之消失。
+//
+// 行为由 adapter/member_refresh_test.go 固化。OneBot/satori 不实现 MemberListSinkSetter，
+// 这条路径对它们不可达，因此对既有通道零影响。
+func (m *Messenger) ensureGroupForMemberRefresh(groupID int64) {
+	if m.FindGroupByUin(groupID) != nil {
+		return
+	}
+	m.groupMu.Lock()
+	defer m.groupMu.Unlock()
+	if m.FindGroupByUinLocked(groupID) != nil {
+		return
+	}
+	m.GroupList = append(m.GroupList, &GroupInfo{
+		Uin:     groupID,
+		Code:    groupID,
+		Members: make([]*GroupMemberInfo, 0),
+		Client:  m,
+	})
+	messengerLogger.Debugf("成员缓存刷新：群 %d 还不在群列表里，先补一个占位条目", groupID)
+}
+
+// finishMemberRefresh 结束一次成员刷新；刷新期间有新通知就补刷一次。
+func (m *Messenger) finishMemberRefresh(groupID int64) {
+	m.memberRefreshMu.Lock()
+	delete(m.memberRefreshing, groupID)
+	pending := m.memberRefreshPending[groupID]
+	delete(m.memberRefreshPending, groupID)
+	m.memberRefreshMu.Unlock()
+	if pending {
+		go m.InvalidateGroupMembers(groupID)
+	}
 }
 
 func (m *Messenger) GetGroupMembers(group *GroupInfo) ([]*GroupMemberInfo, error) {
