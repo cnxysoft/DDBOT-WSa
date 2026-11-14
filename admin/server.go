@@ -702,10 +702,17 @@ const redactedPlaceholder = "***REDACTED***"
 // sensitiveConfigLeafPaths：这些路径的整个值（标量/异常 map/切片）都替换为占位符。
 // 覆盖仓库自带 application.yaml（bot.go exampleConfig）中的全部凭据字段；
 // 不含账号名、clientId、API 地址一类非密钥字段，避免过度脱敏。
+//
+// qqofficial.app-secret 属于凭据（与平台 cookie 同级）：允许配置 API 覆盖写入，
+// 但这里必须脱敏。三种拼写都要列，因为 adapter 读配置时 app-secret / appSecret /
+// secret 互为回退别名；app-id 不列——它是标识符不是密钥，同 clientId 的处理。
 var sensitiveConfigLeafPaths = map[string]bool{
 	"admin.token":              true,
 	"websocket.token":          true,
 	"telegram.token":           true,
+	"qqofficial.app-secret":    true,
+	"qqofficial.appSecret":     true,
+	"qqofficial.secret":        true,
 	"bilibili.SESSDATA":        true,
 	"bilibili.bili_jct":        true,
 	"acfun.password":           true,

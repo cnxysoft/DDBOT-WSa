@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,6 +99,185 @@ func configureLogLevels() {
 	}
 }
 
+// --------------------------------------------------------------- 机器指纹：同一工作目录不允许换机器人
+
+// botIdentityProvider 是 adapter 的**可选**扩展能力：自报「我是谁」，形如 qqofficial/1900000000。
+//
+// 目前只有 QQ 官方 adapter 实现（qqofficial.QQOfficialAdapter.Identity）。onebot / satori
+// 没有这个方法，断言不到就整段跳过 —— 它们的行为与加这道闸之前完全一样（它们的群号本来就
+// 是平台真实 id，不存在「内部小整数换机器人后重开」这个前提）。
+//
+// 故意**不**并进 adapter.Adapter 公共接口：这是可选能力，不该逼所有 adapter 实现。
+type botIdentityProvider interface {
+	Identity() string
+}
+
+// adapterIdentity 取当前 adapter 自报的身份。
+//
+// 断言必须落在 Messenger.Adapter 上：localutils.GetBot().Bot 与 bot.Instance 的动态类型都是
+// *bot.Bot，只提升 *adapter.Messenger 的方法集，而 Messenger.Adapter 是**具名接口字段**、
+// 不是嵌入 —— 具体 adapter 的扩展方法穿透不上来，断言在那一层永远失败。
+// （同 findJoinIntroSender / adapterSupportsForward，这个坑已经踩过一次。）
+func adapterIdentity() (string, bool) {
+	instance := currentBotInstance()
+	if instance == nil || instance.Messenger == nil || instance.Messenger.Adapter == nil {
+		return "", false
+	}
+	provider, ok := instance.Messenger.Adapter.(botIdentityProvider)
+	if !ok || provider == nil {
+		return "", false
+	}
+	return strings.TrimSpace(provider.Identity()), true
+}
+
+// botIdentityKey 是 .lsp.db 里那条「机器指纹」的键。
+//
+// 键名走 NamedKey 那套形态，"BotIdentity:<模块>"，且刻意避开所有业务键前缀
+// （ConcernState / ConcernConfig / Fresh / CurrentLive / AtAllMark / Version /
+// DDBotReleaseKey / GroupImage / Mode ...），不会撞业务键。
+var botIdentityKey = localdb.NamedKey("BotIdentity", []interface{}{"lsp"})
+
+// botIdentityValueVersion 是 .lsp.db 里指纹值的版本前缀。
+//
+// 为什么要版本：decideBotIdentity 是拿字符串直接比的。将来若要把 self_id 之类并进指纹，
+// 新格式的值和旧值必然不等，会把一批部署正常的用户误判成「换了机器人」。
+// 有前缀就能按版本分别解析，而不是靠改字符串硬比较。
+//
+// 引入前缀之前写下的旧值（没有前缀）**原样参与比较**，不会让已经跑起来的部署被误拒。
+const botIdentityValueVersion = "v1:"
+
+func encodeBotIdentity(id string) string { return botIdentityValueVersion + strings.TrimSpace(id) }
+
+// decodeBotIdentity 把库里的原始值还原成身份串；没有版本前缀的按旧值原样返回。
+func decodeBotIdentity(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, botIdentityValueVersion) {
+		return strings.TrimPrefix(raw, botIdentityValueVersion)
+	}
+	return raw
+}
+
+// botIdentityStore 是这道闸对 .lsp.db 的最小依赖：读一条、写一条。
+// 抽成接口只为了测试能证明「该跳过时一次都没碰」和「一致时不重复写」。
+type botIdentityStore interface {
+	load() (string, error)
+	save(identity string) error
+}
+
+// buntdbIdentityStore 是生产路径上的实现，落在 .lsp.db。
+type buntdbIdentityStore struct {
+	db *buntdb.DB
+}
+
+func (s buntdbIdentityStore) load() (string, error) {
+	var recorded string
+	err := s.db.View(func(tx *buntdb.Tx) error {
+		v, err := tx.Get(botIdentityKey)
+		if err == buntdb.ErrNotFound {
+			// 首次运行：没有这条键就是「指纹为空」，不是错误。
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		recorded = decodeBotIdentity(v)
+		return nil
+	})
+	return recorded, err
+}
+
+func (s buntdbIdentityStore) save(identity string) error {
+	return s.db.Update(func(tx *buntdb.Tx) error {
+		_, _, err := tx.Set(botIdentityKey, encodeBotIdentity(identity), nil)
+		return err
+	})
+}
+
+// decideBotIdentity 是这道闸的**纯逻辑**：只看库里记的指纹和当前身份，决定写不写、拒不绝拒。
+//
+// 返回 (write, err)：
+//   - current 为空 → (false, nil)：没有身份可校验，调用方必须整段跳过；
+//   - recorded 为空 → (true, nil)：首次运行，写入当前身份；
+//   - 两者一致 → (false, nil)：静默通过，**不重复写**；
+//   - 不一致 → (false, err)：拒绝启动，err 里写清旧身份、当前身份、后果和处置办法。
+//
+// 这里不碰库、不打日志、不 fatal —— 那些留给 checkBotIdentity，逻辑本身要能单测。
+func decideBotIdentity(recorded, current string) (bool, error) {
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return false, nil
+	}
+	recorded = strings.TrimSpace(recorded)
+	if recorded == "" {
+		return true, nil
+	}
+	if recorded == current {
+		return false, nil
+	}
+	return false, fmt.Errorf(
+		"同一个工作目录不允许换机器人：.lsp.db 里记录的机器人是 %q，当前启动的是 %q，拒绝启动。\n"+
+			"原因：.lsp.db 里的订阅、权限和 @全体标记全部按**内部群号**（groupCode）存储。"+
+			"这些数字由 QQ 官方 adapter 的 IDMap 从 1 自增分配，存在单独的 "+
+			".qqofficial-state-<app-id>.json 里，两个文件之间没有任何关联。"+
+			"换机器人后新状态文件是空的、id 从 1 重新开始，正好撞上旧机器人用过的 1、2、3，"+
+			"旧订阅会挂到错误的群上；而 .lsp.db 里既没有 openid 也没有群名，事后无法校验。\n"+
+			"怎么办（三选一）：① 换回原来的机器人（%q）继续用这个目录；"+
+			"② 换一个全新的工作目录，订阅重新建立；"+
+			"③ 确认就是要换：先备份 .lsp.db 和旧机器人留下的 .qqofficial-state-<旧 app-id>.json，"+
+			"再**清掉 .lsp.db 里那些按旧内部群号存的订阅、权限与 @全体标记**，让订阅从零开始。\n"+
+			"   注意：只删指纹键 %q 没有用 —— 指纹没了只会被当成首次运行直接放行，"+
+			"旧订阅照样按 1、2、3 挂着，正是这条闸要挡的事故。",
+		recorded, current, recorded, botIdentityKey)
+}
+
+// checkBotIdentity 按 decideBotIdentity 的结论读写库：首次写指纹、一致静默、不一致报错。
+//
+// 只返回 error，从不 fatal：拒绝启动由调用方（Init）负责，这样逻辑本身可测。
+func checkBotIdentity(store botIdentityStore, current string) error {
+	if strings.TrimSpace(current) == "" {
+		// 没有身份可校验：一次都不碰库（onebot / satori 走的就是这条）。
+		return nil
+	}
+	recorded, err := store.load()
+	if err != nil {
+		return fmt.Errorf("读取 .lsp.db 里的机器人身份指纹失败（键 %q）：%w", botIdentityKey, err)
+	}
+	needWrite, err := decideBotIdentity(recorded, current)
+	if err != nil {
+		return err
+	}
+	if !needWrite {
+		logger.Debugf("机器人身份校验通过：%v", current)
+		return nil
+	}
+	if err := store.save(current); err != nil {
+		return fmt.Errorf("写入机器人身份指纹失败（键 %q）：%w", botIdentityKey, err)
+	}
+	logger.WithField("bot_identity", current).Infof(
+		"已记录当前机器人身份：%v（首次运行），以后这个工作目录只允许这个机器人启动。"+
+			"换机器人会被拒绝启动，见 .lsp.db 的键 %q", current, botIdentityKey)
+	return nil
+}
+
+// exitCodeBotIdentityMismatch 是「同一工作目录被换了机器人」的专用退出码。
+//
+// 为什么不用 1：这类拒绝启动只能靠人工处理恢复，配了 Restart=always 的部署会变成
+// 「连上官方网关 → 被拒 → 重启 → 再连」的死循环，每次都把网关 session 建起来又掐掉。
+// 专用码让运维能用 RestartPreventExitStatus=3 让它停下来等人。
+const exitCodeBotIdentityMismatch = 3
+
+// ensureBotIdentity 是这道闸的生产入口：取当前 adapter 的身份，落到 .lsp.db 上校验。
+// Init 把返回的 error 变成拒绝启动。
+func ensureBotIdentity() error {
+	identity, ok := adapterIdentity()
+	if !ok || identity == "" {
+		// 这个 adapter 没有身份能力（onebot / satori），或者自报空串：
+		// 完全不介入，连 .lsp.db 都不碰，行为与加这道闸之前一模一样。
+		return nil
+	}
+	return checkBotIdentity(buntdbIdentityStore{db: localdb.MustGetClient()}, identity)
+}
+
 func (l *Lsp) Init() {
 	configureLogLevels()
 	log := logger
@@ -155,6 +335,15 @@ func (l *Lsp) Init() {
 		} else {
 			log.Debugf("数据库兼容性检查完毕，当前已为最新模式：%v", curVersion)
 		}
+	}
+
+	// 同一工作目录不允许换机器人：.lsp.db 里的 key 全由内部群号（groupCode）拼成，
+	// 换机器人后新状态文件的 id 从 1 重开，旧订阅会挂到错误的群上。见 decideBotIdentity。
+	// 位置必须在上面那段版本检查之后：版本检查靠「库里有几条键」判断是不是全新库，
+	// 先把指纹写进去会让全新库被判成老库、跳过 SetVersion。
+	if err := ensureBotIdentity(); err != nil {
+		logger.Errorf("%v", err)
+		os.Exit(exitCodeBotIdentityMismatch)
 	}
 
 	imagePoolType := config.GlobalConfig.GetString("imagePool.type")
@@ -574,6 +763,11 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 			}
 			return nil
 		})
+
+		// 进群后的自我介绍走全局模板（trigger.group.bot_joined.tmpl）+ adapter 的短提示。
+		// 只有实现了 SendJoinIntro 的 adapter（目前只有 QQ 官方）才会真发，onebot / satori
+		// 在这里直接返回，行为与加这个功能之前完全一样。
+		l.sendGroupJoinIntro(info)
 	})
 
 	bot.GroupLeaveEvent.Subscribe(func(event *adapter.GroupLeaveEvent) {
@@ -959,6 +1153,169 @@ func (l *Lsp) Serve(bot *bot.Bot) {
 		logger.Debug("BOT已离线，尝试触发离线提醒模板")
 		_, _ = template.LoadAndExec(templateName, data)
 	})
+}
+
+// joinIntroSender 是 adapter 的**可选**扩展能力：按进群事件那条被动回复通道发一条长文案。
+//
+// 目前只有 QQ 官方 adapter 实现（qqofficial.QQOfficialAdapter.SendJoinIntro）。
+// onebot / satori 没有这个方法，断言失败就整段跳过 —— 它们的行为与加这个功能之前完全一样。
+type joinIntroSender interface {
+	SendJoinIntro(groupCode int64, message interface{}) (int32, error)
+}
+
+// botNamer 是 adapter 的**可选**扩展能力：提供机器人自己的名字（QQ 官方是 /users/@me 的 username）。
+//
+// 故意**不**并进 joinIntroSender：将来别的 adapter 只想支持自我介绍、不想提供名字时，
+// 不该被这个接口卡住。断言不到就跳过这一级。
+type botNamer interface {
+	GetBotName() string
+}
+
+// findBotNamer 取出当前 adapter 的名字能力。取法与 findJoinIntroSender 一致：
+// 必须落到 Messenger.Adapter 上断言，*bot.Bot 不会把具名接口字段的方法提升上来。
+func findBotNamer() (botNamer, bool) {
+	instance := currentBotInstance()
+	if instance == nil || instance.Messenger == nil || instance.Messenger.Adapter == nil {
+		return nil, false
+	}
+	namer, ok := instance.Messenger.Adapter.(botNamer)
+	if !ok || namer == nil {
+		return nil, false
+	}
+	return namer, true
+}
+
+// adapterBotName 取 adapter 自报的机器人名字；没有这个能力或名字为空都返回空串。
+func adapterBotName() string {
+	namer, ok := findBotNamer()
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(namer.GetBotName())
+}
+
+// currentBotInstance 取全局那个 *bot.Bot（可能还没有）。
+func currentBotInstance() *bot.Bot {
+	instance, ok := localutils.GetBotInstance().(*bot.Bot)
+	if !ok || instance == nil {
+		return nil
+	}
+	return instance
+}
+
+// findJoinIntroSender 取出当前 adapter 的进群自我介绍扩展能力。
+//
+// **不能**对 localutils.GetBot().Bot 直接断言：那里的静态类型是 adapter.BotCaller、
+// 动态类型是 *bot.Bot，而 *bot.Bot 只把 *adapter.Messenger 的方法集提升上来 ——
+// Messenger.Adapter 是**具名接口字段**、不是嵌入字段，具体 adapter 的额外方法不会
+// 穿透到 *bot.Bot 上。必须落到 Messenger.Adapter 这个字段上再断言。
+// （上一版就是断言错了这一层，功能一直不生效。）
+func findJoinIntroSender() (joinIntroSender, bool) {
+	instance := currentBotInstance()
+	if instance == nil || instance.Messenger == nil || instance.Messenger.Adapter == nil {
+		return nil, false
+	}
+	sender, ok := instance.Messenger.Adapter.(joinIntroSender)
+	if !ok || sender == nil {
+		return nil, false
+	}
+	return sender, true
+}
+
+// renderJoinIntro 渲染进群自我介绍模板。抽成变量是为了测试能塞一段模板内容进来
+// （默认模板是 0 字节，正常路径下渲染结果为空 = 只发短提示）。
+var renderJoinIntro = func(data map[string]interface{}) (*mmsg.MSG, error) {
+	return template.LoadAndExec("trigger.group.bot_joined.tmpl", data)
+}
+
+// joinIntroMessage 把模板渲染结果转成待发的消息。
+//
+// 没有实质内容（nil / 0 个元素 / 只有空白文本）时返回 nil，调用方据此只发短提示：
+// 默认模板就是 0 字节，这种情况不该发长文案，也不该打 Error。
+func joinIntroMessage(m *mmsg.MSG, groupCode int64) *adapter.SendingMessage {
+	if m == nil {
+		return nil
+	}
+	// 交给 adapter 的必须是 *adapter.SendingMessage：裸 *mmsg.MSG 传不过去
+	// （adapter 的 toSegments 的 switch 里没有这个类型）。
+	msg := m.ToCombineMessage(mmsg.NewGroupTarget(groupCode))
+	if msg == nil || len(msg.Elements) == 0 {
+		return nil
+	}
+	blank := true
+	for _, e := range msg.Elements {
+		ts, ok := e.(*adapter.TextSegment)
+		if !ok || strings.TrimSpace(ts.Content) != "" {
+			blank = false
+			break
+		}
+	}
+	if blank {
+		return nil
+	}
+	return msg
+}
+
+// joinIntroBotName 取机器人自己的名字，四级优先级（顺序固定，别调换）：
+//
+//  1. *bot.Bot.Nickname —— OneBot 时代的遗留字段，官方通道目前恒空，但语义上最优先，
+//     将来接上就用它；
+//  2. adapter 的 GetBotName() —— QQ 官方 /users/@me 的 username；
+//  3. 群成员表里机器人自己那条（现有逻辑）；
+//  4. 空串 —— 模板自己兜底。
+func joinIntroBotName(instance *bot.Bot, groupCode, botUin int64) string {
+	if instance != nil && instance.Nickname != "" {
+		return instance.Nickname
+	}
+	if name := adapterBotName(); name != "" {
+		return name
+	}
+	if instance != nil && botUin != 0 {
+		if gi := instance.FindGroup(groupCode); gi != nil {
+			if fi := gi.FindMember(botUin); fi != nil {
+				return fi.DisplayName()
+			}
+		}
+	}
+	return ""
+}
+
+// sendGroupJoinIntro 机器人被拉进群时，渲染 trigger.group.bot_joined.tmpl 交给 adapter 的
+// SendJoinIntro。
+//
+// **模板渲染为空、甚至渲染失败时也要调**：短提示（qqofficial.join-intro-tip）就在
+// SendJoinIntro 里发，提前 return 会让只配了 tip 的用户一条都收不到（上一版的真实缺陷）。
+// 渲染失败只影响长文案：打一条 Warn 说明原因，仍然带着空消息去调，让 tip 照发。
+func (l *Lsp) sendGroupJoinIntro(info *adapter.GroupInfo) {
+	if info == nil || info.Code == 0 {
+		return
+	}
+	instance := currentBotInstance()
+	if instance == nil {
+		return
+	}
+	sender, ok := findJoinIntroSender()
+	if !ok {
+		// 这个 adapter 没有进群自我介绍能力（onebot / satori）：什么都不做，也不渲染。
+		return
+	}
+	botUin := instance.GetUin()
+	var msg *adapter.SendingMessage
+	m, err := renderJoinIntro(map[string]interface{}{
+		"group_code": info.Code,
+		"group_name": info.Name,
+		"bot_code":   botUin,
+		"bot_name":   joinIntroBotName(instance, info.Code, botUin),
+	})
+	if err != nil {
+		logger.WithField("GroupCode", info.Code).Warnf("进群自我介绍模板渲染失败（群 %d），这次只发短提示：%v", info.Code, err)
+	} else {
+		// 空模板（默认就是 0 字节）时 msg 为 nil —— 照样往下调，tip 还等着发。
+		msg = joinIntroMessage(m, info.Code)
+	}
+	if _, err := sender.SendJoinIntro(info.Code, msg); err != nil {
+		logger.WithField("GroupCode", info.Code).Errorf("进群自我介绍发送失败（群 %d）：%v", info.Code, err)
+	}
 }
 
 func (l *Lsp) SendMsgToAdmin(m *mmsg.MSG) {
@@ -1353,20 +1710,228 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *adapter.SendingMessage, rec
 	return res
 }
 
-// sendGroupForwardMessage 发送群合并转发消息
+// sendGroupForwardMessage 发送群合并转发消息。
+//
+// adapter 明确说不支持合并转发时（QQ 官方 v2 只有 msg_type 0/2/7/8，没有合并转发）
+// 降级成**一条普通文本消息**：以前是整个推送直接失败，现在至少把节点里的文本发出去。
 func (l *Lsp) sendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
 	if bot.Instance == nil {
 		return -1, "", fmt.Errorf("bot not initialized")
 	}
+	if !adapterSupportsForward() {
+		return l.sendGroupForwardFallback(groupCode, nodes, options)
+	}
 	return bot.Instance.SendGroupForwardMessage(groupCode, nodes, options)
 }
 
-// sendPrivateForwardMessage 发送私聊合并转发消息
+// sendPrivateForwardMessage 发送私聊合并转发消息，降级规则同群消息。
 func (l *Lsp) sendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
 	if bot.Instance == nil {
 		return -1, "", fmt.Errorf("bot not initialized")
 	}
+	if !adapterSupportsForward() {
+		return l.sendPrivateForwardFallback(userID, nodes, options)
+	}
 	return bot.Instance.SendPrivateForwardMessage(userID, nodes, options)
+}
+
+// forwardCapable 是合并转发的**可选能力接口**：adapter 明确回答自己支不支持合并转发。
+// 不实现它的一律按「支持」处理（onebot / satori 从来没实现过，行为必须完全不变）。
+type forwardCapable interface {
+	SupportsForward() bool
+}
+
+// adapterSupportsForward 判断当前 adapter 支不支持合并转发。
+//
+// 断言必须落在 Messenger.Adapter 上：bot.Instance 与 localutils.GetBot().Bot 的动态类型
+// 都是 *bot.Bot，只提升 *adapter.Messenger 的方法集，而 Messenger.Adapter 是**具名接口
+// 字段**、不是嵌入 —— 具体 adapter 的扩展方法不会穿透上来，断言在那一层永远失败。
+func adapterSupportsForward() bool {
+	if bot.Instance == nil || bot.Instance.Messenger == nil || bot.Instance.Messenger.Adapter == nil {
+		return true
+	}
+	capable, ok := bot.Instance.Messenger.Adapter.(forwardCapable)
+	if !ok {
+		return true
+	}
+	return capable.SupportsForward()
+}
+
+// sendGroupForwardFallback 把群合并转发的节点内容降级成一条普通消息发出去。
+func (l *Lsp) sendGroupForwardFallback(groupCode int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	text := buildForwardFallbackText(nodes, options)
+	if text == "" {
+		// 全是图片/语音之类：普通消息里还原不出来，宁可不发，也不许发一条空消息。
+		logger.WithFields(localutils.GroupLogFields(groupCode)).
+			Warn("合并转发内容里没有可降级的文本，已跳过发送")
+		return -1, "", nil
+	}
+	res := l.sendGroupMessage(groupCode, &adapter.SendingMessage{
+		Elements: []adapter.IMessageElement{&adapter.TextSegment{Content: text}},
+	})
+	if res == nil || res.ID == -1 {
+		err := fmt.Errorf("合并转发降级为普通消息发送失败（群 %d）：没有拿到有效消息 id", groupCode)
+		logger.WithFields(localutils.GroupLogFields(groupCode)).Error(err)
+		return -1, "", err
+	}
+	logger.WithFields(localutils.GroupLogFields(groupCode)).Debug("合并转发已降级为一条普通消息")
+	return int32(res.ID), "", nil
+}
+
+// sendPrivateForwardFallback 私聊版本的降级。
+func (l *Lsp) sendPrivateForwardFallback(userID int64, nodes []map[string]interface{}, options *adapter.ForwardOptions) (int32, string, error) {
+	text := buildForwardFallbackText(nodes, options)
+	if text == "" {
+		logger.WithFields(localutils.FriendLogFields(userID)).
+			Warn("合并转发内容里没有可降级的文本，已跳过发送")
+		return -1, "", nil
+	}
+	res := l.sendPrivateMessage(userID, &adapter.SendingMessage{
+		Elements: []adapter.IMessageElement{&adapter.TextSegment{Content: text}},
+	})
+	if res == nil || res.ID == -1 {
+		err := fmt.Errorf("合并转发降级为普通消息发送失败（用户 %d）：没有拿到有效消息 id", userID)
+		logger.WithFields(localutils.FriendLogFields(userID)).Error(err)
+		return -1, "", err
+	}
+	logger.WithFields(localutils.FriendLogFields(userID)).Debug("合并转发已降级为一条普通消息")
+	return int32(res.ID), "", nil
+}
+
+// buildForwardFallbackText 把合并转发的节点内容合并成**一条**普通文本消息的内容。
+//
+// 只还原文本：官方通道上合并转发本来就还原不了，图片/语音/视频这类非文本一律跳过。
+// 节点顺序保持原样；有 senderName 输出成「发送者：内容」；options.Prompt 放第一行当标题。
+// 各条之间用换行分隔，最终只有一条消息（不是每条一个）。
+func buildForwardFallbackText(nodes []map[string]interface{}, options *adapter.ForwardOptions) string {
+	lines := make([]string, 0, len(nodes)+1)
+	if options != nil {
+		if prompt := strings.TrimSpace(options.Prompt); prompt != "" {
+			lines = append(lines, prompt)
+		}
+	}
+	for _, node := range nodes {
+		data := forwardNodeData(node)
+		if data == nil {
+			continue
+		}
+		text := forwardNodeText(data)
+		if text == "" {
+			continue
+		}
+		if name := forwardNodeSenderName(data); name != "" {
+			text = name + "：" + text
+		}
+		lines = append(lines, text)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// forwardNodeData 取节点的 data；节点也可能直接就是 data（没有 type/data 那层包装）。
+func forwardNodeData(node map[string]interface{}) map[string]interface{} {
+	if node == nil {
+		return nil
+	}
+	if data, ok := node["data"].(map[string]interface{}); ok {
+		return data
+	}
+	return node
+}
+
+// forwardNodeSenderName 取发送者昵称：模板 {{ forward }} 写出去的是 onebot 的 name，
+// 节点里也可能直接给 senderName —— 两个都认，senderName 优先。
+func forwardNodeSenderName(data map[string]interface{}) string {
+	for _, key := range []string{"senderName", "name"} {
+		if s, ok := data[key].(string); ok {
+			if s = strings.TrimSpace(s); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// forwardNodeText 取一个节点的文本：优先 content（字符串，或分片数组里拼出来的文本），
+// 其次 elements 里的文本分片。非文本分片（图片/语音/视频…）一律跳过。
+func forwardNodeText(data map[string]interface{}) string {
+	if s, ok := data["content"].(string); ok && strings.TrimSpace(s) != "" {
+		return s
+	}
+	if text := forwardSegmentsText(data["content"]); text != "" {
+		return text
+	}
+	return forwardSegmentsText(data["elements"])
+}
+
+// forwardSegmentsText 把一段消息内容里的文本分片按顺序拼起来；不是文本的段不产生内容。
+func forwardSegmentsText(v interface{}) string {
+	var b strings.Builder
+	appendSeg := func(typ string, data map[string]interface{}) {
+		if typ != "text" || data == nil {
+			return
+		}
+		if s, ok := data["text"].(string); ok {
+			b.WriteString(s)
+		}
+	}
+	switch content := v.(type) {
+	case string:
+		b.WriteString(content)
+	case map[string]interface{}:
+		appendSeg(forwardSegmentType(content), forwardSegmentData(content))
+	case []map[string]interface{}:
+		for _, seg := range content {
+			appendSeg(forwardSegmentType(seg), forwardSegmentData(seg))
+		}
+	case []interface{}:
+		for _, elem := range content {
+			switch seg := elem.(type) {
+			case map[string]interface{}:
+				appendSeg(forwardSegmentType(seg), forwardSegmentData(seg))
+			case adapter.MessageSegment:
+				appendSeg(seg.Type, seg.Data)
+			case *adapter.TextSegment:
+				if seg != nil {
+					b.WriteString(seg.Content)
+				}
+			case adapter.IMessageElement:
+				if text, ok := seg.(*adapter.TextSegment); ok && text != nil {
+					b.WriteString(text.Content)
+				}
+			}
+		}
+	case []adapter.MessageSegment:
+		for _, seg := range content {
+			appendSeg(seg.Type, seg.Data)
+		}
+	case adapter.MessageSegment:
+		appendSeg(content.Type, content.Data)
+	case []adapter.IMessageElement:
+		for _, elem := range content {
+			if text, ok := elem.(*adapter.TextSegment); ok && text != nil {
+				b.WriteString(text.Content)
+			}
+		}
+	}
+	return b.String()
+}
+
+// forwardSegmentType 取 onebot 消息段的 type。
+func forwardSegmentType(seg map[string]interface{}) string {
+	if seg == nil {
+		return ""
+	}
+	s, _ := seg["type"].(string)
+	return s
+}
+
+// forwardSegmentData 取 onebot 消息段的 data。
+func forwardSegmentData(seg map[string]interface{}) map[string]interface{} {
+	if seg == nil {
+		return nil
+	}
+	data, _ := seg["data"].(map[string]interface{})
+	return data
 }
 
 var Instance = &Lsp{

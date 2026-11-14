@@ -155,6 +155,56 @@ logLevel: info
 
 ```
 
+#### 连接方式：`adapter.mode`
+
+`application.yaml` 里的 `adapter.mode` 决定 DDBOT 用什么协议连 IM，三选一：
+
+| 取值 | 说明 |
+|---|---|
+| `onebot-v11`（默认） | 连 OneBot 11 兼容实现端（LLOneBot / NapCat / Lagrange / go-cqhttp 等），地址取下面的 `websocket` 段 |
+| `satori` | 连 Satori 协议实现端，地址同样取 `websocket.ws-server` / `websocket.ws-reverse` |
+| `qqofficial` | 连 QQ 官方开放平台机器人（bot.q.qq.com），凭据取下面的 `qqofficial` 段 |
+
+填了不认识的取值（比如 `onebot-v1`、`onebot_v11` 这类笔误），程序**不会退出**：会打一条醒目的 Warn（写明填的是什么、已回落到什么），然后按 `onebot-v11` 继续启动。这是有意为之——`adapter.mode` 是手写配置，笔误应该能起来看见告警，而不是整个进程退出。
+
+QQ 官方通道（`adapter.mode: qqofficial`）必填两项：
+
+```yaml
+adapter:
+  mode: qqofficial
+qqofficial:
+  app-id:            # 机器人 AppID（https://q.qq.com/ 的机器人管理端）
+  app-secret:        # 机器人 AppSecret，等同凭据，别外泄、别提交到仓库
+  mode: websocket    # 只支持 websocket
+  intents: 0         # 0 = 用默认（群与单聊事件组）
+  # 可选：机器人被拉进群时的**自我介绍**短提示（留空 = 不发，默认不发）
+  # 长文案不在这里配：走全局模板 trigger.group.bot_joined.tmpl（见 TEMPLATE.md）
+  join-intro-tip:    # 短提示，例如「@我发送 菜单」
+```
+
+> **想覆盖模板，必须先开 `template.enable: true`。** 这个开关默认是关的：关着的时候内置模板（编译进二进制的那份）照常可用，但工作目录下的 `template/*.tmpl` **完全不加载**——你写了覆盖文件也不会生效，日志里也不会有任何模板相关报错。上面的 `trigger.group.bot_joined.tmpl` 只是其中一例，任何自定义模板都一样。
+>
+> ```yaml
+> template:
+>   enable: true
+> ```
+
+配置写好后，还有三件事**必须在平台侧自己开**（DDBOT 里配不了，日志也不会替你报）：
+
+1. **管理端把「消息接收方式」设成 WebSocket。** QQ 机器人管理端里 WebSocket 与 Webhook 回调是二选一，默认往往不是 WebSocket；不切换，DDBOT 这边连不上。
+2. **每个群的群主都要开「允许机器人主动在群聊内发言」。** 这个开关默认**是关的**。不开的话订阅推送**一条都发不出去**，日志里会出现 `400 40034105 主动消息失败, 无权限`——这不是代码坏了，是群没授权。以后机器人每进一个新群，都要重新开一次。
+3. **私聊机器人发 `/whosyourdaddy` 拿 DDBOT 管理员。** 前缀按你配置的来（默认 `/`）。没有管理员身份时，群里的命令会静默不响应，只有启动日志里会提示一句「请通过 qq 对 bot 私聊发送 `<whosyourdaddy>` 获取管理员权限」。
+
+另外一条实测结论：群主把「机器人可获取的群聊消息范围」设成「全部消息」后，平台改推 `GROUP_MESSAGE_CREATE`，**不再**推 `GROUP_AT_MESSAGE_CREATE`（机器人与机器人之间互相 @ 也走前者）。事件类型变了不是故障。
+
+已知限制（官方没有对应能力，不是 DDBOT 的 bug）：
+
+- 群成员只有「在群里发过言的」才认识（官方成员列表接口属白名单内邀能力，普通机器人报 11253），因此 `@全体成员`、依赖成员表的群管理命令可能不生效；
+- 合并转发、改群名片 / 群头衔、设置群管理员、退群等能力官方不提供，相关命令会返回「不支持」；
+- 官方网关（WebSocket）地址运行时自动获取，不需要在配置里填；
+- 状态文件默认落在工作目录 `.qqofficial-state-<app-id>.json`（文件名带 app-id，换机器人天然分开；可用 `qqofficial.state-file` 改路径，但**一旦显式配置就不再自动迁移**旧文件）。内含 openid 与内部群号的映射，注意别提交到仓库。
+- 从旧版本升级时，旧的 `.qqofficial-state.json` 会被自动改名迁移成新名字，并把原文件留成 `.qqofficial-state.json.migrated`。**回滚到老版本前，必须先把 `.migrated` 改回原名**，否则老版本会当作首次运行、内部 ID 从 1 重排。
+
 #### 完整配置
 
 <details>
@@ -269,7 +319,7 @@ notify:
   parallel: 1          # 增加推送消息的并发配置，默认为1以优先保证账号稳定，当出现推送堆积的时候可以尝试调高
 
 template:       # 是否启用模板功能，true为启用，false为禁用，默认为禁用
-  enable: false # 需要了解模板请看模板文档
+  enable: false # 需要了解模板请看模板文档；关着时 template/*.tmpl 完全不加载（内置模板仍可用）
   
 autoreply: # 自定义命令自动回复，自定义命令通过模板发送消息，且不支持任何参数，需要同时启用模板功能
   group:   # 需要了解该功能请看模板文档
@@ -294,6 +344,21 @@ websocket:
   mode: ws-reverse 
   ws-server: 127.0.0.1:15630
   ws-reverse: ws://localhost:3001
+
+# 适配器选择：onebot-v11（默认，配上面的 websocket 段）/ satori / qqofficial
+# 填了不认识的取值不会退出：打一条醒目 Warn 后按 onebot-v11 继续启动（见 adapter/config.go 的 resolveAdapterType）
+adapter:
+  mode: onebot-v11
+
+# 仅在 adapter.mode: qqofficial 时生效：QQ 开放平台机器人凭据
+qqofficial:
+  app-id:          # 机器人 AppID
+  app-secret:      # 机器人 AppSecret（等同凭据，别外泄）
+  mode: websocket  # 只支持 websocket
+  intents: 0       # 0 = 用默认（群与单聊事件组）
+  # 机器人被拉进群时的**自我介绍**短提示；留空 = 不发，默认不发
+  # 长文案走全局模板 trigger.group.bot_joined.tmpl（见 TEMPLATE.md）
+  join-intro-tip:    # 短提示，例如「@我发送 菜单」
 
 ```
 

@@ -456,9 +456,33 @@ ffmpeg:
 qq-logs:
   enable: true
 
-# 适配器选择：onebot-v11（默认）
+# 适配器选择：决定 DDBOT 用什么协议连 IM。取值三选一，默认 onebot-v11。
+#   onebot-v11 —— OneBot 11 兼容实现端（LLOneBot / NapCat / Lagrange / go-cqhttp 等），配下面的 websocket 段
+#   satori     —— Satori 协议实现端，地址同样取 websocket.ws-server / websocket.ws-reverse
+#   qqofficial —— QQ 官方开放平台机器人（bot.q.qq.com），配置见下面的 qqofficial 段
+# 注意：填了不认识的取值**不会让进程起不来**，而是打一条醒目 Warn 后回落到 onebot-v11 继续启动
+#       （adapter/config.go 的 resolveAdapterType）。这是既定行为：adapter.mode 是手写配置，
+#       拼错就应该能起来、能看见告警、能收发消息，而不是整个进程退出让人猜。
 adapter:
   mode: onebot-v11
+
+# 只在 adapter.mode: qqofficial 时生效：QQ 开放平台机器人凭据
+# AppID / AppSecret 到 https://q.qq.com/ 的机器人管理端获取（沙箱与正式环境各一套，别混用）
+# AppSecret 等同凭据：别外泄、别提交到仓库；管理员面板的配置接口可以覆盖写入，但读取一律脱敏
+qqofficial:
+  app-id:                  # 必填：机器人 AppID
+  app-secret:              # 必填：机器人 AppSecret
+  mode: websocket          # 仅支持 websocket（webhook 尚未实现，填了会在启动时报错退出）
+  intents: 0               # 事件订阅位掩码，0 = 用默认（群与单聊事件组 1<<25）
+  qrlogin: true            # 面板「扫码登录」入口开关；缺省视为开（本平台扫码是主要绑定方式）
+  # shard-id: 0            # 分片号，未分片不用填
+  # shard-count: 1         # 分片总数，未分片不用填
+  # api-base-url: https://api.bot.qq.com     # 业务接口域名；WebSocket 网关地址运行时自动获取，无需配置
+  # http-timeout: 10s      # 单次 HTTP 请求超时
+  # token-refresh-ahead: 60s # access_token 到期前多久开始刷新
+  # start-timeout: 20s     # 启动等待首个 READY 的上限
+  # state-file:                             # 状态落盘路径（openid 映射与群清单）。留空 = 工作目录下 .qqofficial-state-<app-id>.json，按机器人自动分开。
+  #                                         # 注意：一旦在这里显式填了路径，就不再自动迁移旧版 .qqofficial-state.json。
 
 # ws 模式支持 ws-server（正向）和 ws-reverse（反向）
 # token 是服务端设置的 Access Token

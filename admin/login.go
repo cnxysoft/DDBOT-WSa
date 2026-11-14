@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
@@ -24,6 +26,9 @@ import (
 //     二维码用项目已有的 skip2/go-qrcode 渲染成 PNG。
 //   - 微博：lsp/weibo 的 RunQRLoginForQQ。它本来就是给「非聊天调用方」设计的
 //     通道式接口（首帧是二维码图片，末帧带 SUB 与落盘结果），面板直接接上就行。
+//   - QQ 官方机器人：adapter/qqofficial 的扫码绑定协议（create_bind_task -> 轮询 ->
+//     AES-256-GCM 解密），拿到的是 AppID + AppSecret 这一对凭据。手填那两个键的路
+//     同样保留——扫码是便利路径，不是唯一路径。
 //
 // 落盘走的是与扫码命令同一条路径（cfg.WriteConfigKeyValue），
 // 所以配置文件里其它内容与格式都会被保留。
@@ -35,8 +40,9 @@ import (
 // 本来就是凭据的正常来源。
 
 const (
-	loginPlatformBilibili = "bilibili"
-	loginPlatformWeibo    = "weibo"
+	loginPlatformBilibili   = "bilibili"
+	loginPlatformWeibo      = "weibo"
+	loginPlatformQQOfficial = "qqofficial"
 
 	loginStateWaiting   = "waiting"   // 等待扫码
 	loginStateScanned   = "scanned"   // 已扫码，等待手机确认
@@ -210,17 +216,22 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if req.Platform != loginPlatformBilibili && req.Platform != loginPlatformWeibo {
+	switch req.Platform {
+	case loginPlatformBilibili, loginPlatformWeibo, loginPlatformQQOfficial:
+	default:
 		writeJSONError(w, http.StatusBadRequest, "unsupported platform: "+req.Platform)
 		return
 	}
 
 	mgr := s.loginManagerOf()
 	sess := mgr.start(req.Platform)
-	if req.Platform == loginPlatformBilibili {
+	switch req.Platform {
+	case loginPlatformBilibili:
 		go s.runBilibiliLogin(mgr, sess)
-	} else {
+	case loginPlatformWeibo:
 		go s.runWeiboLogin(mgr, sess)
+	default:
+		go s.runQQOfficialLogin(mgr, sess)
 	}
 
 	// 等出码。B站/微博都是秒级返回，网络差时最多等 loginQRWait。
@@ -454,4 +465,99 @@ func (s *Server) runWeiboLogin(mgr *loginManager, sess *loginSession) {
 			return
 		}
 	}
+}
+
+// runQQOfficialLogin 出码并轮询 QQ 官方扫码绑定结果。
+//
+// 与 B站/微博 的差别：扫这一下拿到的是「AppID + AppSecret」一对凭据，等于顺手创建/
+// 绑定一个 QQ 官方机器人；这个 AppSecret 是解密出来的明文，只进内存与配置，不进日志。
+func (s *Server) runQQOfficialLogin(mgr *loginManager, sess *loginSession) {
+	defer mgr.finish(sess)
+
+	// 会话被取消时，把在途的绑定请求一起掐掉
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sess.cancel:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	qrSess, err := qqofficial.NewQRBindSession(ctx, qqofficial.DefaultQRBindOptions())
+	if err != nil {
+		sess.setState(loginStateFailed, "创建绑定任务失败："+err.Error())
+		return
+	}
+
+	png, err := qrcode.Encode(qrSess.URL(), qrcode.Low, 256)
+	if err != nil {
+		sess.setState(loginStateFailed, "渲染二维码失败："+err.Error())
+		return
+	}
+	sess.setQR(png)
+	sess.setState(loginStateWaiting, "请用手机 QQ 扫码并授权机器人")
+
+	ticker := time.NewTicker(qqofficial.QRBindPollInterval)
+	defer ticker.Stop()
+	expire := time.NewTimer(loginSessionTTL)
+	defer expire.Stop()
+
+	for {
+		select {
+		case <-sess.cancel:
+			return
+		case <-expire.C:
+			sess.setState(loginStateExpired, "二维码已过期，请重新获取")
+			return
+		case <-ticker.C:
+			// 轮询失败不结束会话：绑定接口偶发超时/抖动，等下一轮（与 B站 一致）
+			res, err := qrSess.Poll(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				logrus.Debugf("QQ 扫码轮询失败（继续）: %v", err)
+				continue
+			}
+			// 只有 2 / 3 有判定意义：0 与 1 都是「等扫码」（见 qqofficial 里 status 常量的实测说明）
+			switch res.Status {
+			case qqofficial.QRBindStatusSuccess:
+				s.finishQQOfficialLogin(sess, res)
+				return
+			case qqofficial.QRBindStatusFailed:
+				sess.setState(loginStateExpired, "二维码已过期或授权被拒绝，请重新获取")
+				return
+			}
+		}
+	}
+}
+
+// finishQQOfficialLogin 把扫码结果落盘。
+//
+// 与 B站 那条一样先写运行时配置再落盘：两条写成功日志/失败提示各自独立。
+// 这里没有「校验凭据」这一步可做——AppSecret 刚由平台解密出来，没有任何免鉴权接口可以校验，
+// 直接以写盘结果为准。
+func (s *Server) finishQQOfficialLogin(sess *loginSession, res *qqofficial.QRBindResult) {
+	if res.AppID == "" || res.Secret == "" {
+		sess.setState(loginStateFailed, "扫码成功但凭据不完整，请重试")
+		return
+	}
+
+	config.GlobalConfig.Set("qqofficial.app-id", res.AppID)
+	config.GlobalConfig.Set("qqofficial.app-secret", res.Secret)
+
+	if err := cfg.WriteConfigKeyValue("qqofficial.app-id", res.AppID); err != nil {
+		sess.setState(loginStateFailed, "绑定成功但写入 app-id 失败："+err.Error())
+		return
+	}
+	if err := cfg.WriteConfigKeyValue("qqofficial.app-secret", res.Secret); err != nil {
+		sess.setState(loginStateFailed, "绑定成功但写入 app-secret 失败："+err.Error())
+		return
+	}
+
+	invalidateAccountCache(loginPlatformQQOfficial)
+	// 提示里只带 AppID（不是密钥）
+	sess.setState(loginStateConfirmed, "绑定成功，AppID "+res.AppID+" 与 AppSecret 已写入配置")
 }

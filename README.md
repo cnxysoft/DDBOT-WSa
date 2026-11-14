@@ -20,6 +20,8 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 
 兼容 LLOneBot / NapCat / Lagrange / Lagrange PMHQ / go-cqhttp 等 OneBot 11 实现端。
 
+> **连接方式可切换**：`application.yaml` 的 `adapter.mode` 支持 `onebot-v11`（默认）、`satori`、`qqofficial`（QQ 官方开放平台机器人）。切换方式、QQ 官方通道的必填项与已知限制见 [INSTALL.md](INSTALL.md) 的「连接方式：adapter.mode」一节。
+
 > DDBOT **不是聊天机器人**。它只在「订阅对象有更新」和「答复命令」时主动发言，交互被刻意设计成最小程度，正常聊天永远不会误触。
 
 **选择版本：**

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
@@ -76,7 +77,7 @@ func (s *Server) handlePlatformAccount(w http.ResponseWriter, r *http.Request) {
 
 	site := r.URL.Query().Get("site")
 	switch site {
-	case loginPlatformBilibili, loginPlatformWeibo:
+	case loginPlatformBilibili, loginPlatformWeibo, loginPlatformQQOfficial:
 	default:
 		writeJSONError(w, http.StatusBadRequest, "unsupported site: "+site)
 		return
@@ -84,10 +85,13 @@ func (s *Server) handlePlatformAccount(w http.ResponseWriter, r *http.Request) {
 
 	acc, ok := cachedAccount(site)
 	if !ok {
-		if site == loginPlatformBilibili {
+		switch site {
+		case loginPlatformBilibili:
 			acc = fetchBilibiliAccount()
-		} else {
+		case loginPlatformWeibo:
 			acc = fetchWeiboAccount()
+		default:
+			acc = fetchQQOfficialAccount()
 		}
 		storeAccount(site, acc)
 	}
@@ -138,6 +142,51 @@ func fetchBilibiliAccount() platformAccount {
 		if acc.Name == "" {
 			acc.Name = info.GetData().GetName()
 		}
+	}
+	return acc
+}
+
+// fetchQQOfficialAccount 读本地配置报出 QQ 官方机器人的绑定状态。
+//
+// 与 B站/微博 最大的不同：这里**不发任何远程请求**。B站那条要打 nav 接口验证 cookie，
+// 面板显示一个状态不该去连网关；QQ 这边有没有绑定完全是本地配置说了算，读一下最省事也最稳。
+//
+// 配置键走 qqofficial.GetConfig()，与 adapter 侧同一份解析（app-id / app-secret 的
+// 大小写别名都由它兜住），免得两边各读一套键、改了名只对一半。
+//
+// **响应里绝不回显 app-secret**：只报「绑没绑」和 AppID。
+// qqOfficialQRLoginEnabled 报「这个平台的扫码登录开着吗」。
+//
+// B站/微博 各有自己的 .qrlogin 开关（exampleConfig 里默认 true）。QQ 官方没有独立开关：
+// 官方绑定协议就是这个平台唯一的凭据来源，扫码入口是主路径，所以**键没设时默认开**——
+// 面板用这个字段决定要不要显示扫码入口，恒 false 会把入口藏掉。
+// 配置里显式写了 qqofficial.qrlogin: false 仍然尊重。
+func qqOfficialQRLoginEnabled() bool {
+	if config.GlobalConfig.IsSet("qqofficial.qrlogin") {
+		return config.GlobalConfig.GetBool("qqofficial.qrlogin")
+	}
+	return true
+}
+
+func fetchQQOfficialAccount() platformAccount {
+	cfg := qqofficial.GetConfig()
+	acc := platformAccount{
+		Site:    loginPlatformQQOfficial,
+		QRLogin: qqOfficialQRLoginEnabled(),
+	}
+
+	switch {
+	case cfg.AppID == "":
+		// 未绑定不是错误：面板要照常显示卡片并给出扫码入口
+		acc.Message = "尚未绑定 QQ 官方机器人"
+	case cfg.AppSecret == "":
+		// 半配置：有 AppID 没密钥，连不上，别报成已绑定
+		acc.Name = cfg.AppID
+		acc.Message = "已配置 AppID，但缺少 AppSecret，机器人无法连接"
+	default:
+		acc.LoggedIn = true
+		acc.Name = cfg.AppID
+		acc.Message = "已绑定 QQ 官方机器人"
 	}
 	return acc
 }
