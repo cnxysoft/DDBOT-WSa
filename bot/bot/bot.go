@@ -7,6 +7,7 @@ import (
 
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	ob11 "github.com/cnxysoft/DDBOT-WSa/adapter/onebot-v11"
+	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
 	"github.com/cnxysoft/DDBOT-WSa/adapter/satori"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
@@ -250,9 +251,16 @@ func init() {
 		switch adapterType {
 		case adapter.AdapterTypeSatori:
 			return satori.NewSatoriAdapter(cfg)
-		case adapter.AdapterTypeOneBotV11:
-			fallthrough
+		case adapter.AdapterTypeQQOfficial:
+			return qqofficial.NewQQOfficialAdapter(cfg)
+		case adapter.AdapterTypeOneBotV11, "":
+			// "" 是历史默认值（adapter.GetAdapterType 里空配置本来就归到 onebot-v11）
+			return ob11.NewOneBotAdapter(cfg)
 		default:
+			// 正常走不到这里：adapter.mode 的未知取值在 adapter/config.go 的 resolveAdapterType
+			// 里就被收敛成 onebot-v11 了（那里打一条醒目 Warn）。留这条只是为了防有代码绕过
+			// GetAdapterType 直接传未知类型——口径与 resolveAdapterType 保持一致：回落，不起不来。
+			logger.Warnf("未知的 adapter 类型 %q：按 onebot-v11 回落（正常应由 resolveAdapterType 收敛）", adapterType)
 			return ob11.NewOneBotAdapter(cfg)
 		}
 	}
