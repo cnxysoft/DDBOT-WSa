@@ -25,11 +25,16 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 	buf := &bytes.Buffer{}
 	oldOut := logger.Logger.Out
 	oldLevel := logger.Logger.Level
+	oldFormatter := logger.Logger.Formatter
 	logger.Logger.SetOutput(buf)
 	logger.Logger.SetLevel(logrus.DebugLevel)
+	// Assert message text directly on every platform; the default formatter
+	// escapes Windows path separators inside quoted log messages.
+	logger.Logger.SetFormatter(&logrus.TextFormatter{DisableColors: true, DisableQuote: true})
 	t.Cleanup(func() {
 		logger.Logger.SetOutput(oldOut)
 		logger.Logger.SetLevel(oldLevel)
+		logger.Logger.SetFormatter(oldFormatter)
 	})
 	return buf
 }
