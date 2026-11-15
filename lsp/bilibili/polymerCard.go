@@ -47,6 +47,9 @@ func polymerItemToCard(item *polymerItem) (*Card, error) {
 	if item == nil || len(item.IDStr) == 0 {
 		return nil, ErrPolymerItemInvalid
 	}
+	// 动态流里的 opus 正文残缺（内嵌图被压成“[图片]”、内嵌视频没有链接），
+	// 先用详情接口补齐，后续的类型判断、正文与图片都吃这份完整数据。
+	item.enrichOpusContent()
 	author := item.author()
 	descType := polymerDescType(item)
 
