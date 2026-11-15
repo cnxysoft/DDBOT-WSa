@@ -73,6 +73,27 @@ func TestImageMergeAllSitesAndGlobalOverride(t *testing.T) {
 	assert.Equal(t, 1, count)
 	msg = mmsg.NewMSG().Append(mmsg.NewImage(nil, path), mmsg.NewImage(nil, path))
 	assert.Len(t, mergeRenderedImages("trigger.group.poke.tmpl", nil, msg).Elements(), 2)
+	// Dimension changes reach real rendering and invalidate cached compositions.
+	v.Set("xhs.imageMerge.maxWidth", 12)
+	v.Set("xhs.imageMerge.maxHeight", 24)
+	msg, err = LoadAndExec("notify.group.xhs.news.tmpl", map[string]interface{}{
+		"is_video": false, "name": "test", "title": "title", "desc": "desc", "pictures": images, "url": "https://example.invalid/note",
+	})
+	require.NoError(t, err)
+	count = 0
+	totalHeight := 0
+	for _, e := range msg.Elements() {
+		if img, ok := e.(*mmsg.ImageBytesElement); ok {
+			c, _, err := image.DecodeConfig(bytes.NewReader(img.Buf))
+			require.NoError(t, err)
+			assert.Equal(t, 12, c.Width)
+			assert.LessOrEqual(t, c.Height, 24)
+			totalHeight += c.Height
+			count++
+		}
+	}
+	assert.Equal(t, 3, count)
+	assert.Equal(t, 72, totalHeight)
 }
 
 func TestImplicitBilibiliOnlyProcessesLegacyGallery(t *testing.T) {

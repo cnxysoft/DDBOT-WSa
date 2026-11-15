@@ -406,6 +406,8 @@ concern:
 imageMerge:
   mode: inherit   # inherit / off / auto / only9 / always；显式值覆盖站点
   layout: inherit # inherit / grid（九宫格）/ long（纵向长图）；显式值覆盖站点
+  maxWidth: 0     # 0 继承；最终默认 1440；高级配置最大 29999，非零值覆盖站点
+  maxHeight: 0    # 0 继承；最终默认 16000；可按需调至 28000，最大 29999
 
 template:      # 是否启用模板功能，true 为启用，false 为禁用，默认为禁用
   enable: true # 需要了解模板请看模板文档

@@ -16,11 +16,16 @@ import (
 // MergeImageRuns processes a complete rendered message before sending. Text,
 // cuts, video and GIFs separate galleries; a failed gallery keeps its originals.
 // eligible may restrict the implicit legacy Bilibili policy to known URLs.
-func (m *MSG) MergeImageRuns(mode, layout string, eligible map[string]utils.ImageSize) *MSG {
+func (m *MSG) MergeImageRuns(mode, layout string, eligible map[string]utils.ImageSize, options ...utils.ImageMergeOptions) *MSG {
 	if m == nil || mode == "off" {
 		return m
 	}
 	result := NewMSG()
+	o := utils.ImageMergeOptions{Layout: layout}
+	if len(options) > 0 {
+		o = options[0]
+		o.Layout = layout
+	}
 	var run []*ImageBytesElement
 	flush := func() {
 		defer func() { run = nil }()
@@ -30,7 +35,7 @@ func (m *MSG) MergeImageRuns(mode, layout string, eligible map[string]utils.Imag
 			}
 			return
 		}
-		merged, err := mergeImageRun(run, mode, layout, eligible)
+		merged, err := mergeImageRun(run, mode, o, eligible)
 		if err != nil {
 			logger.WithError(err).Warn("image gallery merge failed; keeping original images")
 		}
@@ -92,7 +97,7 @@ func imageElementBytes(e *ImageBytesElement) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func mergeImageRun(run []*ImageBytesElement, mode, layout string, eligible map[string]utils.ImageSize) ([]adapter.IMessageElement, error) {
+func mergeImageRun(run []*ImageBytesElement, mode string, options utils.ImageMergeOptions, eligible map[string]utils.ImageSize) ([]adapter.IMessageElement, error) {
 	if mode == "auto" && len(run) <= 3 || mode == "only9" && len(run) < 9 {
 		return nil, nil
 	}
@@ -135,7 +140,7 @@ func mergeImageRun(run []*ImageBytesElement, mode, layout string, eligible map[s
 			end++
 		}
 		if utils.ShouldMergeImages(mode, sizes[start:end]) {
-			pages, err := composeGallery(data[start:end], layout)
+			pages, err := composeGallery(data[start:end], options)
 			if err != nil {
 				return nil, err
 			}

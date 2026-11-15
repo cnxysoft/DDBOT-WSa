@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
+	"math"
 
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/nfnt/resize"
@@ -18,6 +19,8 @@ const (
 	MergeImageWidth           = 1440
 	MergeImageMaxHeight       = 16000
 	MergeImageMaxPixels       = 24_000_000
+	MergeImageMaxDimension    = 29999
+	MergeImageHardMaxPixels   = 48_000_000
 	MergeImageMaxSourcePixels = 64_000_000
 )
 
@@ -85,19 +88,21 @@ func (o ImageMergeOptions) normalized() (ImageMergeOptions, error) {
 	if o.MaxBytes <= 0 || o.MaxBytes > adapter.QQImageOutputLimitBytes {
 		o.MaxBytes = adapter.QQImageOutputLimitBytes
 	}
-	if o.Width <= 0 || o.Width > MergeImageWidth {
+	if o.Width <= 0 {
 		o.Width = MergeImageWidth
 	}
-	if o.MaxHeight <= 0 || o.MaxHeight > MergeImageMaxHeight {
+	o.Width = min(o.Width, MergeImageMaxDimension)
+	if o.MaxHeight <= 0 {
 		o.MaxHeight = MergeImageMaxHeight
 	}
-	if o.MaxPixels <= 0 || o.MaxPixels > MergeImageMaxPixels {
+	o.MaxHeight = min(o.MaxHeight, MergeImageMaxDimension)
+	if o.MaxPixels <= 0 {
 		o.MaxPixels = MergeImageMaxPixels
+		if o.Width > MergeImageWidth || o.MaxHeight > MergeImageMaxHeight {
+			o.MaxPixels = MergeImageHardMaxPixels
+		}
 	}
-	o.MaxHeight = min(o.MaxHeight, o.MaxPixels/o.Width)
-	if o.MaxHeight < 1 {
-		return o, fmt.Errorf("image pixel budget too small")
-	}
+	o.MaxPixels = min(o.MaxPixels, MergeImageHardMaxPixels)
 	return o, nil
 }
 
@@ -148,15 +153,16 @@ func composeGridImages(images [][]byte, configs []image.Config, o ImageMergeOpti
 	for columns < 6 && columns*columns < len(images) {
 		columns++
 	}
-	cell := o.Width / columns
-	if cell < 1 || o.MaxHeight < cell {
+	cell := min(o.Width/columns, o.MaxHeight, int(math.Sqrt(float64(o.MaxPixels/columns))))
+	if cell < 1 {
 		return nil, fmt.Errorf("grid dimensions exceed image budget")
 	}
-	rowsPerPage := o.MaxHeight / cell
+	width := cell * columns
+	rowsPerPage := min(o.MaxHeight/cell, o.MaxPixels/(width*cell))
 	var result [][]byte
 	for start := 0; start < len(images); {
 		end := min(len(images), start+rowsPerPage*columns)
-		bg := whiteCanvas(o.Width, ((end-start+columns-1)/columns)*cell)
+		bg := whiteCanvas(width, ((end-start+columns-1)/columns)*cell)
 		for i := start; i < end; i++ {
 			src, _, err := image.Decode(bytes.NewReader(images[i]))
 			if err != nil {
@@ -185,6 +191,10 @@ func composeLongImages(images [][]byte, configs []image.Config, o ImageMergeOpti
 	for _, c := range configs {
 		width = max(width, min(o.Width, c.Width))
 	}
+	maxHeight := min(o.MaxHeight, o.MaxPixels/width)
+	if maxHeight < 1 {
+		return nil, fmt.Errorf("image pixel budget too small")
+	}
 	var result [][]byte
 	var bg *image.NRGBA
 	y := 0
@@ -210,9 +220,9 @@ func composeLongImages(images [][]byte, configs []image.Config, o ImageMergeOpti
 		h := max(1, int(int64(c.Height)*int64(w)/int64(c.Width)))
 		for offset := 0; offset < h; {
 			if bg == nil {
-				bg = whiteCanvas(width, o.MaxHeight)
+				bg = whiteCanvas(width, maxHeight)
 			}
-			take := min(h-offset, o.MaxHeight-y)
+			take := min(h-offset, maxHeight-y)
 			from := int(int64(offset) * int64(c.Height) / int64(h))
 			to := int(int64(offset+take) * int64(c.Height) / int64(h))
 			to = max(from+1, to)
@@ -221,7 +231,7 @@ func composeLongImages(images [][]byte, configs []image.Config, o ImageMergeOpti
 			draw.Draw(bg, image.Rect((width-w)/2, y, (width-w)/2+w, y+take), tile, tile.Bounds().Min, draw.Over)
 			y += take
 			offset += take
-			if y == o.MaxHeight {
+			if y == maxHeight {
 				if err := flush(); err != nil {
 					return nil, err
 				}

@@ -234,3 +234,43 @@ func TestGridByteAndPixelBudgets(t *testing.T) {
 	_, err = ComposeImages([][]byte{input}, ImageMergeOptions{MaxBytes: 1, Width: 8})
 	require.Error(t, err)
 }
+
+func TestImageMergeCustomDimensionsKeepHardBudgets(t *testing.T) {
+	defaults, err := (ImageMergeOptions{}).normalized()
+	require.NoError(t, err)
+	assert.Equal(t, 1440, defaults.Width)
+	assert.Equal(t, 16000, defaults.MaxHeight)
+	assert.Equal(t, 24_000_000, defaults.MaxPixels)
+	raised, err := (ImageMergeOptions{Width: 100000, MaxHeight: 100000, MaxBytes: 100_000_000}).normalized()
+	require.NoError(t, err)
+	assert.Equal(t, 29999, raised.Width)
+	assert.Equal(t, 29999, raised.MaxHeight)
+	assert.Equal(t, 48_000_000, raised.MaxPixels)
+	assert.Equal(t, adapter.QQImageOutputLimitBytes, raised.MaxBytes)
+	// A higher requested width must not reduce page height when actual sources
+	// are narrower; account for pixels using the width that will be rendered.
+	input := mergeTestPNG(t, 32, 9000, color.White, false)
+	pages, err := ComposeImages([][]byte{input, input}, ImageMergeOptions{
+		Layout: ImageLayoutLong, Width: 29999, MaxHeight: 28000,
+	})
+	require.NoError(t, err)
+	require.Len(t, pages, 1)
+	c, _, err := image.DecodeConfig(bytes.NewReader(pages[0]))
+	require.NoError(t, err)
+	assert.Equal(t, 32, c.Width)
+	assert.Equal(t, 18000, c.Height)
+	// Enforce the configured pixel budget in both layouts, even when it is
+	// smaller than a requested row or grid cell.
+	for _, layout := range []string{ImageLayoutLong, ImageLayoutGrid} {
+		pages, err := ComposeImages([][]byte{input, input}, ImageMergeOptions{
+			Layout: layout, Width: 2000, MaxHeight: 28000, MaxPixels: 4000,
+		})
+		require.NoError(t, err)
+		for _, page := range pages {
+			c, _, err := image.DecodeConfig(bytes.NewReader(page))
+			require.NoError(t, err)
+			assert.LessOrEqual(t, c.Width*c.Height, 4000)
+			assert.LessOrEqual(t, c.Height, 28000)
+		}
+	}
+}

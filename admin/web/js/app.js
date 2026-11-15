@@ -484,6 +484,12 @@ function normalizeImageMergeOption(value) {
   return normalized || 'inherit';
 }
 
+function normalizeImageMergeDimension(value) {
+  const text = String(value).trim();
+  const dimension = /^\+?\d+$/.test(text) ? Number(text) : NaN;
+  return Number.isInteger(dimension) && dimension >= 0 ? Math.min(dimension, 29999) : 0;
+}
+
 function imageMergeGroup(site) {
   const prefix = site ? site + '.imageMerge' : 'imageMerge';
   return { title: site ? '图片合并' : '图片合并（全局覆盖）', ...(site ? { site } : {}), fields: [
@@ -496,7 +502,15 @@ function imageMergeGroup(site) {
       options: ['inherit', 'grid', 'long'], normalize: normalizeImageMergeOption,
       optionLabels: { inherit: site ? '继承默认（九宫格）' : '按站点设置', grid: '九宫格', long: '长图' },
       hint: (site ? '全局布局优先；开启合并后生效。' : '与合并条件分别覆盖；开启合并后生效。') +
-        '九宫格裁成方形；长图保留完整内容，窄图居中且不放大，超限自动分页。每张产物小于30MB。' },
+        '九宫格裁成方形；长图保留完整内容，窄图居中且不放大，超限自动分页。每张小于30MB，官方通道还受5MiB直传预算约束。' },
+    { path: prefix + '.maxWidth', label: '最大宽度（高级）', type: 'number', def: 0, min: 0, max: 29999,
+      normalize: normalizeImageMergeDimension,
+      hint: (site ? '全局非零值优先。' : '非零值覆盖各站点。') +
+        '0为继承，最终默认1440像素；最大29999。长图不放大窄图，宽图按比例缩小。' },
+    { path: prefix + '.maxHeight', label: '每页最大高度（高级）', type: 'number', def: 0, min: 0, max: 29999,
+      normalize: normalizeImageMergeDimension,
+      hint: (site ? '全局非零值优先。' : '非零值覆盖各站点。') +
+        '0为继承，最终默认16000像素；可按需调到28000，最大29999。较大尺寸增加内存开销；每页仍受像素及30MB预算约束，可能提前分页。' },
   ]};
 }
 
@@ -750,6 +764,8 @@ function renderField(f) {
     input = document.createElement('input');
     input.type = f.type === 'number' ? 'number' : 'text';
     input.value = original !== undefined ? String(original) : (f.def ?? '');
+    if (f.min !== undefined) input.min = f.min;
+    if (f.max !== undefined) input.max = f.max;
   }
   input.className = 'input';
   input.dataset.path = f.path;
@@ -1339,6 +1355,9 @@ function collectPatchFromContainer(container) {
     } else if (f.type === 'number') {
       current = Number(el.value);
       baseline = original !== undefined ? Number(original) : f.def;
+      if (f.min !== undefined && (!Number.isInteger(current) || current < f.min || current > f.max)) {
+        throw new Error('「' + f.label + '」必须是' + f.min + '到' + f.max + '之间的整数');
+      }
     } else {
       current = el.value;
       baseline = original !== undefined ? String(original) : String(f.def ?? '');

@@ -314,7 +314,7 @@ func (m *Messenger) GetSelfID() int64 {
 }
 
 func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newstr string) SendResp {
-	if err := ValidateGeneratedImages(msg); err != nil {
+	if err := ValidateGeneratedImages(msg, m.GeneratedImageOutputLimitBytes()); err != nil {
 		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: err}
 	}
 	// 检查离线队列条件（账号在线且 WS 已连接）
@@ -397,7 +397,7 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 }
 
 func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr string) PrivateSendResp {
-	if err := ValidateGeneratedImages(msg); err != nil {
+	if err := ValidateGeneratedImages(msg, m.GeneratedImageOutputLimitBytes()); err != nil {
 		return PrivateSendResp{RetMSG: &PrivateMessage{ID: -1, UserID: target}, Error: err}
 	}
 	// 检查离线队列条件（账号在线且 WS 已连接）

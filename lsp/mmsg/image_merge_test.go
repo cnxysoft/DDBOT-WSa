@@ -89,7 +89,7 @@ func TestGalleryCacheSeparatesLayoutsAndConcurrentRenders(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
-			pages, err := composeGallery(data, "long")
+			pages, err := composeGallery(data, utils.ImageMergeOptions{Layout: "long"})
 			assert.NoError(t, err)
 			if len(pages) != 1 {
 				t.Errorf("unexpected page count %d", len(pages))
@@ -101,11 +101,23 @@ func TestGalleryCacheSeparatesLayoutsAndConcurrentRenders(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	grid, err := composeGallery(data, "grid")
+	grid, err := composeGallery(data, utils.ImageMergeOptions{Layout: "grid"})
 	require.NoError(t, err)
 	require.Len(t, grid, 1)
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(grid[0]))
 	require.NoError(t, err)
 	assert.Equal(t, 1440, cfg.Width)
 	assert.Equal(t, 720, cfg.Height)
+	// Changing dimensions must not reuse an image from the prior settings.
+	pages, err := composeGallery(data, utils.ImageMergeOptions{Layout: "long", Width: 16, MaxHeight: 20})
+	require.NoError(t, err)
+	require.Len(t, pages, 2)
+	for _, page := range pages {
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(page))
+		require.NoError(t, err)
+		assert.Equal(t, 16, cfg.Width)
+		assert.Equal(t, 20, cfg.Height)
+	}
+	_, err = composeGallery(data, utils.ImageMergeOptions{Layout: "long", MaxBytes: 1})
+	require.Error(t, err, "a smaller transport budget must not reuse a cached larger image")
 }

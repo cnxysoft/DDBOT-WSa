@@ -321,6 +321,8 @@ notify:
 imageMerge:     # 所有站点的通知图片合并；显式全局值覆盖站点相应选项
   mode: inherit   # inherit / off / auto / only9 / always
   layout: inherit # inherit / grid / long
+  maxWidth: 0     # 0 继承；最终默认 1440；最大 29999，非零值覆盖站点
+  maxHeight: 0    # 0 继承；最终默认 16000；可按需调至 28000，最大 29999
 
 template:       # 是否启用模板功能，true为启用，false为禁用，默认为禁用
   enable: false # 需要了解模板请看模板文档；关着时 template/*.tmpl 完全不加载（内置模板仍可用）

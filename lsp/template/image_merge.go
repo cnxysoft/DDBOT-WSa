@@ -43,7 +43,7 @@ func prepareLegacyImageMerge(name string, data interface{}) (interface{}, []byte
 	for _, uri := range d.ImageMergeURLs() {
 		msg.Append(mmsg.NewImage(nil, uri))
 	}
-	elems := msg.MergeImageRuns(c.Mode, c.Layout, d.ImageMergeGallery()).Elements()
+	elems := msg.MergeImageRuns(c.Mode, c.Layout, d.ImageMergeGallery(), c.Options()).Elements()
 	if len(elems) != 1 {
 		return data, nil
 	}
@@ -99,5 +99,5 @@ func mergeRenderedImages(name string, data interface{}, msg *mmsg.MSG) *mmsg.MSG
 			return msg
 		}
 	}
-	return msg.MergeImageRuns(c.Mode, c.Layout, eligible)
+	return msg.MergeImageRuns(c.Mode, c.Layout, eligible, c.Options())
 }

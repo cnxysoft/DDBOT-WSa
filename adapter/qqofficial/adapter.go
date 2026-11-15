@@ -3420,6 +3420,12 @@ func (a *QQOfficialAdapter) learnSelfMember(groupOpenID, memberOpenID, memberRol
 // GetAdapterName 返回 adapter 名。
 func (a *QQOfficialAdapter) GetAdapterName() string { return AdapterName }
 
+// Generated images use file_data, whose existing direct-upload limit is
+// inclusive. Shared composition and validation use an exclusive budget.
+func (a *QQOfficialAdapter) GeneratedImageOutputLimitBytes() int {
+	return MaxMediaDirectUploadBytes + 1
+}
+
 // IsConnected 报告网关是否在线。
 func (a *QQOfficialAdapter) IsConnected() bool {
 	if a == nil || a.gateway == nil {
