@@ -151,6 +151,65 @@ func TestEncodedByteBudgetSplitsLongPages(t *testing.T) {
 	assert.Equal(t, 600, height)
 }
 
+func TestLongMixedDimensionsPreserveScalePaddingAndPageOrder(t *testing.T) {
+	wide := image.NewNRGBA(image.Rect(0, 0, 240, 80))
+	for i, c := range []color.Color{
+		color.NRGBA{255, 0, 0, 255}, color.NRGBA{0, 255, 0, 255}, color.NRGBA{0, 0, 255, 255},
+	} {
+		draw.Draw(wide, image.Rect(i*80, 0, (i+1)*80, 80), &image.Uniform{C: c}, image.Point{}, draw.Src)
+	}
+	var encoded bytes.Buffer
+	require.NoError(t, png.Encode(&encoded, wide))
+	narrow := mergeTestPNG(t, 32, 96, color.NRGBA{255, 0, 0, 255}, false)
+	portrait := mergeTestPNG(t, 64, 200, color.NRGBA{0, 0, 255, 255}, false)
+	pages, err := ComposeImages([][]byte{encoded.Bytes(), narrow, portrait}, ImageMergeOptions{
+		Layout: ImageLayoutLong, Width: 120, MaxHeight: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, pages, 4)
+	var decoded []image.Image
+	totalHeight := 0
+	for i, page := range pages {
+		img, err := jpeg.Decode(bytes.NewReader(page))
+		require.NoError(t, err)
+		wantHeight := 100
+		if i == 3 {
+			wantHeight = 36
+		}
+		assert.Equal(t, image.Rect(0, 0, 120, wantHeight), img.Bounds())
+		assert.Less(t, len(page), adapter.QQImageOutputLimitBytes)
+		decoded = append(decoded, img)
+		totalHeight += img.Bounds().Dy()
+	}
+	// Only the wide source shrinks (240x80 -> 120x40). Narrow sources retain
+	// their width and height, centered on white, including across page cuts.
+	assert.Equal(t, 40+96+200, totalHeight)
+	assertRGB := func(x, y int, want color.NRGBA) {
+		t.Helper()
+		r, g, b, _ := decoded[y/100].At(x, y%100).RGBA()
+		assert.InDelta(t, want.R, r>>8, 8, "red at (%d,%d)", x, y)
+		assert.InDelta(t, want.G, g>>8, 8, "green at (%d,%d)", x, y)
+		assert.InDelta(t, want.B, b>>8, 8, "blue at (%d,%d)", x, y)
+	}
+	for _, y := range []int{8, 32} {
+		assertRGB(8, y, color.NRGBA{255, 0, 0, 255})
+		assertRGB(60, y, color.NRGBA{0, 255, 0, 255})
+		assertRGB(111, y, color.NRGBA{0, 0, 255, 255})
+	}
+	for _, y := range []int{48, 96, 104, 128} {
+		assertRGB(40, y, color.NRGBA{255, 255, 255, 255})
+		assertRGB(48, y, color.NRGBA{255, 0, 0, 255})
+		assertRGB(71, y, color.NRGBA{255, 0, 0, 255})
+		assertRGB(80, y, color.NRGBA{255, 255, 255, 255})
+	}
+	for _, y := range []int{144, 192, 208, 296, 304, 328} {
+		assertRGB(20, y, color.NRGBA{255, 255, 255, 255})
+		assertRGB(36, y, color.NRGBA{0, 0, 255, 255})
+		assertRGB(84, y, color.NRGBA{0, 0, 255, 255})
+		assertRGB(100, y, color.NRGBA{255, 255, 255, 255})
+	}
+}
+
 func TestGridByteAndPixelBudgets(t *testing.T) {
 	input := mergeTestPNG(t, 64, 64, color.White, true)
 	pages, err := ComposeImages([][]byte{input, input, input, input}, ImageMergeOptions{MaxBytes: 2000, Width: 128})

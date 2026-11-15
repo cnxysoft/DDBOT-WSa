@@ -477,6 +477,29 @@ let advBase = null;
 /* 字段类型：text / number / bool(toggle) / select / credential(只读状态)。
  * 凭据类字段（cookie/token/password）后端 API 禁止修改（防 token 泄露后篡改凭据），
  * 因此只展示配置状态，引导用户在 application.yaml 中修改。 */
+function normalizeImageMergeOption(value) {
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'false') return 'off';
+  if (normalized === 'true') return 'always';
+  return normalized || 'inherit';
+}
+
+function imageMergeGroup(site) {
+  const prefix = site ? site + '.imageMerge' : 'imageMerge';
+  return { title: site ? '图片合并' : '图片合并（全局覆盖）', ...(site ? { site } : {}), fields: [
+    { path: prefix + '.mode', label: '合并条件', type: 'select', def: 'inherit',
+      options: ['inherit', 'off', 'auto', 'only9', 'always'], normalize: normalizeImageMergeOption,
+      optionLabels: { inherit: site ? '继承默认' : '按站点设置', off: '关闭', auto: '自动判断', only9: '仅九张', always: '两张起合并' },
+      hint: site ? '全局合并条件优先。继承默认时，B站沿用旧版合并设置，其他站点关闭。自动判断沿用B站规则。' :
+        '默认按站点设置；选择其他值将覆盖所有站点的合并条件。自动判断沿用B站规则。原始单图和GIF保持原有行为。' },
+    { path: prefix + '.layout', label: '合并布局', type: 'select', def: 'inherit',
+      options: ['inherit', 'grid', 'long'], normalize: normalizeImageMergeOption,
+      optionLabels: { inherit: site ? '继承默认（九宫格）' : '按站点设置', grid: '九宫格', long: '长图' },
+      hint: (site ? '全局布局优先；开启合并后生效。' : '与合并条件分别覆盖；开启合并后生效。') +
+        '九宫格裁成方形；长图保留完整内容，窄图居中且不放大，超限自动分页。每张产物小于30MB。' },
+  ]};
+}
+
 const CONFIG_SCHEMA = [
   { id: 'basic', label: '基础', groups: [
     { title: 'Bot 行为', fields: [
@@ -493,6 +516,7 @@ const CONFIG_SCHEMA = [
       { path: 'notify.parallel', label: '并行推送数量', type: 'number', def: 1 },
       { path: 'dispatch.largeNotifyLimit', label: '大通知分段阈值', type: 'number', def: 50 },
     ]},
+    imageMergeGroup(),
   ]},
   { id: 'network', label: '网络', groups: [
     { title: 'OneBot WebSocket', fields: [
@@ -517,7 +541,8 @@ const CONFIG_SCHEMA = [
     { title: '轮询与推送', site: 'bilibili', fields: [
       { path: 'bilibili.interval', label: '检测间隔', type: 'text', def: '25s' },
       { path: 'bilibili.onlyOnlineNotify', label: '仅推送在线期间更新', type: 'bool', def: false },
-      { path: 'bilibili.imageMergeMode', label: '图片合并模式', type: 'select', options: ['auto','only9','off'], def: 'auto' },
+      { path: 'bilibili.imageMergeMode', label: '旧版图片合并模式', type: 'select', options: ['auto','only9','always','off','inherit'], def: 'auto',
+        normalize: normalizeImageMergeOption, hint: '兼容已有配置；仅在全局及B站新的合并条件均为继承时生效。' },
       { path: 'bilibili.autoParsePosts', label: '自动解析专栏', type: 'bool', def: false },
       { path: 'bilibili.secAnalysis', label: '动态二次解析', type: 'bool', def: false },
     ]},
@@ -610,6 +635,7 @@ const CONFIG_SCHEMA = [
     { title: 'YouTube', site: 'youtube', fields: [
       { path: 'youtube.onlyOnlineNotify', label: '仅推送在线期间更新', type: 'bool', def: true },
     ]},
+    ...SITES.map(imageMergeGroup),
   ]},
   { id: 'system', label: '系统', groups: [
     { title: '日志', fields: [
@@ -651,6 +677,11 @@ function setPath(obj, path, val) {
   cur[keys[keys.length - 1]] = val;
 }
 
+function configFieldValue(f) {
+  const original = getPath(configCache, f.path);
+  return original !== undefined && f.normalize ? f.normalize(original) : original;
+}
+
 function renderField(f) {
   const row = document.createElement('div');
   // set-row：一条一项的设置行——左侧标签列（含 hint），右侧控件列，行间分隔线
@@ -660,7 +691,7 @@ function renderField(f) {
   // 把扫码登录关掉，字段就回来。
   if (f.qrLoginOf && getPath(configCache, f.qrLoginOf + '.qrlogin') === true) return null;
 
-  const original = getPath(configCache, f.path);
+  const original = configFieldValue(f);
   const hintHTML = f.hint ? `<div class="field-hint">${esc(f.hint)}</div>` : '';
   const labelCol = `<div class="label-col"><label>${esc(f.label)}</label>${hintHTML}</div>`;
 
@@ -710,7 +741,8 @@ function renderField(f) {
     input = document.createElement('select');
     for (const o of f.options) {
       const op = document.createElement('option');
-      op.value = op.textContent = o;
+      op.value = o;
+      op.textContent = f.optionLabels?.[o] ?? o;
       input.appendChild(op);
     }
     input.value = original !== undefined ? String(original) : f.def;
@@ -1279,7 +1311,7 @@ function collectPatchFromContainer(container) {
     const path = el.dataset.path;
     const f = SCHEMA_FIELDS[path];
     if (!f) return;
-    const original = getPath(configCache, path);
+    const original = configFieldValue(f);
     if (f.type === 'jsonmap') {
       if (el.value === el.dataset.jsonmapOriginal) return;
       let obj;
