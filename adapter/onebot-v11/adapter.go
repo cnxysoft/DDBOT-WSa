@@ -155,6 +155,10 @@ func (a *OneBotAdapter) GetAdapterName() string {
 	return "onebot-v11"
 }
 
+func (a *OneBotAdapter) MaxMessagePayloadBytes() int {
+	return adapter.MaxOneBotPayloadBytes
+}
+
 func (a *OneBotAdapter) GetSelfID() int64 {
 	return a.selfID.Load()
 }

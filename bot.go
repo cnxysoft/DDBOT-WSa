@@ -239,7 +239,7 @@ bilibili:
   bili_jct: # 你的 b 站 cookie
   qrlogin: true # 是否启用二维码登录（Cookies 失效时只需要清空 SESSDATA 和 bili_jct 重启即可再次登录）
   interval: 25s # 直播状态和动态检测间隔，过快可能导致 ip 被暂时封禁
-  imageMergeMode: "auto" # 设置图片合并模式，支持 "auto" / "only9" / "off"
+  imageMergeMode: "auto" # 兼容旧配置；新配置使用 imageMerge.mode
                           # auto 为默认策略，存在比较刷屏的图片时会合并
                           # only9 表示仅当恰好是 9 张图片的时候合并
                           # off 表示不合并
@@ -400,6 +400,12 @@ heybox:
 
 concern:
   emitInterval: 5s
+
+# 所有站点的通知图片合并；inherit 保留站点设置与原有默认行为。
+# 每个站点都可在自身配置段添加 imageMerge: {mode: always, layout: long}。
+imageMerge:
+  mode: inherit   # inherit / off / auto / only9 / always；显式值覆盖站点
+  layout: inherit # inherit / grid（九宫格）/ long（纵向长图）；显式值覆盖站点
 
 template:      # 是否启用模板功能，true 为启用，false 为禁用，默认为禁用
   enable: true # 需要了解模板请看模板文档

@@ -13,7 +13,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
 )
 
@@ -364,87 +363,6 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 	return notify.GroupCode
 }
 
-// combineImageCache 是给combineImage用的cache，其他地方禁止使用
-var combineImageCache = blockCache.NewBlockCache(5, 3)
-
-var mode = "auto"
-var modeSync sync.Once
-
-func shouldCombineImage(pic []*CardWithImage_Item_Picture) bool {
-	modeSync.Do(func() {
-		if config.GlobalConfig == nil {
-			return
-		}
-		switch config.GlobalConfig.GetString("bilibili.imageMergeMode") {
-		case "auto":
-			mode = "auto"
-		case "off", "false":
-			mode = "off"
-		case "only9":
-			mode = "only9"
-		default:
-			mode = "auto"
-		}
-	})
-	if mode == "off" {
-		return false
-	} else if mode == "only9" {
-		return len(pic) == 9
-	}
-	if len(pic) <= 3 {
-		return false
-	}
-	if len(pic) == 9 {
-		return true
-	}
-	// 有竖条形状的图
-	for _, i := range pic {
-		if i.ImgWidth > 250 && float64(i.ImgHeight) > 3*float64(i.ImgWidth) {
-			return true
-		}
-	}
-	// 有超过一半的近似矩形图片尺寸一样
-	var size = make(map[int64]int)
-	for _, i := range pic {
-		var gap float64
-		if i.ImgHeight < i.ImgWidth {
-			gap = float64(i.ImgHeight) / float64(i.ImgWidth)
-		} else {
-			gap = float64(i.ImgWidth) / float64(i.ImgHeight)
-		}
-		if gap >= 0.95 {
-			size[int64(i.ImgWidth)*int64(i.ImgHeight)] += 1
-		}
-	}
-	var sizeMerge bool
-	for _, count := range size {
-		if 2*count > len(pic) {
-			sizeMerge = true
-		}
-	}
-	if sizeMerge && (len(pic) == 4 || len(pic) == 6 || len(pic) == 9) {
-		return true
-	}
-	return false
-}
-
-func urlsMergeImage(urls []string) (result []byte, err error) {
-	cacheR := combineImageCache.WithCacheDo(strings.Join(urls, "+"), func() blockCache.ActionResult {
-		var imgBytes = make([][]byte, len(urls))
-		for index, url := range urls {
-			imgBytes[index], err = localutils.ImageGet(url)
-			if err != nil {
-				return blockCache.NewResultWrapper(nil, err)
-			}
-		}
-		return blockCache.NewResultWrapper(localutils.MergeImages(imgBytes))
-	})
-	if cacheR.Err() != nil {
-		return nil, cacheR.Err()
-	}
-	return cacheR.Result().([]byte), nil
-}
-
 type CacheCard struct {
 	*Card
 	GroupCode   int64
@@ -458,6 +376,14 @@ type CacheCard struct {
 	// 但没能从数据库取到可回复的原消息。
 	// 用于让模板区分「首次推送」与「应压缩却查不到原消息」两种 orgMsg == nil 的情况。
 	compactMiss bool
+}
+
+func imageGallerySizes(pictures []*CardWithImage_Item_Picture) map[string]localutils.ImageSize {
+	sizes := make(map[string]localutils.ImageSize, len(pictures))
+	for _, pic := range pictures {
+		sizes[pic.GetImgSrc()] = localutils.ImageSize{Width: int(pic.GetImgWidth()), Height: int(pic.GetImgHeight())}
+	}
+	return sizes
 }
 
 func NewCacheCard(card *Card) *CacheCard {
@@ -500,9 +426,10 @@ type DynamicInfo struct {
 	} `json:"origin_user,omitempty"`
 
 	Image struct {
-		ImageUrls   []string `json:"image_urls,omitempty"`
-		Bytes       []byte   `json:"-"`
-		Description string   `json:"description,omitempty"`
+		ImageUrls   []string                        `json:"image_urls,omitempty"`
+		Sizes       map[string]localutils.ImageSize `json:"-"`
+		Bytes       []byte                          `json:"-"`
+		Description string                          `json:"description,omitempty"`
 	} `json:"image,omitempty"`
 
 	Text struct {
@@ -566,6 +493,17 @@ type DynamicInfo struct {
 	} `json:"default,omitempty"`
 
 	Addons []Addon `json:"addons,omitempty"`
+}
+
+func (d DynamicInfo) ImageMergeGallery() map[string]localutils.ImageSize {
+	return d.Image.Sizes
+}
+
+func (d DynamicInfo) ImageMergeURLs() []string { return d.Image.ImageUrls }
+
+func (d DynamicInfo) WithMergedImage(data []byte) interface{} {
+	d.Image.Bytes = data
+	return d
 }
 
 type Addon struct {
@@ -811,19 +749,7 @@ func (c *CacheCard) prepare() {
 				urls[index] = pic.GetImgSrc()
 			}
 			c.dynamic.Image.ImageUrls = urls
-			// 多图合一
-			if shouldCombineImage(origin.GetItem().GetPictures()) {
-				var urls = make([]string, len(origin.GetItem().GetPictures()))
-				for index, pic := range origin.GetItem().GetPictures() {
-					urls[index] = pic.GetImgSrc()
-				}
-				resultByte, err := urlsMergeImage(urls)
-				if err != nil {
-					log.Errorf("urlsMergeImage failed %v", err)
-				} else {
-					c.dynamic.Image.Bytes = resultByte
-				}
-			}
+			c.dynamic.Image.Sizes = imageGallerySizes(origin.GetItem().GetPictures())
 		case DynamicDescType_TextOnly:
 			c.dynamic.Type = DynamicDescType_TextOnly
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
@@ -1018,19 +944,7 @@ func (c *CacheCard) prepare() {
 			urls[index] = pic.GetImgSrc()
 		}
 		c.dynamic.Image.ImageUrls = urls
-		// 多图合一
-		if shouldCombineImage(cardImage.GetItem().GetPictures()) {
-			var urls = make([]string, len(cardImage.GetItem().GetPictures()))
-			for index, pic := range cardImage.GetItem().GetPictures() {
-				urls[index] = pic.GetImgSrc()
-			}
-			resultByte, err := urlsMergeImage(urls)
-			if err != nil {
-				log.Errorf("urlsMergeImage failed %v", err)
-			} else {
-				c.dynamic.Image.Bytes = resultByte
-			}
-		}
+		c.dynamic.Image.Sizes = imageGallerySizes(cardImage.GetItem().GetPictures())
 	case DynamicDescType_TextOnly:
 		c.dynamic.Type = DynamicDescType_TextOnly
 		cardText, err := card.GetCardTextOnly()

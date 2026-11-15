@@ -680,6 +680,10 @@ func (c *WSClient) SendAndWait(action string, params map[string]any, timeout tim
 }
 
 func (c *WSClient) SendRawData(data []byte) error {
+	if c.mode == "onebot-v11" && len(data) > MaxOneBotPayloadBytes {
+		return fmt.Errorf("%w: OneBot payload is %d bytes, exceeds %d-byte WebSocket limit",
+			ErrRequestRejected, len(data), MaxOneBotPayloadBytes)
+	}
 	c.mu.RLock()
 	if isDebugLoggingEnabled() {
 		wsLogger.Debugf(">>> mu.RLock() #%d  caller=%s  [SendRawData]", nextLockSeq(), getCallerFuncName(2))

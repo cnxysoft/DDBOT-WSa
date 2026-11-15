@@ -64,6 +64,8 @@ func (s *TextSegment) ToSendingMessage() *SendingMessage {
 type ImageSegment struct {
 	File string // file path, url, or base64://...
 	Url  string
+	// Generated images carry a local-only flag for pre-send budget validation.
+	Generated bool `json:"-"`
 }
 
 func (s *ImageSegment) Type() ElementType { return ElementTypeImage }

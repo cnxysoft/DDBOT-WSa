@@ -553,7 +553,7 @@ func imageBytesFromTemplateInput(input interface{}, oParams ...map[string]interf
 	}
 }
 
-func mergeTemplateImageInputs(inputs []interface{}, oParams ...map[string]interface{}) ([]byte, error) {
+func mergeTemplateImageInputs(inputs []interface{}, oParams ...map[string]interface{}) (*mmsg.ImageBytesElement, error) {
 	if len(inputs) == 0 {
 		return nil, fmt.Errorf("empty image list")
 	}
@@ -570,13 +570,17 @@ func mergeTemplateImageInputs(inputs []interface{}, oParams ...map[string]interf
 	case 0:
 		return nil, fmt.Errorf("no valid image in list")
 	case 1:
-		return images[0], nil
+		return mmsg.NewImage(images[0]), nil
 	default:
-		return localutils.MergeImages(images)
+		b, err := localutils.MergeImages(images)
+		if err != nil {
+			return nil, err
+		}
+		return mmsg.NewMergedImage(b), nil
 	}
 }
 
-func mergeTemplateImageList(input interface{}, oParams ...map[string]interface{}) ([]byte, error) {
+func mergeTemplateImageList(input interface{}, oParams ...map[string]interface{}) (*mmsg.ImageBytesElement, error) {
 	switch v := input.(type) {
 	case []string:
 		items := make([]interface{}, len(v))
@@ -600,23 +604,23 @@ func mergeTemplateImageList(input interface{}, oParams ...map[string]interface{}
 func picmx(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
 	alt, params := parsePicArgs(args)
 	merged := withLocalFetchAndDefaultProxy(params...)
-	b, err := mergeTemplateImageList(input, merged...)
+	img, err := mergeTemplateImageList(input, merged...)
 	if err != nil {
 		logger.Errorf("template: picmx merge failed %v", err)
 		return mmsg.NewImage(nil).Alternative(alt)
 	}
-	return mmsg.NewImage(b).Alternative(alt)
+	return img.Alternative(alt)
 }
 
 func picm(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {
 	alt, params := parsePicArgs(args)
 	merged := mergePicParams(params...)
-	b, err := mergeTemplateImageList(input, merged...)
+	img, err := mergeTemplateImageList(input, merged...)
 	if err != nil {
 		logger.Errorf("template: picm merge failed %v", err)
 		return mmsg.NewImage(nil).Alternative(alt)
 	}
-	return mmsg.NewImage(b).Alternative(alt)
+	return img.Alternative(alt)
 }
 
 func picx(input interface{}, args ...interface{}) *mmsg.ImageBytesElement {

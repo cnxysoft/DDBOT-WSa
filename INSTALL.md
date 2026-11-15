@@ -236,7 +236,7 @@ bilibili:
   password: # 你的b站密码 （目前不可用）
   qrlogin: true # 是否启用二维码登录，Cookies失效时只需要清空SESSDATA和bili_jct重启即可再次登录
   interval: 25s # 直播状态和动态检测间隔，过快可能导致ip被暂时封禁
-  imageMergeMode: "auto" # 设置图片合并模式，支持 "auto" / "only9" / "off"
+  imageMergeMode: "auto" # 兼容旧配置；推荐使用下方共享 imageMerge 配置
                          # auto 为默认策略，存在比较刷屏的图片时会合并
                          # only9 表示仅当恰好是9张图片的时候合并
                          # off 表示不合并
@@ -317,6 +317,10 @@ dispatch:
   largeNotifyLimit: 50 # 巨量推送的判定配置，默认为50，当大于这个配置时，将增大推送延迟保证账号稳定
 notify:
   parallel: 1          # 增加推送消息的并发配置，默认为1以优先保证账号稳定，当出现推送堆积的时候可以尝试调高
+
+imageMerge:     # 所有站点的通知图片合并；显式全局值覆盖站点相应选项
+  mode: inherit   # inherit / off / auto / only9 / always
+  layout: inherit # inherit / grid / long
 
 template:       # 是否启用模板功能，true为启用，false为禁用，默认为禁用
   enable: false # 需要了解模板请看模板文档；关着时 template/*.tmpl 完全不加载（内置模板仍可用）

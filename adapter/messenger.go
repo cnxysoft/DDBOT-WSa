@@ -314,6 +314,9 @@ func (m *Messenger) GetSelfID() int64 {
 }
 
 func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newstr string) SendResp {
+	if err := ValidateGeneratedImages(msg); err != nil {
+		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: err}
+	}
 	// 检查离线队列条件（账号在线且 WS 已连接）
 	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存消息: %s", sliceMessage(newstr))
@@ -394,6 +397,9 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 }
 
 func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr string) PrivateSendResp {
+	if err := ValidateGeneratedImages(msg); err != nil {
+		return PrivateSendResp{RetMSG: &PrivateMessage{ID: -1, UserID: target}, Error: err}
+	}
 	// 检查离线队列条件（账号在线且 WS 已连接）
 	if getOfflineQueueEnable() && !m.isConnected() {
 		messengerLogger.Warnf("BOT已离线，已开启离线缓存，将暂存私聊消息: %s", sliceMessage(newstr))
@@ -726,6 +732,7 @@ func splitTextSmartWithLimit(text string, limit int) textSplitPart {
 // 2. 图片不超过 MaxImageCount (20)
 // 3. 独立类型(video/file/record/forward)必须单独发送
 // 4. 可组合类型尽量组合，直到超过限制才分片
+// 5. 声明传输载荷上限的适配器按 JSON 实际字节数继续分片
 func (m *Messenger) buildMessageChunks(msg *SendingMessage) [][]MessageSegment {
 	segments := m.buildMessageSegments(msg)
 
@@ -815,6 +822,9 @@ func (m *Messenger) buildMessageChunks(msg *SendingMessage) [][]MessageSegment {
 	}
 
 	flush()
+	if limiter, ok := m.Adapter.(MessagePayloadLimiter); ok {
+		return splitChunksByPayload(chunks, limiter.MaxMessagePayloadBytes()-messagePayloadEnvelopeBytes)
+	}
 	return chunks
 }
 

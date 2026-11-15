@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -1725,7 +1726,7 @@ func (a *SatoriAdapter) renderMessageContent(segments []adapter.MessageSegment) 
 func parseAttrs(raw string) map[string]string {
 	result := map[string]string{}
 	for _, match := range attrPattern.FindAllStringSubmatch(raw, -1) {
-		result[match[1]] = match[2]
+		result[match[1]] = html.UnescapeString(match[2])
 	}
 	return result
 }

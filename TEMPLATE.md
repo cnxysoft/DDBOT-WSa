@@ -2084,6 +2084,38 @@ ACFUN-{{ .name }}直播结束了
 - `proxyOversea`
   - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_oversea")`
 
+通知模板（`notify.group.<站点>.*.tmpl`，私聊同理）支持共享图片合并配置；自定义覆盖模板也走同一入口：
+
+```yaml
+# 全局默认继承；任一选项显式设置后，覆盖所有站点的相应选项。
+imageMerge:
+  mode: inherit
+  layout: inherit
+
+# 示例：只为微博开启长图，其他站点保留原有行为。
+weibo:
+  imageMerge:
+    mode: always
+    layout: long
+```
+
+`mode` 支持 `off`（关闭）、`auto`（原 B 站自动判断规则）、`only9`（恰好九张）、
+`always`（两张起合并）和 `inherit`（继承默认值）；`layout` 支持 `grid`（原九宫格裁剪排版）、
+`long`（按顺序纵向排列，不裁掉内容）和 `inherit`。两项分别按“全局显式值 > 站点显式值 > 默认值”解析。
+B 站默认仍仅对原动态图片组应用 `auto/grid`，兼容 `bilibili.imageMergeMode`；其他站点默认关闭。
+新配置位于站点段的 `imageMerge.mode/layout`；它优先于 B 站旧键。配置重载影响后续新渲染的通知。
+
+自动合并只处理连续图片组；文本、视频、`cut` 等元素以及 GIF 分隔图片组，保持消息顺序。
+原始单图和 GIF 不重编码。启用合并时，DDBOT 需要先下载图片；加载、解码或合并失败会记录日志并保留原图片组。
+已经使用 `picm` / `picmx` 显式拼接的图片不会再参与自动合并。
+
+合并产物逐张检查实际 JPEG 大小，严格小于 30,000,000 字节。
+长图宽度最多 1440，高度最多 16000，单页最多 2400 万像素；这是本项目的处理预算，
+不是 QQ 官方分辨率上限。长图超出高度、像素或编码字节预算会自动拆成多张，保持顺序；
+编码先尝试质量 100，再尝试 90。九宫格保留原排版，超限时分页或降低分辨率。
+源图超过 6400 万像素时放弃该组自动合并，沿用原图投递。
+QQ 单图字节预算与 OneBot JSON/Base64 的传输预算分别处理；不会在发送结果不明时重试拼接投递。
+
 当前约定如下：
 
 - `pic`
@@ -2100,6 +2132,7 @@ ACFUN-{{ .name }}直播结束了
   - 是 `picm` 的境外资源便捷版
   - 默认自动补 `DDBOT_REQ_FETCH=local`
   - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+  - `picm` / `picmx` 保持显式单张九宫格接口；超大图集需要多页时返回失败，避免丢失后续图片
 - `video` / `record` / `file`
   - 默认保持原有行为，远程 URL 直接交给 QQBOT 下载
   - 如果显式传入 `DDBOT_REQ_FETCH=local`，则切换为“DDBOT 先下载再发送”

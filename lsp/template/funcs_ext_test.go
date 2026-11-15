@@ -284,6 +284,12 @@ func TestPicmFuncs_MergeImageList(t *testing.T) {
 	}, "merged", proxyNone())
 	assert.NotNil(t, e)
 	assert.NotEmpty(t, e.Buf)
+	assert.True(t, e.IsMerged())
+	// A partial load leaving only one valid source retains the original media
+	// behavior, including GIFs, rather than labeling it as a generated JPEG.
+	e = picm([]interface{}{[]byte("GIF89a"), make(chan int)})
+	assert.Equal(t, []byte("GIF89a"), e.Buf)
+	assert.False(t, e.IsMerged())
 }
 
 func TestVideoFuncs(t *testing.T) {

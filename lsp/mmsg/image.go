@@ -14,6 +14,7 @@ type ImageBytesElement struct {
 	Url         string
 	Buf         []byte
 	alternative string
+	merged      bool
 }
 
 func NewImage(buf []byte, url ...any) *ImageBytesElement {
@@ -26,6 +27,14 @@ func NewImage(buf []byte, url ...any) *ImageBytesElement {
 	}
 	return v
 }
+
+func NewMergedImage(buf []byte) *ImageBytesElement {
+	i := NewImage(buf)
+	i.merged = true
+	return i
+}
+
+func (i *ImageBytesElement) IsMerged() bool { return i != nil && i.merged }
 
 // NewImageByUrl 默认会对相同的url使用缓存
 func NewImageByUrl(url string, opts ...requests.Option) *ImageBytesElement {
@@ -122,7 +131,7 @@ func (i *ImageBytesElement) ToSendingMessage() *adapter.SendingMessage {
 }
 
 func (i *ImageBytesElement) PackToElement(target Target) adapter.IMessageElement {
-	m := &adapter.ImageSegment{}
+	m := &adapter.ImageSegment{Generated: i != nil && i.merged}
 	if i == nil {
 		return &adapter.TextSegment{Content: "[空图片]\n"}
 	} else if i.Url != "" {

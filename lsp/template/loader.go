@@ -173,11 +173,12 @@ func LoadAndExec(name string, data interface{}) (*mmsg.MSG, error) {
 	if t == nil {
 		return nil, fmt.Errorf("<!missing template %v>", name)
 	}
+	data, preparedImage := prepareLegacyImageMerge(name, data)
 	if err := t.Execute(m, data); err != nil {
 		logger.WithField("data", data).Errorf("template: %v execute error: %v", name, err)
 		return nil, err
 	}
-	return m, nil
+	return mergeRenderedImages(name, data, markPreparedImage(m, preparedImage)), nil
 }
 
 var templateDB *buntdb.DB
