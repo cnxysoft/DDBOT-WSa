@@ -95,15 +95,16 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
 
-	var fileMode os.FileMode = 0600 // 文件不存在时沿用旧行为
-	if info, err := os.Stat(cfgPath); err == nil {
-		fileMode = info.Mode() // 保留原文件权限
-	}
-
 	existing := make(map[string]interface{})
-	var oldData []byte
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		oldData = data
+	version, err := cfg.ReadConfigFileVersion(cfgPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取现有配置失败")
+		return
+	}
+	var fileMode os.FileMode = 0600
+	if version.Exists() {
+		fileMode = version.Mode()
+		data := version.Bytes()
 		if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
 			// 解析失败时 existing 停在空 map，向导照常写白名单键 = 把用户原有配置清空。
 			// 宁可拒绝写入，让用户先修好 YAML。
@@ -117,10 +118,6 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
 			return
 		}
-	} else if !os.IsNotExist(err) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "读取现有配置失败: " + err.Error()})
-		return
 	}
 	if existing == nil {
 		// 同 handleConfig：空内容 / 纯注释 / 字面 null 会被解析成 nil map，
@@ -174,16 +171,13 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
 		return
 	}
-	if len(oldData) > 0 {
-		if err := os.WriteFile(cfgPath+".bak", oldData, fileMode); err != nil {
-			logrus.Warnf("配置备份失败: %v", err)
-		}
-	}
 	if err := config.GlobalConfig.Save(data, func() error {
-		return writeFileAtomic(cfgPath, data, fileMode)
+		return version.Persist(data, fileMode, true)
 	}); err != nil {
 		var prepareErr *config.PrepareError
-		if errors.As(err, &prepareErr) {
+		if errors.Is(err, cfg.ErrConfigConflict) {
+			writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
+		} else if errors.As(err, &prepareErr) {
 			writeErr(w, http.StatusBadRequest, prepareErr.Error())
 		} else {
 			writeErr(w, http.StatusInternalServerError, "Failed to write config file")

@@ -15,10 +15,11 @@ function fixture() {
     if (!nodes.has(selector)) {
       const classes = new Set(['hidden']);
       nodes.set(selector, {
-        style: {}, value: '', innerHTML: '', textContent: '', focus() {},
+        style: {}, dataset: {}, value: '', innerHTML: '', textContent: '', focus() {},
         classList: {
           add: (name) => classes.add(name), remove: (name) => classes.delete(name),
           contains: (name) => classes.has(name),
+          toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
         },
       });
     }

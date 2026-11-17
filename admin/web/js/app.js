@@ -77,12 +77,14 @@ function setAuthToken(nextToken) {
   logStream.stop();
   if (window.PushPage) window.PushPage.stop();
   closeLoginModal();
+  resetConfigDrafts();
   // Old save callbacks are ignored below, so release their UI controls here.
   $('#config-save').disabled = activeConfigTab === 'perm' || activeConfigTab === 'templates';
   $('#platform-modal').classList.add('hidden');
 }
 
 async function api(path, opts = {}, session = authSession()) {
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
   if (!session.token) throw new Error('请先登录');
   const resp = await fetch(path, {
     ...opts,
@@ -92,6 +94,7 @@ async function api(path, opts = {}, session = authSession()) {
       Authorization: 'Bearer ' + session.token,
     },
   });
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
   const unauthorized = resp.status === 401 ||
     (resp.status === 403 && resp.headers.get('X-DDBOT-Auth') === 'invalid-token');
   if (unauthorized) {
@@ -102,16 +105,21 @@ async function api(path, opts = {}, session = authSession()) {
   return resp;
 }
 
-async function apiJSON(path, opts, session = authSession(), acceptStale = false) {
+async function apiJSON(path, opts, session = authSession(), acceptStale = false, metadata = null) {
   const r = await api(path, opts, session);
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
   if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
   if (!r.ok) {
     let msg = 'HTTP ' + r.status;
     try { const e = await r.json(); if (e.error) msg = e.error; } catch {}
-    throw new Error(msg);
+    const error = new Error(msg);
+    error.status = r.status;
+    throw error;
   }
   const result = await r.json();
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
   if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
+  if (metadata) metadata.etag = r.headers?.get('ETag') || '';
   return result;
 }
 
@@ -132,7 +140,7 @@ function createAuthStream(path, onState, onEntry, isActive) {
   }
 
   async function connect() {
-    if (!token || connection) return;
+    if (!token || adminNavigation || connection) return;
     if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
     const session = authSession();
     const current = { controller: new AbortController(), reader: null };
@@ -167,10 +175,10 @@ function createAuthStream(path, onState, onEntry, isActive) {
       if (connection === current) {
         connection = null;
         onState(false);
-        if (token && isCurrentAuth(session)) {
+        if (token && !adminNavigation && isCurrentAuth(session)) {
           retryTimer = setTimeout(() => {
             retryTimer = null;
-            if (token && isCurrentAuth(session) && isActive()) connect();
+            if (token && !adminNavigation && isCurrentAuth(session) && isActive()) connect();
           }, 3000);
         }
       }
@@ -186,6 +194,7 @@ function showLogin() {
   setAuthToken('');
   if (loginHideTimer !== null) { clearTimeout(loginHideTimer); loginHideTimer = null; }
   const ov = $('#login-overlay');
+  if (adminNavigation) { ov.classList.add('hidden'); return; }
   ov.style.opacity = '';
   ov.style.transition = '';
   ov.classList.remove('hidden');
@@ -220,11 +229,12 @@ function showLoginError(msg) {
 
 async function doLogin(e) {
   e.preventDefault();
+  if (adminNavigation) { showLoginError('管理服务已变更，请按页面上的持久提示手动打开管理地址'); return; }
   const t = $('#login-token').value.trim();
   if (!t) return;
   const request = ++loginRequestSeq;
   const session = authSession();
-  const current = () => request === loginRequestSeq && isCurrentAuth(session);
+  const current = () => !adminNavigation && request === loginRequestSeq && isCurrentAuth(session);
   $('#login-btn').disabled = true;
   $('#login-btn').textContent = '登录中…';
   try {
@@ -314,7 +324,7 @@ function unskeleton(id) {
 }
 
 async function refreshDashboard() {
-  if (!token) return;
+  if (!token || adminNavigation) return;
   const session = authSession();
   try {
     const [ob, st, sum] = await Promise.all([
@@ -562,6 +572,201 @@ let activeConfigTab = 'basic';
 // 不能用 configCache 当基准：textarea 是加载时的快照，期间别处（平台开关即时保存、
 // 基础页表单）改过的键在 configCache 里已经变了，拿它比会把这些旧值当成「用户改的」发出去。
 let advBase = null;
+const configDrafts = new Map();
+let advancedDraft = null;
+let configETag = '';
+let configSourceEpoch = 0;
+const ownConfigVersions = new Map();
+let configConflictMessage = '';
+let adminNavigation = null;
+
+function cloneConfig(value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); }
+function sameConfig(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function draftControls(container = document) { return Array.from(container.querySelectorAll('[data-path]')); }
+function draftRaw(el) { return { value: el.value || '', checked: !!el.checked, cleared: el.dataset.cleared === '1' }; }
+function configFieldSchema(path) {
+  return SCHEMA_FIELDS[path] || (/^platform\.[^.]+\.enable$/.test(path) ? { path, type: 'bool', def: true } : null);
+}
+
+function captureConfigDrafts() {
+  for (const el of draftControls()) {
+    if (!el.dataset.draftOriginal) continue;
+    const path = el.dataset.path, raw = draftRaw(el);
+    if (sameConfig(raw, JSON.parse(el.dataset.draftOriginal))) { configDrafts.delete(path); continue; }
+    const old = configDrafts.get(path);
+    configDrafts.set(path, { raw, base: old ? old.base : cloneConfig(getPath(configCache, path)) });
+  }
+  const adv = $('#cfg-json');
+  if (adv && adv.dataset.draftOriginal !== undefined) {
+    advancedDraft = adv.value === adv.dataset.draftOriginal ? null : {
+      raw: adv.value, base: advancedDraft ? advancedDraft.base : cloneConfig(advBase),
+    };
+  }
+}
+
+function restoreConfigDrafts(container = document) {
+  for (const el of draftControls(container)) {
+    const path = el.dataset.path;
+    el.dataset.draftOriginal = JSON.stringify(draftRaw(el));
+    const draft = configDrafts.get(path);
+    if (!draft) continue;
+    el.value = draft.raw.value;
+    el.checked = draft.raw.checked;
+    if (draft.raw.cleared) el.dataset.cleared = '1'; else delete el.dataset.cleared;
+    const clear = el.parentElement?.querySelector('.cred-clear');
+    if (clear) clear.textContent = draft.raw.cleared ? '撤销清除' : '清除';
+    if (draft.raw.cleared) el.placeholder = '保存后将清除该凭据';
+  }
+  const adv = $('#cfg-json');
+  if (adv && (container === document || container.id === 'config-panels')) {
+    adv.dataset.draftOriginal = adv.value;
+    if (advancedDraft) { adv.value = advancedDraft.raw; advBase = cloneConfig(advancedDraft.base); }
+  }
+  renderConfigDraftStatus();
+}
+
+function renderConfigDraftStatus() {
+  const el = $('#config-draft-status');
+  if (!el) return;
+  const changed = [...configDrafts].filter(([path, draft]) => !sameConfig(draft.base, getPath(configCache, path)))
+    .map(([path]) => path);
+  if (advancedDraft && !sameConfig(advancedDraft.base, configCache)) changed.push('高级 JSON');
+  const count = configDrafts.size + (advancedDraft ? 1 : 0);
+  el.textContent = configConflictMessage || (changed.length
+    ? '配置来源已有更新，已保留你的草稿。请核对后手动保存：' + changed.join('、')
+    : count ? `有 ${count} 处未保存草稿；刷新配置和扫码登录不会清除。` : '');
+  el.classList.toggle('hidden', !el.textContent);
+}
+
+function resetConfigDrafts() {
+  configDrafts.clear(); advancedDraft = null; configCache = null; advBase = null;
+  configETag = ''; ++configSourceEpoch; ownConfigVersions.clear(); configConflictMessage = '';
+  $('#config-panels').innerHTML = '';
+  $('#platform-modal-body').innerHTML = '';
+  renderConfigDraftStatus();
+}
+
+function patchHasPath(patch, path) {
+  let current = patch;
+  for (const key of path.split('.')) {
+    if (current === null || typeof current !== 'object' || !Object.hasOwn(current, key)) return false;
+    current = current[key];
+  }
+  return true;
+}
+
+function mergeConfigPatch(base, patch) {
+  const out = cloneConfig(base) || {};
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = value && typeof value === 'object' && !Array.isArray(value) && key !== 'customCommandPrefix'
+      ? mergeConfigPatch(out[key], value) : cloneConfig(value);
+  }
+  return out;
+}
+
+function configSaveSnapshot(patch, advanced) {
+  captureConfigDrafts();
+  return { fields: new Map(draftControls().filter((el) => patchHasPath(patch, el.dataset.path))
+    .filter((el) => {
+      const f = configFieldSchema(el.dataset.path);
+      if (!f) return false;
+      let value = f.type === 'bool' ? el.checked : f.type === 'number' ? Number(el.value) : el.value;
+      if (f.type === 'credential' && el.dataset.cleared === '1') value = '';
+      if (f.type === 'jsonmap') { try { value = JSON.parse(el.value || '{}'); } catch { return false; } }
+      return sameConfig(value, getPath(patch, el.dataset.path));
+    }).map((el) => [el.dataset.path, draftRaw(el)])), advanced: advanced && advancedDraft ? cloneConfig(advancedDraft) : null };
+}
+
+function acknowledgeConfigSave(patch, sent) {
+  captureConfigDrafts();
+  const safePatch = cloneConfig(patch);
+  for (const [path, field] of Object.entries(SCHEMA_FIELDS)) {
+    if (field.type === 'credential' && patchHasPath(safePatch, path)) {
+      setPath(safePatch, path, getPath(safePatch, path) ? '***REDACTED***' : '');
+    }
+  }
+  configCache = mergeConfigPatch(configCache, safePatch);
+  for (const [path, submitted] of sent.fields) {
+    const draft = configDrafts.get(path);
+    if (!draft || sameConfig(draft.raw, submitted)) configDrafts.delete(path);
+    else draft.base = cloneConfig(getPath(configCache, path));
+  }
+  for (const el of draftControls()) {
+    const path = el.dataset.path, submitted = sent.fields.get(path);
+    if (!submitted) continue;
+    const raw = draftRaw(el), credential = configFieldSchema(path)?.type === 'credential';
+    const baseline = credential ? { value: '', checked: false, cleared: false } : submitted;
+    el.dataset.draftOriginal = JSON.stringify(baseline);
+    if (sameConfig(raw, submitted)) {
+      configDrafts.delete(path);
+      if (credential) { el.value = ''; delete el.dataset.cleared; }
+    } else configDrafts.set(path, { raw, base: cloneConfig(getPath(configCache, path)) });
+  }
+  if (sent.advanced && advancedDraft) {
+    if (advancedDraft.raw === sent.advanced.raw) {
+      advancedDraft = null;
+      const adv = $('#cfg-json');
+      if (adv) { adv.value = JSON.stringify(configCache, null, 2); adv.dataset.draftOriginal = adv.value; }
+      advBase = cloneConfig(configCache);
+    } else {
+      advancedDraft.base = mergeConfigPatch(advancedDraft.base, safePatch);
+      advBase = cloneConfig(advancedDraft.base);
+    }
+  }
+  configConflictMessage = '';
+  renderConfigDraftStatus();
+}
+
+function adminNavigationURL(addr, current = location) {
+  const match = /^(?:\[([0-9a-fA-F:.]+)\]|([a-zA-Z0-9.-]*)):(\d+)$/.exec(addr || '');
+  if (!match || Number(match[3]) < 1 || Number(match[3]) > 65535) return null;
+  let host = match[1] ?? match[2];
+  if (!host || host === '0.0.0.0' || host === '::') host = current.hostname.replace(/^\[|\]$/g, '');
+  if (!/^[a-zA-Z0-9.:-]+$/.test(host)) return null;
+  try {
+    const url = new URL('http://' + (host.includes(':') ? '[' + host + ']' : host) + ':' + match[3] + '/');
+    url.hash = '/config';
+    return url.href;
+  } catch { return null; }
+}
+
+function applyAdminNavigation(navigation) {
+  captureConfigDrafts();
+  closeLoginModal();
+  adminNavigation = { enabled: !!navigation.enabled, addr: String(navigation.addr || '') };
+  ++loginRequestSeq;
+  ++reloadStatusRequest; ++configLoadRequest;
+  if (dashboardTimer !== null) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  logStream.stop();
+  if (window.PushPage) window.PushPage.stop();
+  const banner = $('#admin-navigation');
+  banner.replaceChildren();
+  const title = document.createElement('strong');
+  title.textContent = adminNavigation.enabled ? '管理服务监听地址已变更' : '管理服务已关闭';
+  banner.appendChild(title);
+  const message = document.createElement('p');
+  message.textContent = adminNavigation.enabled
+    ? '配置已保存并生效。本页面已停止请求旧地址；请核对新地址后手动打开，未保存草稿仍保留在此页。'
+    : '配置已保存并生效。本页面已停止连接。重新启用时，请在 application.yaml 中设置 admin.enable: true；配置文件热更新会重新开启管理服务。未保存草稿仍保留在此页。';
+  banner.appendChild(message);
+  if (adminNavigation.enabled) {
+    const addr = document.createElement('p');
+    addr.textContent = '当前监听：' + adminNavigation.addr;
+    banner.appendChild(addr);
+    const href = adminNavigationURL(adminNavigation.addr);
+    if (href) {
+      const link = document.createElement('a');
+      link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.className = 'btn sm'; link.textContent = '手动打开新管理地址';
+      banner.appendChild(link);
+    }
+    const proxy = document.createElement('p');
+    proxy.textContent = '以上链接用于 HTTP 直连。若通过 HTTPS、反向代理或子路径访问，请先检查代理目标与公开访问地址，再手动打开；登录凭据不会放入链接。';
+    banner.appendChild(proxy);
+  }
+  banner.classList.remove('hidden');
+  $('#config-save').disabled = true;
+}
 
 /* 字段类型：text / number / bool(toggle) / select / credential(只写凭据)。
  * 平台凭据只展示脱敏状态，允许覆盖或显式清除；管理及 WebSocket token 禁止通过 API 修改。 */
@@ -908,7 +1113,7 @@ function renderConfigForm() {
           `<span class="p-name">${esc(meta.name)}</span>` +
           `</div>` +
           `<label class="toggle" title="停用后该平台不再推送（订阅与轮询保留，恢复后继续）">` +
-          `<input type="checkbox" data-platform="${esc(site)}" ${enabled ? 'checked' : ''}>` +
+          `<input type="checkbox" data-platform="${esc(site)}" data-path="platform.${esc(site)}.enable" ${enabled ? 'checked' : ''}>` +
           `<span class="toggle-slider"></span></label>` +
           `</div>` +
           `<div class="p-ops">` +
@@ -937,6 +1142,7 @@ function renderConfigForm() {
     adv.value = JSON.stringify(configCache, null, 2);
     advBase = JSON.parse(adv.value);
   }
+  restoreConfigDrafts(panelsEl);
 }
 
 let reloadStatusRequest = 0;
@@ -952,16 +1158,20 @@ function renderReloadStatus(status) {
 }
 
 async function refreshReloadStatus() {
+  if (adminNavigation || !token) return;
   const request = ++reloadStatusRequest;
   const session = authSession();
   try {
     const status = await apiJSON('/api/v1/config/status', {}, session);
-    if (request === reloadStatusRequest && isCurrentAuth(session)) renderReloadStatus(status);
+    if (!adminNavigation && request === reloadStatusRequest && isCurrentAuth(session)) renderReloadStatus(status);
   } catch (_) { /* Keep the last known state on transient errors. */ }
 }
 
-function saveConfigPatch(patch) {
+function saveConfigPatch(patch, options = {}) {
   const session = authSession();
+  const sent = configSaveSnapshot(patch, options.advanced);
+  const originalETag = configETag;
+  const sourceEpoch = configSourceEpoch;
   // A save invalidates status queries that started before it.
   ++reloadStatusRequest;
   ++configLoadRequest;
@@ -969,11 +1179,37 @@ function saveConfigPatch(patch) {
   // Serialize all configuration forms and platform toggles in user action order.
   const save = configSaveQueue.then(() => {
     if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置保存已取消');
+    if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+    if (sourceEpoch !== configSourceEpoch) {
+      throw new Error('配置来源已变更，已取消排队中的旧保存；草稿已保留，请核对后手动保存');
+    }
     ++reloadStatusRequest;
     ++configLoadRequest;
-    return apiJSON('/api/v1/config', { method: 'POST', body }, session).then((result) => {
+    const metadata = {};
+    const etag = ownConfigVersions.get(originalETag) || originalETag;
+    const headers = etag ? { 'If-Match': etag } : {};
+    return apiJSON('/api/v1/config', { method: 'POST', headers, body }, session, false, metadata).then((result) => {
       if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置响应已忽略');
+      if (sourceEpoch !== configSourceEpoch && metadata.etag !== configETag) {
+        throw new Error('配置来源已变更，旧保存响应已忽略；草稿已保留，请核对当前配置');
+      }
+      ++reloadStatusRequest; ++configLoadRequest;
+      if (metadata.etag) {
+        for (const [base, accepted] of ownConfigVersions) if (accepted === etag) ownConfigVersions.set(base, metadata.etag);
+        ownConfigVersions.set(etag, metadata.etag);
+        ownConfigVersions.set(originalETag, metadata.etag);
+        configETag = metadata.etag;
+      }
+      acknowledgeConfigSave(patch, sent);
+      if (result.navigation) applyAdminNavigation(result.navigation);
       return result;
+    }).catch(async (error) => {
+      if (error.status === 409 && isCurrentAuth(session)) {
+        configConflictMessage = '保存发生冲突：配置已在其他位置更新。草稿已保留，正在刷新配置基线，请核对后手动再次保存。';
+        renderConfigDraftStatus();
+        await loadConfig();
+      }
+      throw error;
     });
   });
   configSaveQueue = save.catch(() => {});
@@ -982,7 +1218,7 @@ function saveConfigPatch(patch) {
 
 setInterval(() => {
   const page = $('#page-config');
-  if (page && page.classList.contains('active') && !document.hidden) refreshReloadStatus();
+  if (!adminNavigation && page && page.classList.contains('active') && !document.hidden) refreshReloadStatus();
 }, 5000);
 
 function showConfigSaved(result, label = '配置已保存') {
@@ -991,24 +1227,37 @@ function showConfigSaved(result, label = '配置已保存') {
   ++configLoadRequest;
   const status = result && result.reload;
   renderReloadStatus(status);
+  if (result?.navigation) { toast(label + '，请按页面提示继续访问管理服务'); return; }
   if (!status) { toast(label + '，请刷新查看生效状态'); return; }
   const pending = status.restartRequired || [];
   toast(pending.length ? label + '；需重启：' + pending.slice(0, 6).join('、') + (pending.length > 6 ? '等' : '') : label + '并已应用（轮询间隔在下一轮调度生效）');
 }
 
 async function loadConfig() {
+  if (adminNavigation) return;
   const request = ++configLoadRequest;
   const session = authSession();
   try {
-    const cfg = await apiJSON('/api/v1/config', {}, session);
-    if (request !== configLoadRequest || !isCurrentAuth(session)) return;
+    const metadata = {};
+    const cfg = await apiJSON('/api/v1/config', {}, session, false, metadata);
+    if (adminNavigation || request !== configLoadRequest || !isCurrentAuth(session)) return;
+    captureConfigDrafts();
     configCache = cfg;
+    if (metadata.etag && metadata.etag !== configETag) {
+      ++configSourceEpoch;
+      ownConfigVersions.clear();
+      configETag = metadata.etag;
+    }
     loadConfig._retried = false;
     renderConfigForm();
+    const modal = $('#platform-modal');
+    if (!modal.classList.contains('hidden') && $('#platform-modal-body').dataset.site) {
+      renderPlatformModal($('#platform-modal-body').dataset.site);
+    }
     refreshReloadStatus();
     loadPermOverview(); // 权限面板数据（面板由 renderConfigForm 生成）
   } catch (e) {
-    if (request !== configLoadRequest || !isCurrentAuth(session)) return;
+    if (adminNavigation || request !== configLoadRequest || !isCurrentAuth(session)) return;
     if (e.message.includes('401')) { showLogin(); return; } // 登录失效直接回登录层
     // 网络抖动自动重试一次，重试再失败才提示。
     // _retried 只能在「成功」或「最终失败」时复位：原来放在定时器回调开头复位，
@@ -1062,6 +1311,11 @@ function collectConfigPatch(tabId) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const trackDraft = (event) => {
+    if (event.target.matches('[data-path], #cfg-json')) { captureConfigDrafts(); renderConfigDraftStatus(); }
+  };
+  document.addEventListener('input', trackDraft);
+  document.addEventListener('change', trackDraft);
   // 凭据「清除/撤销」按钮（动态生成，委托到 document——覆盖配置面板与平台弹层）
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.cred-clear');
@@ -1080,6 +1334,8 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = '清除';
       input.placeholder = '已配置（脱敏显示）—— 留空保持不变，输入新值覆盖';
     }
+    captureConfigDrafts();
+    renderConfigDraftStatus();
   });
 
   // tabs 为动态生成，用容器级事件委托
@@ -1095,7 +1351,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 功能开关 Tab 即时保存，保存按钮在该 Tab 下停用
   const saveBtn = $('#config-save');
-  const syncSaveBtn = () => { saveBtn.disabled = activeConfigTab === 'perm' || activeConfigTab === 'templates'; };
+  const syncSaveBtn = () => { saveBtn.disabled = !!adminNavigation || activeConfigTab === 'perm' || activeConfigTab === 'templates'; };
   syncSaveBtn();
 
   $('#config-save').addEventListener('click', async () => {
@@ -1113,14 +1369,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     $('#config-save').disabled = true;
     try {
-      const result = await saveConfigPatch(patch);
+      const result = await saveConfigPatch(patch, { advanced: activeConfigTab === 'advanced' });
       if (!isCurrentAuth(session)) return;
       showConfigSaved(result);
       loadConfig();
     } catch (e) {
       if (isCurrentAuth(session)) toast('保存失败：' + e.message, false);
     } finally {
-      if (isCurrentAuth(session)) $('#config-save').disabled = false;
+      if (isCurrentAuth(session)) $('#config-save').disabled = !!adminNavigation;
     }
   });
 });
@@ -1438,6 +1694,7 @@ const PLATFORM_COLORS = {
 
 // renderPlatformModal 打开某平台的细化配置弹层（字段组复用 renderField）
 function renderPlatformModal(site) {
+  captureConfigDrafts();
   const tab = CONFIG_SCHEMA.find((t) => t.id === 'platform');
   const groups = tab.groups.filter((g) => g.site === site);
   if (!groups.length) return;
@@ -1467,6 +1724,14 @@ function renderPlatformModal(site) {
     '<button class="btn primary" id="platform-modal-save">保存</button>';
   body.appendChild(actions);
   $('#platform-modal').classList.remove('hidden');
+  restoreConfigDrafts(body);
+}
+
+function closePlatformModal() {
+  captureConfigDrafts();
+  $('#platform-modal').classList.add('hidden');
+  $('#platform-modal-body').innerHTML = '';
+  delete $('#platform-modal-body').dataset.site;
 }
 
 // collectPatchFromContainer 从任意容器（配置面板/平台弹层）收集 diff 补丁
@@ -1474,7 +1739,7 @@ function collectPatchFromContainer(container) {
   const patch = {};
   container.querySelectorAll('[data-path]').forEach((el) => {
     const path = el.dataset.path;
-    const f = SCHEMA_FIELDS[path];
+    const f = configFieldSchema(path);
     if (!f) return;
     const original = configFieldValue(f);
     if (f.type === 'jsonmap') {
@@ -1719,6 +1984,7 @@ function accountCardHTML(site, acc) {
 
 /* ===== 启动 ===== */
 function boot() {
+  if (adminNavigation) return;
   refreshDashboard();
   if (dashboardTimer !== null) clearInterval(dashboardTimer);
   dashboardTimer = setInterval(refreshDashboard, 5000);
@@ -1830,7 +2096,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 平台弹层：关闭/保存全部委托到静态容器 #platform-modal
   // （cancel/save 按钮是弹层 body 动态生成的，初始化时不存在，不能直接绑定）
-  const closePlatformModal = () => $('#platform-modal').classList.add('hidden');
   const savePlatformModal = async () => {
     const session = authSession();
     const saveBtn = $('#platform-modal-save');
@@ -1933,13 +2198,16 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function checkSetupThenStart() {
+  if (adminNavigation) return;
   const session = authSession();
   try {
     const r = await fetch('/api/v1/setup/status');
     const st = await r.json();
+    if (adminNavigation) return;
     if (!isCurrentAuth(session)) return;
     if (st && st.needed) { showSetup(); return; }
   } catch { /* 探测失败按常规流程走 */ }
+  if (adminNavigation) return;
   if (!isCurrentAuth(session)) return;
   if (token) {
     hideLogin();
@@ -2049,6 +2317,7 @@ function bindSetupWizard() {
 
   // 提交
   $('#setup-submit').addEventListener('click', async () => {
+    if (adminNavigation) return;
     const session = authSession();
     const setupToken = $('#setup-pass').value;
     const btn = $('#setup-submit');
@@ -2065,7 +2334,7 @@ function bindSetupWizard() {
           obToken: $('#setup-ob-token').value,
         }),
       });
-      if (!isCurrentAuth(session)) return;
+      if (adminNavigation || !isCurrentAuth(session)) return;
       if (!resp.ok) {
         let msg = '初始化失败（' + resp.status + '）';
         try { const e = await resp.json(); if (e.error) msg = e.error; } catch {}
@@ -2086,7 +2355,7 @@ function bindSetupWizard() {
       };
       $('#setup-enter').addEventListener('click', enter);
     } catch (e) {
-      setupError(4, e.message); // 提交按钮在第 4 步，错误必须显示在该步
+      if (!adminNavigation && isCurrentAuth(session)) setupError(4, e.message);
     } finally {
       btn.disabled = false;
       btn.textContent = '完成初始化';

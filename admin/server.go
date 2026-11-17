@@ -1036,6 +1036,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			config = make(map[string]interface{})
 		}
 		maskSensitiveConfig(config)
+		w.Header().Set("ETag", cfg.ConfigETag(data))
 		_ = json.NewEncoder(w).Encode(config)
 
 	case http.MethodPost:
@@ -1054,10 +1055,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		defer cfgMu.Unlock()
 
 		existing := make(map[string]interface{})
-		var oldData []byte
 		cfgPath := cfg.ConfigFilePath()
-		if data, err := os.ReadFile(cfgPath); err == nil {
-			oldData = data
+		version, err := cfg.ReadConfigFileVersion(cfgPath)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "Failed to read config file")
+			return
+		}
+		if ifMatch := r.Header.Values("If-Match"); ifMatch != nil && !version.MatchesETag(strings.Join(ifMatch, ",")) {
+			writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
+			return
+		}
+		if version.Exists() {
+			data := version.Bytes()
 			if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
 				// 解析失败时 existing 停在空 map，merge 后整份写回 = 把用户配置清空。
 				// 宁可拒绝写入，让用户先修好 YAML。
@@ -1071,10 +1080,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
 				return
 			}
-		} else if !os.IsNotExist(err) {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
-			return
 		}
 		if existing == nil {
 			// ghodss/yaml 对空内容 / 纯注释 / 字面 null 不报错，却会把目标 map 置成 nil，
@@ -1126,19 +1131,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		// 写入前备份原配置
-		if len(oldData) > 0 {
-			if err := os.WriteFile(cfgPath+".bak", oldData, 0600); err != nil {
-				logrus.Warnf("配置备份失败: %v", err)
-			}
-		}
+		navigation := s.prepareConfigNavigation(data)
 
 		reloadStatus, err := config.GlobalConfig.SaveAndStatus(data, func() error {
-			return writeFileAtomic(cfgPath, data, 0600)
+			return version.Persist(data, 0600, true)
 		})
 		if err != nil {
 			var rejected *config.PrepareError
-			if errors.As(err, &rejected) {
+			if errors.Is(err, cfg.ErrConfigConflict) {
+				writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
+			} else if errors.As(err, &rejected) {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": rejected.Error()})
 			} else {
@@ -1148,9 +1150,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		w.Header().Set("ETag", cfg.ConfigETag(data))
+		response := map[string]interface{}{
 			"status": "success", "reload": reloadStatus,
-		})
+		}
+		if destination := navigation(); destination != nil {
+			response["navigation"] = destination
+		}
+		_ = json.NewEncoder(w).Encode(response)
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

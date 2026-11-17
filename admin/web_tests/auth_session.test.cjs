@@ -17,11 +17,12 @@ function fixture() {
     if (!nodes.has(selector)) {
       const classes = new Set(selector === '#login-overlay' ? ['hidden'] : []);
       nodes.set(selector, {
-        value: '', style: {}, options: [], innerHTML: '', textContent: '',
+        value: '', style: {}, dataset: {}, options: [], innerHTML: '', textContent: '',
         addEventListener() {}, appendChild() {}, focus() {},
         classList: {
           add: (name) => classes.add(name), remove: (name) => classes.delete(name),
           contains: (name) => classes.has(name),
+          toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
         },
       });
     }

@@ -10,7 +10,7 @@ const end = source.indexOf('// diffPatch', start);
 assert.ok(start >= 0 && end > start, 'status handling must come from the actual application');
 
 function fixture() {
-  const target = { textContent: '' };
+  const target = { textContent: '', dataset: {}, classList: { contains: () => true } };
   const requests = [];
   const toasts = [];
   const context = vm.createContext({
@@ -19,6 +19,9 @@ function fixture() {
     setInterval: () => 0,
     setTimeout: () => 0,
     configCache: null,
+    token: 'test', adminNavigation: null, configETag: '', configSourceEpoch: 0, ownConfigVersions: new Map(),
+    configSaveSnapshot: () => ({}), acknowledgeConfigSave() {}, captureConfigDrafts() {},
+    applyAdminNavigation() {},
     renderConfigForm: () => {},
     loadPermOverview: () => {},
     showLogin: () => {},

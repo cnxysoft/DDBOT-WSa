@@ -32,7 +32,7 @@ function authContext() {
   const context = vm.createContext({
     token: 'old', TOKEN_KEY: 'token', authGeneration: 0,
     dashboardTimer: null, loginRequestSeq: 0, loginHideTimer: null,
-    activeConfigTab: 'basic',
+    activeConfigTab: 'basic', adminNavigation: null, resetConfigDrafts() {},
     logStream: { stop() {} }, window: {}, clearInterval() {}, clearTimeout() {},
     $: (selector) => selector === '#login-overlay' ? overlay : domElement(),
     localStorage: { removeItem: (key) => storage.delete(key), setItem: (key, value) => storage.set(key, value) },
@@ -171,6 +171,9 @@ test('queued configuration saves are abandoned when their authentication generat
   const requests = [];
   const context = vm.createContext({
     token: 'old', authGeneration: 0,
+    configETag: '', configSourceEpoch: 0, ownConfigVersions: new Map(), adminNavigation: null,
+    configSaveSnapshot: () => ({ fields: new Map(), advanced: null }),
+    acknowledgeConfigSave() {},
     apiJSON: (url, options, session) => new Promise((resolve) => requests.push({ url, options, session, resolve })),
   });
   vm.runInContext(section('function authSession()', 'function setAuthToken(') +

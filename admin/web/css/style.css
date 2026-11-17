@@ -381,6 +381,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tab.active { color: var(--accent); background: var(--card); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
 .config-hint { color: var(--muted); font-size: 12px; }
 .config-note { color: var(--muted); font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
+.config-notice {
+  padding: 12px 16px; margin: 12px 0; border: 1px solid var(--accent);
+  border-radius: 8px; background: var(--bg-soft); color: var(--text);
+  font-size: 13px; line-height: 1.7; overflow-wrap: anywhere;
+}
+.config-notice p { margin: 6px 0; }
 .code-area {
   width: 100%; background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px;
