@@ -40,8 +40,9 @@ var resourceHotKeys = map[string]bool{
 	"qqofficial.appid": true, "qqofficial.appsecret": true, "qqofficial.secret": true,
 	"qqofficial.shard-id": true, "qqofficial.shard-count": true, "qqofficial.api-base-url": true,
 	"qqofficial.http-timeout": true, "qqofficial.token-refresh-ahead": true, "qqofficial.start-timeout": true,
-	"qqofficial.state-file": true, "qqofficial.join-intro-tip": true,
-	"bilibili.account": true, "bilibili.password": true,
+	// state-file stays cold: live adapters must retain their ID/state ledger.
+	"qqofficial.join-intro-tip": true,
+	"bilibili.account":          true, "bilibili.password": true,
 	"acfun.account": true, "acfun.password": true, "acfun.authkey": true, "acfun.acpasstoken": true,
 	"douyin.useragent": true, "douyin.acsignature": true, "douyin.acnonce": true, "douyin.sessionid": true,
 	"twitch.clientid": true, "twitch.clientsecret": true,
