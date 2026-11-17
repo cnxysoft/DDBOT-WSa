@@ -1,6 +1,7 @@
 package weibo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -172,6 +173,13 @@ func (p *preparedRuntime) apply() {
 // finishLogin persists the mode and SUB together. Before the reload participant
 // is installed during startup, the same prepared session is applied explicitly.
 func finishLogin(sub string) error {
+	return finishLoginContext(context.Background(), sub)
+}
+
+func finishLoginContext(ctx context.Context, sub string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	settings := settingsFromSnapshot(config.GlobalConfig.Snapshot())
 	settings.mode, settings.sub = "login", sub
 	refreshMu.Lock()
@@ -180,7 +188,7 @@ func finishLogin(sub string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeLoginConfig(sub); err != nil {
+	if err := writeLoginConfigContext(ctx, sub); err != nil {
 		return err
 	}
 	if transactionalReloadEnabled.Load() {

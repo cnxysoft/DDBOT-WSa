@@ -97,9 +97,16 @@ func parseCustomCommandPrefix(data []byte) (map[string]string, error) {
 	if err := yaml.Unmarshal(data, &all); err != nil {
 		return nil, errors.New("customCommandPrefix 读取失败：配置文件不是合法 YAML")
 	}
-	value := all["customCommandPrefix"]
-	if value == nil {
-		value = all["customcommandprefix"]
+	var value interface{}
+	var found bool
+	for key, candidate := range all {
+		if strings.ToLower(key) != "customcommandprefix" {
+			continue
+		}
+		if found {
+			return nil, errors.New("customCommandPrefix 存在大小写等价的重复配置，请合并为一项")
+		}
+		value, found = candidate, true
 	}
 	result := make(map[string]string)
 	if value == nil {

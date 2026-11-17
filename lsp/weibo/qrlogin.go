@@ -2,6 +2,7 @@ package weibo
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/png"
@@ -166,9 +167,16 @@ type QRLoginResult struct {
 // 返回一个 channel，用户可以通过它获取二维码图片和登录结果
 // timeout 为扫码超时时间，默认 5 分钟
 func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
+	return RunQRLoginForQQContext(context.Background(), timeout)
+}
+
+// RunQRLoginForQQContext cancels network polling and the configuration transaction
+// together, so a revoked WebUI QR session cannot publish late credentials.
+func RunQRLoginForQQContext(ctx context.Context, timeout time.Duration) (<-chan QRLoginResult, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
@@ -177,9 +185,14 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 	}
 
 	// 获取二维码
-	qrid, qrImage, err := fetchQRCodeWithImage(client)
+	qrid, qrImage, err := fetchQRCodeWithImageContext(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("获取二维码失败: %v", err)
+		cancel()
+		return nil, fmt.Errorf("获取二维码失败: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		cancel()
+		return nil, err
 	}
 
 	resultChan := make(chan QRLoginResult, 1)
@@ -190,34 +203,45 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 	// 启动异步扫码等待
 	go func() {
 		defer close(resultChan)
+		defer cancel()
+		send := func(result QRLoginResult) bool {
+			select {
+			case <-ctx.Done():
+				return false
+			case resultChan <- result:
+				return true
+			}
+		}
 
 		// 等待扫码
-		rawCheck, err := pollQRCodeWithTimeout(client, qrid, timeout)
+		rawCheck, err := pollQRCodeWithTimeoutContext(ctx, client, qrid, timeout)
 		if err != nil {
-			resultChan <- QRLoginResult{Error: err}
+			send(QRLoginResult{Error: err})
 			return
 		}
 
 		// 先回一条中间态：扫码成功之后的「完成登录」要打外部接口换 Cookie，
 		// 网络不好时会卡几十秒，中间态能让调用方（Web 面板 / 私聊命令）知道进度，
 		// 而不是一直停在「请扫码」上。
-		resultChan <- QRLoginResult{Scanned: true}
+		if !send(QRLoginResult{Scanned: true}) {
+			return
+		}
 
 		// 完成登录
-		sub, err := finalizeLogin(client, rawCheck, ".")
+		sub, err := finalizeLoginContext(ctx, client, rawCheck)
 		if err != nil {
-			resultChan <- QRLoginResult{Error: err}
+			send(QRLoginResult{Error: err})
 			return
 		}
 
 		result := QRLoginResult{Sub: sub}
-		if err := finishLogin(sub); err != nil {
+		if err := finishLoginContext(ctx, sub); err != nil {
 			result.Error = err
 		} else {
 			result.PersistSuccess, result.RuntimeLoaded = true, true
 		}
 
-		resultChan <- result
+		send(result)
 	}()
 
 	return resultChan, nil
@@ -225,6 +249,10 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 
 // fetchQRCodeWithImage 获取二维码图片并返回图片数据
 func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
+	return fetchQRCodeWithImageContext(context.Background(), client)
+}
+
+func fetchQRCodeWithImageContext(ctx context.Context, client *http.Client) (string, []byte, error) {
 	cb := fmt.Sprintf("STK_%d", time.Now().UnixMilli())
 	params := url.Values{}
 	params.Set("entry", "miniblog")
@@ -232,7 +260,10 @@ func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
 	params.Set("callback", cb)
 
 	reqURL := qrImageURL + "?" + params.Encode()
-	req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return "", nil, err
+	}
 	req.Header.Set("User-Agent", defaultUA)
 	req.Header.Set("Referer", defaultRefer)
 
@@ -241,7 +272,10 @@ func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
 		return "", nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", nil, err
+	}
 
 	m := jsonpRegex.FindStringSubmatch(string(body))
 	if len(m) < 2 {
@@ -260,7 +294,10 @@ func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
 	}
 
 	// 下载图片
-	imgReq, _ := http.NewRequest(http.MethodGet, imageURL, nil)
+	imgReq, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", nil, err
+	}
 	imgReq.Header.Set("User-Agent", defaultUA)
 	imgReq.Header.Set("Referer", defaultRefer)
 	imgResp, err := client.Do(imgReq)
@@ -268,13 +305,20 @@ func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
 		return "", nil, err
 	}
 	defer imgResp.Body.Close()
-	imgData, _ := io.ReadAll(imgResp.Body)
+	imgData, err := io.ReadAll(imgResp.Body)
+	if err != nil {
+		return "", nil, err
+	}
 
 	return qrResp.Data.Qrid, imgData, nil
 }
 
 // pollQRCodeWithTimeout 带超时的扫码轮询
 func pollQRCodeWithTimeout(client *http.Client, qrid string, timeout time.Duration) (*qrCheckResp, error) {
+	return pollQRCodeWithTimeoutContext(context.Background(), client, qrid, timeout)
+}
+
+func pollQRCodeWithTimeoutContext(ctx context.Context, client *http.Client, qrid string, timeout time.Duration) (*qrCheckResp, error) {
 	params := url.Values{}
 	params.Set("entry", "miniblog")
 	params.Set("source", "miniblog")
@@ -284,21 +328,37 @@ func pollQRCodeWithTimeout(client *http.Client, qrid string, timeout time.Durati
 	params.Set("rid", "")
 	params.Set("ver", "20250520")
 
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
 
-	for time.Now().Before(deadline) {
-		time.Sleep(2 * time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
 		reqURL := qrCheckURL + "?" + params.Encode()
-		req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return nil, err
+		}
 		req.Header.Set("User-Agent", defaultUA)
 		req.Header.Set("Referer", defaultRefer)
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			qrLogger.Debugf("轮询异常: %v", err)
 			continue
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		var c qrCheckResp
 		if err := json.Unmarshal(body, &c); err != nil {
 			qrLogger.Debugf("轮询解析失败: %v - %s", err, string(body))
@@ -324,7 +384,6 @@ func pollQRCodeWithTimeout(client *http.Client, qrid string, timeout time.Durati
 		}
 	}
 
-	return nil, fmt.Errorf("扫码超时（%v），请重试", timeout)
 }
 
 func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
@@ -377,6 +436,13 @@ func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
 }
 
 func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (string, error) {
+	return finalizeLoginContext(context.Background(), client, raw)
+}
+
+func finalizeLoginContext(ctx context.Context, client *http.Client, raw *qrCheckResp) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	alt := extractALT(raw)
 	if alt == "" {
 		return "", fmt.Errorf("未能从响应中提取ALT/ticket")
@@ -394,7 +460,10 @@ func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (str
 	params.Set("ver", "20250520")
 
 	loginURL := qrLoginURL + "?" + params.Encode()
-	req, _ := http.NewRequest(http.MethodGet, loginURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loginURL, nil)
+	if err != nil {
+		return "", err
+	}
 	req.Header.Set("User-Agent", defaultUA)
 	req.Header.Set("Referer", defaultRefer)
 
@@ -403,6 +472,9 @@ func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (str
 		return "", err
 	}
 	resp.Body.Close()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	// 跳转 URL 可能携带 alt/ticket 参数，脱敏后记录
 	qrLogger.Infof("登录完成，跳转: %s", sanitizeLoginURL(resp.Request.URL))
 
@@ -530,5 +602,9 @@ func writeBackConfigToPath(sub string, cfgPath string) error {
 }
 
 func writeLoginConfig(sub string) error {
-	return cfg.WriteConfigKeyValues(map[string]string{"weibo.sub": sub, "weibo.mode": "login"})
+	return writeLoginConfigContext(context.Background(), sub)
+}
+
+func writeLoginConfigContext(ctx context.Context, sub string) error {
+	return cfg.WriteConfigKeyValuesContext(ctx, map[string]string{"weibo.sub": sub, "weibo.mode": "login"})
 }

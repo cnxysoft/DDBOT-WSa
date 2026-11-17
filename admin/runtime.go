@@ -113,7 +113,9 @@ func Stop() {
 	activeServerMu.Unlock()
 	if s != nil {
 		s.tokenMu.Lock()
+		s.authStopped = true
 		s.revokeStreamsLocked()
+		s.loginManagerOf().revokeAll()
 		s.tokenMu.Unlock()
 		s.runtimeMu.Lock()
 		h := s.httpServer

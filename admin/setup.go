@@ -109,8 +109,12 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			// 宁可拒绝写入，让用户先修好 YAML。
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
+				"error": "现有配置解析失败，已拒绝写入以免覆盖；请检查 YAML 格式",
 			})
+			return
+		}
+		if err := validateConfigDocument(data); err != nil {
+			writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
 			return
 		}
 	} else if !os.IsNotExist(err) {
@@ -123,14 +127,22 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		// setNested 往 nil map 写会 panic。
 		existing = make(map[string]interface{})
 	}
+	var identityErr error
+	existing, identityErr = normalizeConfigPaths(existing)
+	if identityErr != nil {
+		writeErr(w, http.StatusBadRequest, "现有配置字段存在歧义，已拒绝写入："+identityErr.Error())
+		return
+	}
 
 	setNested := func(top, key string, val interface{}) {
-		sub, ok := existing[top].(map[string]interface{})
+		actualTop, _ := configMapKey(existing, top)
+		sub, ok := existing[actualTop].(map[string]interface{})
 		if !ok {
 			sub = make(map[string]interface{})
-			existing[top] = sub
+			existing[actualTop] = sub
 		}
-		sub[key] = val
+		actualKey, _ := configMapKey(sub, key)
+		sub[actualKey] = val
 	}
 
 	setNested("admin", "token", req.Token)

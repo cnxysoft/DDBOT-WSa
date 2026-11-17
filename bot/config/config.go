@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"reflect"
@@ -400,10 +401,24 @@ func (c *Config) Save(data []byte, persist func() error) error {
 	return err
 }
 
+// SaveContext rejects canceled owners after waiting for another transaction,
+// and aborts prepared candidates when canceled before persistence begins.
+func (c *Config) SaveContext(ctx context.Context, data []byte, persist func() error) error {
+	_, err := c.saveAndStatus(ctx, data, persist)
+	return err
+}
+
 // SaveAndStatus returns the status of this save before another reload can intervene.
 func (c *Config) SaveAndStatus(data []byte, persist func() error) (ReloadStatus, error) {
+	return c.saveAndStatus(context.Background(), data, persist)
+}
+
+func (c *Config) saveAndStatus(ctx context.Context, data []byte, persist func() error) (ReloadStatus, error) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return ReloadStatus{}, err
+	}
 	if c.closing {
 		return ReloadStatus{}, errors.New("配置管理器正在关闭")
 	}
@@ -413,6 +428,12 @@ func (c *Config) SaveAndStatus(data []byte, persist func() error) (ReloadStatus,
 	}
 	commit, abort, err := c.prepareReload(v, data)
 	if err != nil {
+		if abort != nil {
+			abort()
+		}
+		return ReloadStatus{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		if abort != nil {
 			abort()
 		}

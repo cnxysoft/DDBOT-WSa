@@ -116,6 +116,7 @@ type Server struct {
 
 	// token 支持运行期热更新（初始化向导设置密码后无需重启即可登录），读写加锁
 	tokenMu        sync.RWMutex
+	authStopped    bool // protected by tokenMu; final Stop rejects new authorized work
 	token          string
 	streamsRevoked chan struct{}
 
@@ -137,6 +138,7 @@ func (s *Server) setToken(t string) {
 	s.tokenMu.Lock()
 	if s.token != t {
 		s.revokeStreamsLocked()
+		s.loginManagerOf().revokeAll()
 	}
 	s.token = t
 	s.tokenMu.Unlock()
@@ -323,6 +325,11 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 		// 安全：token 为空时一律拒绝，不允许无鉴权访问（对应配置 admin.token 为空的默认情况）
 		s.tokenMu.Lock()
+		if s.authStopped {
+			s.tokenMu.Unlock()
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		token := s.token
 		if s.streamsRevoked == nil {
 			s.streamsRevoked = make(chan struct{})
@@ -341,6 +348,9 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		// 常量时间比较，防时序攻击
 		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(token)) != 1 {
+			// Distinguish expired authentication from an authenticated operation
+			// rejected by policy, which also uses HTTP 403.
+			w.Header().Set("X-DDBOT-Auth", "invalid-token")
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -745,24 +755,25 @@ var sensitiveConfigLeafPaths = map[string]bool{
 	"websocket.token":          true,
 	"telegram.token":           true,
 	"qqofficial.app-secret":    true,
-	"qqofficial.appSecret":     true,
+	"qqofficial.appsecret":     true,
 	"qqofficial.secret":        true,
-	"bilibili.SESSDATA":        true,
+	"bilibili.sessdata":        true,
 	"bilibili.bili_jct":        true,
+	"bilibili.password":        true,
 	"acfun.password":           true,
-	"acfun.authKey":            true,
-	"acfun.acPassToken":        true,
+	"acfun.authkey":            true,
+	"acfun.acpasstoken":        true,
 	"twitter.auth_token":       true,
 	"twitter.ct0":              true,
-	"twitter.bearerToken":      true,
-	"douyin.acSignature":       true,
-	"douyin.acNonce":           true,
-	"douyin.sessionId":         true,
+	"twitter.bearertoken":      true,
+	"douyin.acsignature":       true,
+	"douyin.acnonce":           true,
+	"douyin.sessionid":         true,
 	"weibo.sub":                true,
-	"twitch.clientSecret":      true,
-	"twitcasting.clientSecret": true,
+	"twitch.clientsecret":      true,
+	"twitcasting.clientsecret": true,
 	"heybox.x_xhh_tokenid":     true,
-	"loliconPool.apikey":       true,
+	"loliconpool.apikey":       true,
 }
 
 // sensitiveConfigSubtreePaths：这些路径下的所有叶子都视为凭据（保留嵌套结构，逐叶替换）。
@@ -780,6 +791,7 @@ func joinConfigPath(prefix, key string) string {
 }
 
 func isSensitiveSubtreePath(path string) bool {
+	path = strings.ToLower(path)
 	for _, p := range sensitiveConfigSubtreePaths {
 		if path == p || strings.HasPrefix(path, p+".") {
 			return true
@@ -797,7 +809,7 @@ func maskSensitiveConfig(cfg map[string]interface{}) {
 func maskConfigMap(cfg map[string]interface{}, prefix string) {
 	for k, v := range cfg {
 		path := joinConfigPath(prefix, k)
-		if sensitiveConfigLeafPaths[path] {
+		if sensitiveConfigLeafPaths[strings.ToLower(path)] {
 			cfg[k] = maskedConfigValue(v)
 			continue
 		}
@@ -842,17 +854,25 @@ func maskedConfigValue(v interface{}) interface{} {
 
 // mergeConfig 将 newCfg 合并到 baseCfg（new 优先）；值为脱敏占位符的键跳过，保留 base 原值
 func mergeConfig(baseCfg, newCfg map[string]interface{}) {
+	mergeConfigAtPath(baseCfg, newCfg, "")
+}
+
+func mergeConfigAtPath(baseCfg, newCfg map[string]interface{}, prefix string) {
 	for k, v := range newCfg {
 		if s, ok := v.(string); ok && s == redactedPlaceholder {
 			continue
 		}
+		actual := k
+		if !literalConfigMap(prefix) {
+			actual, _ = configMapKey(baseCfg, k)
+		}
 		if nm, ok := v.(map[string]interface{}); ok {
-			if bm, ok2 := baseCfg[k].(map[string]interface{}); ok2 {
-				mergeConfig(bm, nm)
+			if bm, ok2 := baseCfg[actual].(map[string]interface{}); ok2 {
+				mergeConfigAtPath(bm, nm, joinConfigPath(prefix, actual))
 				continue
 			}
 		}
-		baseCfg[k] = v
+		baseCfg[actual] = v
 	}
 }
 
@@ -923,11 +943,15 @@ func configValueUnset(v interface{}) bool {
 //   - 非受保护路径若用标量/nil 整体替换掉含受保护键的现有子树，按被删掉的受保护键记违规；
 //   - 受保护键的叶子值按「占位符代表未修改」「新旧语义相等代表未修改」判断。
 func collectConfigWriteViolations(existing, updated map[string]interface{}, prefix string) []string {
+	if literalConfigMap(prefix) {
+		return nil
+	}
 	var violations []string
 	for k, newVal := range updated {
 		key := joinConfigPath(prefix, k)
 		newMap, newIsMap := newVal.(map[string]interface{})
-		oldVal, oldPresent := existing[k]
+		actual, _ := configMapKey(existing, k)
+		oldVal, oldPresent := existing[actual]
 		oldMap, oldIsMap := oldVal.(map[string]interface{})
 
 		if newIsMap {
@@ -973,6 +997,9 @@ func collectConfigWriteViolations(existing, updated map[string]interface{}, pref
 
 // protectedPathsInSubtree 返回 cfg 子树中所有受保护键的完整路径（用于检测父键被整体替换/删除）。
 func protectedPathsInSubtree(cfg map[string]interface{}, prefix string) []string {
+	if literalConfigMap(prefix) {
+		return nil
+	}
 	var paths []string
 	for k, v := range cfg {
 		path := joinConfigPath(prefix, k)
@@ -1036,8 +1063,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				// 宁可拒绝写入，让用户先修好 YAML。
 				w.WriteHeader(http.StatusInternalServerError)
 				_ = json.NewEncoder(w).Encode(map[string]string{
-					"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
+					"error": "现有配置解析失败，已拒绝写入以免覆盖；请检查 YAML 格式",
 				})
+				return
+			}
+			if uerr := validateConfigDocument(data); uerr != nil {
+				writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
 				return
 			}
 		} else if !os.IsNotExist(err) {
@@ -1049,6 +1080,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			// ghodss/yaml 对空内容 / 纯注释 / 字面 null 不报错，却会把目标 map 置成 nil，
 			// 后面 mergeConfig 往 nil map 写会 panic（handler 里就是连接被直接掐断）。
 			existing = make(map[string]interface{})
+		}
+		var identityErr error
+		existing, identityErr = normalizeConfigPaths(existing)
+		if identityErr != nil {
+			writeErr(w, http.StatusBadRequest, "现有配置字段存在歧义，已拒绝写入："+identityErr.Error())
+			return
+		}
+		req.Config, identityErr = normalizeConfigPaths(req.Config)
+		if identityErr != nil {
+			writeErr(w, http.StatusBadRequest, identityErr.Error())
+			return
 		}
 
 		// 安全：整体写挡掉受保护键（admin.token、websocket.token），
@@ -1064,9 +1106,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
 		// mergeConfig 是递归合并，用户删掉的命令会继续留在配置里，改不动。
-		if v, ok := req.Config["customCommandPrefix"]; ok {
-			existing["customCommandPrefix"] = v
-			delete(req.Config, "customCommandPrefix")
+		if key, ok := configMapKey(req.Config, "customCommandPrefix"); ok {
+			actual, _ := configMapKey(existing, key)
+			existing[actual] = req.Config[key]
+			delete(req.Config, key)
 		}
 
 		mergeConfig(existing, req.Config)
@@ -1134,6 +1177,7 @@ var protectedConfigKeys = map[string]bool{
 // 精确匹配顶层路径（websocket.token），或任意嵌套层级的同名末段（a.b.websocket.token），
 // 防止把受保护键藏进嵌套结构绕过校验。
 func isProtectedConfigKeyPath(path string) bool {
+	path = strings.ToLower(path)
 	if protectedConfigKeys[path] {
 		return true
 	}

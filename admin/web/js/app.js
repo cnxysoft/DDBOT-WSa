@@ -5,6 +5,10 @@
 const TOKEN_KEY = 'ddbot_admin_token';
 const THEME_KEY = 'ddbot_theme';
 let token = localStorage.getItem(TOKEN_KEY) || '';
+let authGeneration = 0;
+let loginRequestSeq = 0;
+let loginHideTimer = null;
+let dashboardTimer = null;
 let sseConnected = false;
 let logPaused = false;
 const logBuffer = [];      // 全量日志（上限 800）
@@ -55,46 +59,150 @@ function fmtTime(iso) {
 }
 
 /* ===== API 封装 ===== */
-async function api(path, opts = {}) {
+function authSession() {
+  return { token, generation: authGeneration };
+}
+
+function isCurrentAuth(session) {
+  return !!session && session.generation === authGeneration && session.token === token;
+}
+
+function setAuthToken(nextToken) {
+  // 即使再次登录同一个 token，也要废弃上次登录的请求和长连接。
+  ++authGeneration;
+  token = nextToken;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+  if (dashboardTimer !== null) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  logStream.stop();
+  if (window.PushPage) window.PushPage.stop();
+  closeLoginModal();
+  // Old save callbacks are ignored below, so release their UI controls here.
+  $('#config-save').disabled = activeConfigTab === 'perm' || activeConfigTab === 'templates';
+  $('#platform-modal').classList.add('hidden');
+}
+
+async function api(path, opts = {}, session = authSession()) {
+  if (!session.token) throw new Error('请先登录');
   const resp = await fetch(path, {
     ...opts,
     headers: {
       ...(opts.headers || {}),
       ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
-      Authorization: 'Bearer ' + token,
+      Authorization: 'Bearer ' + session.token,
     },
   });
-  if (resp.status === 401) { showLogin(); throw new Error('未授权'); }
+  const unauthorized = resp.status === 401 ||
+    (resp.status === 403 && resp.headers.get('X-DDBOT-Auth') === 'invalid-token');
+  if (unauthorized) {
+    if (isCurrentAuth(session)) showLogin();
+    throw new Error('登录已失效，请重新登录');
+  }
   if (resp.status === 403) { throw new Error('Token 错误或无权限'); }
   return resp;
 }
 
-async function apiJSON(path, opts) {
-  const r = await api(path, opts);
+async function apiJSON(path, opts, session = authSession(), acceptStale = false) {
+  const r = await api(path, opts, session);
+  if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
   if (!r.ok) {
     let msg = 'HTTP ' + r.status;
     try { const e = await r.json(); if (e.error) msg = e.error; } catch {}
     throw new Error(msg);
   }
-  return r.json();
+  const result = await r.json();
+  if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
+  return result;
+}
+
+// 日志与推送流共用鉴权代次：注销/重新登录会终止旧连接及重连定时器。
+function createAuthStream(path, onState, onEntry, isActive) {
+  let connection = null;
+  let retryTimer = null;
+
+  function stop() {
+    if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+    const old = connection;
+    connection = null;
+    if (old) {
+      old.controller.abort();
+      if (old.reader) old.reader.cancel().catch(() => {});
+    }
+    onState(false);
+  }
+
+  async function connect() {
+    if (!token || connection) return;
+    if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+    const session = authSession();
+    const current = { controller: new AbortController(), reader: null };
+    connection = current;
+    const live = () => connection === current && isCurrentAuth(session);
+    try {
+      const resp = await api(path, { signal: current.controller.signal }, session);
+      if (!live()) {
+        if (resp.body) await resp.body.cancel().catch(() => {});
+        return;
+      }
+      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      onState(true);
+      const reader = current.reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (live()) {
+        const { done, value } = await reader.read();
+        if (done || !live()) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = frame.split('\n').find((line) => line.startsWith('data: '));
+          if (!data) continue;
+          try { onEntry(JSON.parse(data.slice(6))); } catch {}
+        }
+      }
+    } catch (_) { /* A current, authenticated page retries transient failures below. */ }
+    finally {
+      if (connection === current) {
+        connection = null;
+        onState(false);
+        if (token && isCurrentAuth(session)) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (token && isCurrentAuth(session) && isActive()) connect();
+          }, 3000);
+        }
+      }
+    }
+  }
+
+  return { connect, stop };
 }
 
 /* ===== 登录 ===== */
 function showLogin() {
-  localStorage.removeItem(TOKEN_KEY);
-  token = '';
+  ++loginRequestSeq;
+  setAuthToken('');
+  if (loginHideTimer !== null) { clearTimeout(loginHideTimer); loginHideTimer = null; }
   const ov = $('#login-overlay');
   ov.style.opacity = '';
   ov.style.transition = '';
   ov.classList.remove('hidden');
+  $('#login-btn').disabled = false;
+  $('#login-btn').textContent = '登 录';
   $('#login-token').focus();
 }
 
 function hideLogin() {
+  const session = authSession();
+  if (loginHideTimer !== null) clearTimeout(loginHideTimer);
   const ov = $('#login-overlay');
   ov.style.transition = 'opacity .25s';
   ov.style.opacity = '0';
-  setTimeout(() => {
+  loginHideTimer = setTimeout(() => {
+    loginHideTimer = null;
+    if (!isCurrentAuth(session) || !token) return;
     ov.classList.add('hidden');
     ov.style.opacity = '';
     ov.style.transition = '';
@@ -114,15 +222,18 @@ async function doLogin(e) {
   e.preventDefault();
   const t = $('#login-token').value.trim();
   if (!t) return;
+  const request = ++loginRequestSeq;
+  const session = authSession();
+  const current = () => request === loginRequestSeq && isCurrentAuth(session);
   $('#login-btn').disabled = true;
   $('#login-btn').textContent = '登录中…';
   try {
     const resp = await fetch('/api/v1/health', {
       headers: { Authorization: 'Bearer ' + t },
     });
+    if (!current()) return;
     if (resp.status === 200) {
-      token = t;
-      localStorage.setItem(TOKEN_KEY, t);
+      setAuthToken(t);
       $('#login-error').classList.add('hidden');
       hideLogin();
       boot();
@@ -130,10 +241,12 @@ async function doLogin(e) {
       showLoginError(resp.status === 401 || resp.status === 403 ? 'Token 不正确，请重试' : '登录失败：服务暂时不可用，请稍后重试');
     }
   } catch {
-    showLoginError('网络连接失败，请检查服务是否在运行');
+    if (current()) showLoginError('网络连接失败，请检查服务是否在运行');
   } finally {
-    $('#login-btn').disabled = false;
-    $('#login-btn').textContent = '登 录';
+    if (request === loginRequestSeq) {
+      $('#login-btn').disabled = false;
+      $('#login-btn').textContent = '登 录';
+    }
   }
 }
 
@@ -201,12 +314,15 @@ function unskeleton(id) {
 }
 
 async function refreshDashboard() {
+  if (!token) return;
+  const session = authSession();
   try {
     const [ob, st, sum] = await Promise.all([
       apiJSON('/api/v1/onebot/status'),
       apiJSON('/api/v1/status'),
       apiJSON('/api/v1/subs/summary'),
     ]);
+    if (!isCurrentAuth(session)) return;
     $('#ob-status').className = 'dot ' + (ob.online ? 'on' : 'off');
     $('#ob-text').textContent = ob.online ? '在线' : '离线';
     $('#ob-sub').textContent = (st.concernsStatus ? Object.keys(st.concernsStatus).length : 0) + ' 个平台已加载';
@@ -220,6 +336,7 @@ async function refreshDashboard() {
       ? Object.entries(bySite).map(([k, v]) => `<span class="site-badge">${esc(k)} ${v}</span>`).join('')
       : '暂无订阅';
   } catch (e) {
+    if (!isCurrentAuth(session)) return;
     unskeleton('#uptime');
     unskeleton('#subs-total');
     $('#ob-text').textContent = '获取失败';
@@ -276,38 +393,10 @@ function rerenderLogs() {
   scrollToBottom();
 }
 
-async function connectLogs(retry) {
-  if (!token) return;
-  try {
-    const resp = await fetch('/api/v1/logs/stream', {
-      headers: { Authorization: 'Bearer ' + token },
-    });
-    if (resp.status === 401) { showLogin(); return; }
-    if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
-    setSSE(true);
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const data = frame.split('\n').find((l) => l.startsWith('data: '));
-        if (!data) continue;
-        try { appendLog(JSON.parse(data.slice(6))); } catch {}
-      }
-    }
-  } catch (e) { /* fallthrough */ }
-  setSSE(false);
-  // 断线重连：仅日志页可见时保持（避免多标签页/后台页签堆积长连接占满浏览器 6 连接上限）
-  setTimeout(() => {
-    if ($('#page-logs') && $('#page-logs').classList.contains('active')) connectLogs(true);
-  }, 3000);
-}
+const logStream = createAuthStream('/api/v1/logs/stream', setSSE, appendLog,
+  () => $('#page-logs')?.classList.contains('active'));
+
+function connectLogs() { return logStream.connect(); }
 
 function setSSE(on) {
   sseConnected = on;
@@ -474,9 +563,8 @@ let activeConfigTab = 'basic';
 // 基础页表单）改过的键在 configCache 里已经变了，拿它比会把这些旧值当成「用户改的」发出去。
 let advBase = null;
 
-/* 字段类型：text / number / bool(toggle) / select / credential(只读状态)。
- * 凭据类字段（cookie/token/password）后端 API 禁止修改（防 token 泄露后篡改凭据），
- * 因此只展示配置状态，引导用户在 application.yaml 中修改。 */
+/* 字段类型：text / number / bool(toggle) / select / credential(只写凭据)。
+ * 平台凭据只展示脱敏状态，允许覆盖或显式清除；管理及 WebSocket token 禁止通过 API 修改。 */
 function normalizeImageMergeOption(value) {
   const normalized = String(value).trim().toLowerCase();
   if (normalized === 'false') return 'off';
@@ -865,22 +953,28 @@ function renderReloadStatus(status) {
 
 async function refreshReloadStatus() {
   const request = ++reloadStatusRequest;
+  const session = authSession();
   try {
-    const status = await apiJSON('/api/v1/config/status');
-    if (request === reloadStatusRequest) renderReloadStatus(status);
+    const status = await apiJSON('/api/v1/config/status', {}, session);
+    if (request === reloadStatusRequest && isCurrentAuth(session)) renderReloadStatus(status);
   } catch (_) { /* Keep the last known state on transient errors. */ }
 }
 
 function saveConfigPatch(patch) {
+  const session = authSession();
   // A save invalidates status queries that started before it.
   ++reloadStatusRequest;
   ++configLoadRequest;
   const body = JSON.stringify({ config: patch });
   // Serialize all configuration forms and platform toggles in user action order.
   const save = configSaveQueue.then(() => {
+    if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置保存已取消');
     ++reloadStatusRequest;
     ++configLoadRequest;
-    return apiJSON('/api/v1/config', { method: 'POST', body });
+    return apiJSON('/api/v1/config', { method: 'POST', body }, session).then((result) => {
+      if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置响应已忽略');
+      return result;
+    });
   });
   configSaveQueue = save.catch(() => {});
   return save;
@@ -904,23 +998,24 @@ function showConfigSaved(result, label = '配置已保存') {
 
 async function loadConfig() {
   const request = ++configLoadRequest;
+  const session = authSession();
   try {
-    const cfg = await apiJSON('/api/v1/config');
-    if (request !== configLoadRequest) return;
+    const cfg = await apiJSON('/api/v1/config', {}, session);
+    if (request !== configLoadRequest || !isCurrentAuth(session)) return;
     configCache = cfg;
     loadConfig._retried = false;
     renderConfigForm();
     refreshReloadStatus();
     loadPermOverview(); // 权限面板数据（面板由 renderConfigForm 生成）
   } catch (e) {
-    if (request !== configLoadRequest) return;
+    if (request !== configLoadRequest || !isCurrentAuth(session)) return;
     if (e.message.includes('401')) { showLogin(); return; } // 登录失效直接回登录层
     // 网络抖动自动重试一次，重试再失败才提示。
     // _retried 只能在「成功」或「最终失败」时复位：原来放在定时器回调开头复位，
     // 递归调用永远看到 false，于是变成无限重试，用户永远等不到失败提示。
     if (!loadConfig._retried) {
       loadConfig._retried = true;
-      setTimeout(loadConfig, 1500);
+      setTimeout(() => { if (isCurrentAuth(session) && request === configLoadRequest) loadConfig(); }, 1500);
       return;
     }
     loadConfig._retried = false;
@@ -1004,6 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
   syncSaveBtn();
 
   $('#config-save').addEventListener('click', async () => {
+    const session = authSession();
     let patch;
     try {
       patch = collectConfigPatch(activeConfigTab);
@@ -1018,12 +1114,13 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#config-save').disabled = true;
     try {
       const result = await saveConfigPatch(patch);
+      if (!isCurrentAuth(session)) return;
       showConfigSaved(result);
       loadConfig();
     } catch (e) {
-      toast('保存失败：' + e.message, false);
+      if (isCurrentAuth(session)) toast('保存失败：' + e.message, false);
     } finally {
-      $('#config-save').disabled = false;
+      if (isCurrentAuth(session)) $('#config-save').disabled = false;
     }
   });
 });
@@ -1422,13 +1519,16 @@ function collectPatchFromContainer(container) {
 // setPlatformEnabled 保存并同步应用 platform.<site>.enable，
 // lsp/notify.go 消费出口即时跳过停用平台的推送（订阅数据保留，恢复后继续）
 async function setPlatformEnabled(site, enabled) {
+  const session = authSession();
   const patch = {};
   setPath(patch, 'platform.' + site + '.enable', enabled);
   try {
     const result = await saveConfigPatch(patch);
+    if (!isCurrentAuth(session)) return;
     showConfigSaved(result, `${enabled ? '已启用' : '已停用推送'}：${(PLATFORM_META[site] || {}).name || site}`);
     if (configCache) setPath(configCache, 'platform.' + site + '.enable', enabled);
   } catch (e) {
+    if (!isCurrentAuth(session)) return;
     toast('设置失败：' + e.message, false);
     loadConfig();
   }
@@ -1446,6 +1546,7 @@ function closeSidebar() {
 const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博' };
 
 let loginSession = null; // 服务端会话 id
+let loginSessionAuth = null;
 let loginTimer = null;   // 轮询定时器
 let loginReqSeq = 0;     // 建会话请求的序号，用来丢掉过期请求的迟到响应
 let loginSite = null;    // 当前平台，供「重新获取二维码」用
@@ -1476,24 +1577,28 @@ function renderLoginBody(html) {
   $('#login-modal-body').innerHTML = html;
 }
 
-function cancelLoginSession() {
-  if (!loginSession) return;
-  const sid = loginSession;
-  loginSession = null;
-  api('/api/v1/login/qrcode/cancel', { method: 'POST', body: JSON.stringify({ session: sid }) }).catch(() => {});
+function cancelLoginSession(sid = loginSession, session = loginSessionAuth) {
+  if (!sid) return;
+  if (sid === loginSession) { loginSession = null; loginSessionAuth = null; }
+  api('/api/v1/login/qrcode/cancel', {
+    method: 'POST', body: JSON.stringify({ session: sid }),
+  }, session || authSession()).catch(() => {});
 }
 
 function stopLoginPolling() {
-  if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+  if (loginTimer !== null) { clearInterval(loginTimer); loginTimer = null; }
 }
 
 function closeLoginModal() {
+  ++loginReqSeq;
+  loginSite = null;
   $('#login-modal').classList.add('hidden');
   stopLoginPolling();
   cancelLoginSession();
 }
 
 async function startPlatformLogin(site) {
+  if (!token) { showLogin(); return; }
   const name = LOGIN_PLATFORM_NAME[site] || site;
   stopLoginPolling();
   cancelLoginSession();
@@ -1504,24 +1609,27 @@ async function startPlatformLogin(site) {
   $('#login-modal').classList.remove('hidden');
 
   const seq = ++loginReqSeq;
+  const session = authSession();
+  const current = () => seq === loginReqSeq && loginSite === site && isCurrentAuth(session);
   let resp;
   try {
     resp = await apiJSON('/api/v1/login/qrcode', {
       method: 'POST',
       body: JSON.stringify({ platform: site }),
-    });
+    }, session, true); // 迟到响应仍要读取 session id，随后显式取消服务端任务。
   } catch (e) {
     // 已经有更新的一次点击/切平台了，这次的结果作废
-    if (seq !== loginReqSeq || loginSite !== site) return;
+    if (!current()) return;
     renderLoginBody('<div class="login-qr-box"><div class="login-qr-err">' + esc(e.message) + '</div></div>' + loginActionsHTML());
     return;
   }
 
-  if (seq !== loginReqSeq || loginSite !== site) return;
+  if (!current()) { cancelLoginSession(resp.session, session); return; }
   // 连点两次扫码时两个请求会先后回来：后一个把 loginSession 覆盖掉，
   // 前一个挂的定时器就再也没人清了。这里先停一次再挂新的。
   stopLoginPolling();
   loginSession = resp.session;
+  loginSessionAuth = session;
   renderLoginBody(
     '<div class="login-qr-box"><img class="login-qr" alt="登录二维码" src="' + resp.image + '"></div>' +
     '<div class="login-status" id="login-status">' + esc(resp.message || '请扫码') + '</div>' +
@@ -1535,19 +1643,22 @@ async function startPlatformLogin(site) {
 // 不能再来动界面 —— 否则它会劫持弹层、掐掉新会话的轮询，还弹一条莫名其妙的成功提示。
 async function pollLoginStatus(sid) {
   if (!sid || loginSession !== sid) return;
+  const session = loginSessionAuth;
+  if (!isCurrentAuth(session)) return;
   let r;
   try {
-    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(sid));
+    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(sid), {}, session);
   } catch (e) {
     return; // 网络抖动，等下一次
   }
-  if (loginSession !== sid) return; // 等响应期间被切走/关掉了
+  if (loginSession !== sid || !isCurrentAuth(session)) return; // 等响应期间被切走/关掉了
   const el = $('#login-status');
   if (el && r.message) el.textContent = r.message;
 
   if (r.state === 'confirmed') {
     stopLoginPolling();
     loginSession = null; // 服务端已经收尾，不用再发 cancel
+    loginSessionAuth = null;
     renderLoginBody(loginResultHTML('ok', r.message || '登录成功，凭据已写入配置', r.platform));
     // 服务端在登录成功时已经把账号缓存失效了，这里拿到的是新账号
     loadPlatformAccount(r.platform, 'login-result-account');
@@ -1556,6 +1667,7 @@ async function pollLoginStatus(sid) {
   } else if (r.state === 'failed' || r.state === 'expired') {
     stopLoginPolling();
     loginSession = null;
+    loginSessionAuth = null;
     renderLoginBody(loginResultHTML('err', r.message || '登录未完成，请重新扫码', r.platform));
   } else if (r.state === 'scanned') {
     if (el) el.className = 'login-status scanned';
@@ -1608,15 +1720,17 @@ function accountCardHTML(site, acc) {
 /* ===== 启动 ===== */
 function boot() {
   refreshDashboard();
-  setInterval(refreshDashboard, 5000);
+  if (dashboardTimer !== null) clearInterval(dashboardTimer);
+  dashboardTimer = setInterval(refreshDashboard, 5000);
   if (!sseConnected) connectLogs();
+  if ($('#page-pushes')?.classList.contains('active') && window.PushPage) window.PushPage.enter();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
 
   $('#login-form').addEventListener('submit', doLogin);
-  $('#logout-btn').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); showLogin(); });
+  $('#logout-btn').addEventListener('click', showLogin);
   $('#theme-toggle').addEventListener('click', () => {
     applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
   });
@@ -1718,6 +1832,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // （cancel/save 按钮是弹层 body 动态生成的，初始化时不存在，不能直接绑定）
   const closePlatformModal = () => $('#platform-modal').classList.add('hidden');
   const savePlatformModal = async () => {
+    const session = authSession();
     const saveBtn = $('#platform-modal-save');
     if (!saveBtn) return;
     saveBtn.disabled = true;
@@ -1726,6 +1841,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const patch = collectPatchFromContainer($('#platform-modal-body'));
       if (Object.keys(patch).length) {
         const result = await saveConfigPatch(patch);
+        if (!isCurrentAuth(session)) return;
         showConfigSaved(result, '平台配置已保存');
       } else {
         toast('没有修改需要保存');
@@ -1733,10 +1849,12 @@ document.addEventListener('DOMContentLoaded', () => {
       closePlatformModal();
       await loadConfig();
     } catch (e) {
-      toast('保存失败：' + e.message, false);
+      if (isCurrentAuth(session)) toast('保存失败：' + e.message, false);
     } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '保存';
+      if (isCurrentAuth(session)) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+      }
     }
   };
   $('#platform-modal').addEventListener('click', (e) => {
@@ -1815,11 +1933,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function checkSetupThenStart() {
+  const session = authSession();
   try {
     const r = await fetch('/api/v1/setup/status');
     const st = await r.json();
+    if (!isCurrentAuth(session)) return;
     if (st && st.needed) { showSetup(); return; }
   } catch { /* 探测失败按常规流程走 */ }
+  if (!isCurrentAuth(session)) return;
   if (token) {
     hideLogin();
     boot();
@@ -1928,6 +2049,8 @@ function bindSetupWizard() {
 
   // 提交
   $('#setup-submit').addEventListener('click', async () => {
+    const session = authSession();
+    const setupToken = $('#setup-pass').value;
     const btn = $('#setup-submit');
     btn.disabled = true;
     btn.textContent = '初始化中…';
@@ -1936,20 +2059,20 @@ function bindSetupWizard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          token: $('#setup-pass').value,
+          token: setupToken,
           obMode: $('#setup-ob-addr').value.trim() ? setupMode : '',
           obAddr: $('#setup-ob-addr').value.trim(),
           obToken: $('#setup-ob-token').value,
         }),
       });
+      if (!isCurrentAuth(session)) return;
       if (!resp.ok) {
         let msg = '初始化失败（' + resp.status + '）';
         try { const e = await resp.json(); if (e.error) msg = e.error; } catch {}
         throw new Error(msg);
       }
       // 成功：展示带「接下来去哪」指引的完成页，用户读完手动进入
-      token = $('#setup-pass').value;
-      localStorage.setItem(TOKEN_KEY, token);
+      setAuthToken(setupToken);
       for (let i = 1; i <= 4; i++) $('#setup-pane-' + i).classList.add('hidden');
       const done = $('#setup-pane-done');
       done.classList.remove('hidden');

@@ -2,9 +2,9 @@ package cfg
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,7 +23,7 @@ func GetConfigWriteMutex() *sync.Mutex { return &configWriteMu }
 
 // WriteConfigKeyValue safely updates a single key in application.yaml.
 // The key uses dot notation (e.g. "weibo.alertGroupId").
-// It performs line-by-line text manipulation to preserve all other content.
+// It locates YAML nodes and edits source ranges to preserve other content.
 // Uses atomic write (temp file + rename) to prevent corruption.
 func WriteConfigKeyValue(key, value string) error {
 	return WriteConfigKeyValues(map[string]string{key: value})
@@ -32,9 +32,25 @@ func WriteConfigKeyValue(key, value string) error {
 // WriteConfigKeyValues updates related credentials in one validated transaction.
 // No intermediate partial account or mode is written or published.
 func WriteConfigKeyValues(values map[string]string) error {
+	return WriteConfigKeyValuesContext(context.Background(), values)
+}
+
+// WriteConfigKeyValuesContext prevents a canceled login session from publishing
+// credentials after waiting for another configuration transaction.
+func WriteConfigKeyValuesContext(ctx context.Context, values map[string]string) error {
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
-	return updateConfigKeyValues(values, ConfigFilePath(), config.GlobalConfig.Save)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return updateConfigKeyValues(values, ConfigFilePath(), func(data []byte, persist func() error) error {
+		return config.GlobalConfig.SaveContext(ctx, data, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return persist()
+		})
+	})
 }
 
 // quoteYAMLValue 把值写成 YAML 双引号标量。
@@ -114,6 +130,12 @@ func updateConfigKeyValues(values map[string]string, cfgPath string, save func([
 			return err
 		}
 	}
+	// Parsing alone is insufficient: flat dotted keys and case-equivalent keys
+	// can shadow an otherwise valid edit. Verify the complete credential pair
+	// before either prepare hooks or the persistence callback can observe it.
+	if err := validateUpdatedConfigValues(newData, values); err != nil {
+		return err
+	}
 	persist := func() error {
 		// 使用临时文件 + 原子替换，避免写入中途崩溃导致配置损坏。
 		// Windows 上目标文件可能被编辑器/杀毒软件瞬时占用，rename 会失败，
@@ -141,128 +163,44 @@ func updateConfigKeyValues(values map[string]string, cfgPath string, save func([
 	return persist()
 }
 
-// rewriteConfigKeyValue preserves comments, casing and line endings in memory.
+// validateUpdatedConfigValues uses the same lookup rules as runtime snapshots.
+// Never include credential values or parser diagnostics in a returned error.
+func validateUpdatedConfigValues(data []byte, values map[string]string) error {
+	v := viper.New()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("配置不是合法 YAML，已拒绝写入")
+	}
+	for key, value := range values {
+		if v.GetString(key) != value {
+			return fmt.Errorf("配置键 %s 未能有效更新，已拒绝写入", key)
+		}
+	}
+	return nil
+}
+
+// rewriteConfigKeyValue uses parsed node positions rather than matching text
+// inside nested mappings or scalar bodies. Unrelated bytes remain untouched.
 func rewriteConfigKeyValue(data []byte, key, value string) ([]byte, error) {
-	parts := strings.SplitN(key, ".", 2)
-	if len(parts) != 2 {
+	parts := strings.Split(key, ".")
+	if len(parts) < 2 {
 		return nil, fmt.Errorf("invalid config key format: %s (expected section.name)", key)
 	}
-	section := parts[0]
-	keyName := parts[1]
-
-	// 整行匹配：缩进 + 键名 + 冒号前空格 + 冒号 + 冒号后空格 + 值。
-	// 命中时按原样拼回、只换值——缩进、键名大小写、冒号两侧的写法都不动。
-	// 匹配必须大小写不敏感（viper 就是大小写不敏感）：文件里写的是小写 sessdata 时
-	// 若匹配不上，就会在段尾另起一行 SESSDATA，同一份配置出现两个等价键。
-	keyRe := regexp.MustCompile(`^(\s*)("?)([A-Za-z0-9_.\-]+)("?)(\s*):(\s*)(.*)$`)
-	quoted := quoteYAMLValue(value)
-
-	// Windows 记事本存 UTF-8 会加 BOM。带着它，首行的段头就认不出来，会在文件末尾
-	// 追加第二个同名段 —— 重复顶层键让 yaml.v3 直接报错、进程起不来。
+	for _, part := range parts {
+		if part == "" {
+			return nil, fmt.Errorf("invalid config key format: %s", key)
+		}
+	}
 	content := strings.TrimPrefix(string(data), "\ufeff")
-
-	// Windows 上编辑过的配置是 CRLF，正则会把行尾的 \r 一起吃进「值」那一组，
-	// 拼回时不补上就变成混合换行。但**不能整文件一个判断**：混合换行的文件里给本来
-	// 就是 LF 的行补 CR，等于换成另一种混合换行。逐行替换用该行原本的行尾（lineEOL），
-	// 只有追加新段才用文件整体约定。
-	fileEOL := ""
-	if strings.Contains(content, "\r\n") {
-		fileEOL = "\r"
+	updated, err := rewriteYAMLPath(content, parts, quoteYAMLValue(value))
+	if err != nil {
+		return nil, fmt.Errorf("配置键 %s 无法安全更新，已拒绝写入: %w", key, err)
 	}
-
-	lines := strings.Split(content, "\n")
-
-	var out []string
-	inSection := false
-	indentSection := ""
-	childIndent := "" // 段内已有子键的缩进，插入新键时对齐它
-	inserted := false
-
-	// 段里已有子键就照它的缩进插，没有才退回段头缩进 + 两空格。
-	// 写死两空格会把 4 空格缩进的段改成混合缩进，YAML 直接不合法。
-	insertKey := func() string {
-		indent := childIndent
-		if indent == "" {
-			indent = indentSection + "  "
-		}
-		return indent + keyName + ": " + quoted + fileEOL
+	if bytes.HasPrefix(data, []byte("\ufeff")) {
+		updated = "\ufeff" + updated
 	}
-
-	for _, line := range lines {
-		trim := strings.TrimSpace(line)
-
-		// 该行原本的行尾：CRLF 文件里按行补 \r，混合换行的文件才不会被越改越乱
-		lineEOL := ""
-		if strings.HasSuffix(line, "\r") {
-			lineEOL = "\r"
-		}
-		lineBody := strings.TrimSuffix(line, "\r")
-
-		// 段头必须是顶格的 section:。不认缩进的话，面板保存后按字母序排出来的 platform
-		// 段里的 platform.weibo 会被当成段头，sub 就写进了 platform.weibo ——
-		// 顶层 weibo 段永远是空的，重启即复现「登录了还在跑访客模式」。
-		if !inSection && isSectionHeader(lineBody, section) {
-			inSection = true
-			indentSection = ""
-			out = append(out, line)
-			continue
-		}
-
-		if inSection {
-			// 退出段：顶格的非注释行。注释不算 —— 顶格注释写在段中间很常见，
-			// 当成结束会把新键插到注释前面，和后面的真键撞成重复键，整份配置读不了。
-			if len(trim) > 0 && !strings.HasPrefix(trim, "#") &&
-				!strings.HasPrefix(lineBody, " ") && !strings.HasPrefix(lineBody, "\t") {
-				if !inserted {
-					out = append(out, insertKey())
-					inserted = true
-				}
-				inSection = false
-			} else if m := keyRe.FindStringSubmatch(lineBody); m != nil && strings.EqualFold(m[3], keyName) {
-				// 只换值：缩进、键名大小写、冒号两侧写法、行内注释、行尾都按原样保留
-				out = append(out, m[1]+m[2]+m[3]+m[4]+m[5]+":"+m[6]+quoted+keepInlineComment(m[7])+lineEOL)
-				inserted = true
-				continue
-			} else if childIndent == "" && len(trim) > 0 && !strings.HasPrefix(trim, "#") {
-				if idx := strings.Index(lineBody, trim); idx > 0 {
-					childIndent = lineBody[:idx]
-				}
-			}
-		}
-
-		// 没被替换的行原样保留
-		out = append(out, line)
-	}
-
-	// 段一直延伸到文件末尾且没找到该键：插到段内最后一个非空行之后（跳过尾部空行，
-	// 否则新键会落在空行后面，虽然仍是合法 YAML 但看着别扭）
-	if inSection && !inserted {
-		pos := len(out)
-		for pos > 0 && strings.TrimSpace(out[pos-1]) == "" {
-			pos--
-		}
-		out = append(out, "")
-		copy(out[pos+1:], out[pos:])
-		out[pos] = insertKey()
-		inserted = true
-	}
-
-	// 没有该段：追加一个新段
-	if !inserted {
-		if len(out) > 0 && out[len(out)-1] != "" {
-			out = append(out, "")
-		}
-		out = append(out, section+":"+fileEOL)
-		out = append(out, "  "+keyName+": "+quoted+fileEOL)
-	}
-
-	// 追加新段时 out 的末尾会少一个空元素，这里补回原文件的结尾换行约定
-	joined := strings.Join(out, "\n")
-	if strings.HasSuffix(content, "\n") && !strings.HasSuffix(joined, "\n") {
-		joined += "\n"
-	}
-	newData := []byte(joined)
-	if err := validateYAML(newData); err != nil {
+	newData := []byte(updated)
+	if err := validateUpdatedConfigValues(newData, map[string]string{key: value}); err != nil {
 		return nil, err
 	}
 	return newData, nil

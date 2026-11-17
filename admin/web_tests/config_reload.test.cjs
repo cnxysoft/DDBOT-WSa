@@ -22,6 +22,8 @@ function fixture() {
     renderConfigForm: () => {},
     loadPermOverview: () => {},
     showLogin: () => {},
+    authSession: () => ({ generation: 0, token: 'test' }),
+    isCurrentAuth: () => true,
     apiJSON: (url, options) => new Promise((resolve, reject) => {
       requests.push({ url, options, resolve, reject });
     }),
