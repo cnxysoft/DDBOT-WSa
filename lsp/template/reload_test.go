@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/spf13/viper"
 )
 
@@ -20,7 +22,14 @@ func reloadSnapshot(values map[string]interface{}) *config.Snapshot {
 
 func TestTemplateRuntimeEnableDisableAndInvalidRetains(t *testing.T) {
 	t.Chdir(t.TempDir())
-	t.Cleanup(Close)
+	previousLogger := logger
+	localLogger := logrus.New()
+	hook := logrustest.NewLocal(localLogger)
+	logger = localLogger.WithField("module", "template")
+	t.Cleanup(func() {
+		Close()
+		logger = previousLogger
+	})
 	if err := os.Mkdir("template", 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +50,17 @@ func TestTemplateRuntimeEnableDisableAndInvalidRetains(t *testing.T) {
 	if err = os.WriteFile(path, []byte(`{{define`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		entry := hook.LastEntry()
+		if entry != nil && entry.Message == "自定义模板更新失败，保留上次有效模板" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("watcher did not process the invalid template")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if LoadTemplate("reload-test") == nil {
 		t.Fatal("invalid file replaced working generation")
 	}

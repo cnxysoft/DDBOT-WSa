@@ -3,17 +3,19 @@ package template
 import (
 	"embed"
 	"fmt"
-	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/cnxysoft/DDBOT-WSa/adapter"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/fsnotify/fsnotify"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/fsnotify/fsnotify"
 )
 
 const templateDir = "template"
@@ -106,6 +108,21 @@ func prepareLoader(enabled bool) (func(), func(), error) {
 
 func (l *templateLoader) run() {
 	defer close(l.done)
+	// In-place saves produce separate truncate/write events. Coalesce the burst
+	// before parsing to avoid publishing an intermediate empty file during an
+	// ordinary save whose final contents may be invalid.
+	debounce := time.NewTimer(time.Hour)
+	debounce.Stop()
+	defer debounce.Stop()
+	schedule := func() {
+		if !debounce.Stop() {
+			select {
+			case <-debounce.C:
+			default:
+			}
+		}
+		debounce.Reset(100 * time.Millisecond)
+	}
 	for {
 		select {
 		case event, ok := <-l.watcher.Events:
@@ -115,7 +132,28 @@ func (l *templateLoader) run() {
 			if !strings.HasSuffix(event.Name, ".tmpl") {
 				continue
 			}
+			schedule()
+		case <-debounce.C:
 			candidate, err := externalRoot()
+			// Parsing can span another edit. If a new event arrived, discard this
+			// candidate and wait for that edit to settle as well.
+			changed := false
+		drain:
+			for {
+				select {
+				case event, ok := <-l.watcher.Events:
+					if !ok {
+						return
+					}
+					changed = changed || strings.HasSuffix(event.Name, ".tmpl")
+				default:
+					break drain
+				}
+			}
+			if changed {
+				schedule()
+				continue
+			}
 			if err != nil {
 				logger.WithError(err).Warn("自定义模板更新失败，保留上次有效模板")
 				continue
