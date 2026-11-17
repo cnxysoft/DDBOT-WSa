@@ -7,6 +7,10 @@ import (
 
 var ErrNil = errors.New("<nil>")
 
+// ErrCandidateAborted prevents a discarded candidate from silently using the
+// running pool or a direct connection.
+var ErrCandidateAborted = errors.New("proxy candidate was aborted")
+
 type Prefer int64
 
 const (
@@ -25,6 +29,10 @@ type IProxyPool interface {
 type IProxy interface {
 	ProxyString() string
 }
+
+// Getter selects a proxy for one request. ErrNil explicitly selects a direct
+// connection; other errors must not fall back to a different pool.
+type Getter func(Prefer) (IProxy, error)
 
 var proxyPool IProxyPool
 var poolMu sync.RWMutex

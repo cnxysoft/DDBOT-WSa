@@ -30,8 +30,15 @@ func resourceChanged(previous, next *config.Snapshot, sections ...string) bool {
 
 // PrepareProxyReload constructs and validates a replacement without publishing it.
 func PrepareProxyReload(previous, next *config.Snapshot) (func(), func(), error) {
+	_, commit, abort, err := PrepareProxyReloadWithGetter(previous, next)
+	return commit, abort, err
+}
+
+// PrepareProxyReloadWithGetter isolates candidate validation from live traffic.
+// The getter follows future running pools after commit, or fails after abort.
+func PrepareProxyReloadWithGetter(previous, next *config.Snapshot) (proxy_pool.Getter, func(), func(), error) {
 	if !resourceChanged(previous, next, "proxy", "localProxyPool", "pyProxyPool") {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	var candidate proxy_pool.IProxyPool
 	switch next.GetString("proxy.type") {
@@ -52,7 +59,7 @@ func PrepareProxyReload(previous, next *config.Snapshot) (func(), func(), error)
 				}
 				u, err := url.Parse(address)
 				if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") {
-					return nil, nil, fmt.Errorf("localProxyPool.%s 包含无效代理地址", group.key)
+					return nil, nil, nil, fmt.Errorf("localProxyPool.%s 包含无效代理地址", group.key)
 				}
 				proxies = append(proxies, &local_proxy_pool.Proxy{Proxy: address, Type: group.prefer})
 			}
@@ -62,16 +69,13 @@ func PrepareProxyReload(previous, next *config.Snapshot) (func(), func(), error)
 		var err error
 		candidate, err = py.NewPYProxyPool(next.GetString("pyProxyPool.host"))
 		if err != nil {
-			return nil, nil, fmt.Errorf("pyProxyPool 无法连接，请检查配置与服务")
+			return nil, nil, nil, fmt.Errorf("pyProxyPool 无法连接，请检查配置与服务")
 		}
 	default:
-		return nil, nil, fmt.Errorf("proxy.type 不受支持")
+		return nil, nil, nil, fmt.Errorf("proxy.type 不受支持")
 	}
-	return func() { proxy_pool.Swap(candidate) }, func() {
-		if candidate != nil {
-			_ = candidate.Stop()
-		}
-	}, nil
+	getter, commit, abort := proxy_pool.PrepareSwap(candidate)
+	return getter, commit, abort, nil
 }
 
 // PrepareImagePoolReload leaves candidate workers idle until the old pool drains.

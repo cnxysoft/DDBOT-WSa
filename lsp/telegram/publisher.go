@@ -3,13 +3,8 @@ package telegram
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/cnxysoft/DDBOT-WSa/adapter"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
+	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/sirupsen/logrus"
 )
 
 var log = logrus.WithField("module", "telegram")
@@ -120,6 +122,10 @@ func ensureInit() bool {
 // PrepareRuntimeReload authorizes a new client before persistence. A rejected
 // candidate cannot overwrite the live client, chats, or receiving offset.
 func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), error) {
+	return PrepareRuntimeReloadWithProxy(previous, next, nil)
+}
+
+func PrepareRuntimeReloadWithProxy(previous, next *config.Snapshot, getter proxy_pool.Getter) (func(), func(), error) {
 	if previous != nil && reflect.DeepEqual(previous.Get("telegram"), next.Get("telegram")) {
 		return nil, nil, nil
 	}
@@ -157,7 +163,7 @@ func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), erro
 			candidate = old
 		} else {
 			ctx, cancel := context.WithCancel(context.Background())
-			client := buildTelegramHTTPClient()
+			client := buildTelegramHTTPClientWithProxy(getter)
 			client.Timeout = 75 * time.Second
 			b, err := tgbotapi.NewBotAPIWithClient(token, endpoint, pollingClient{client, ctx})
 			if err != nil {
@@ -359,6 +365,14 @@ func Close() {
 // 代理池未初始化或无可用代理时直连。
 // 支持 http(s) 与 socks5 代理 URL（http.Transport.Proxy 原生支持 socks5 scheme）。
 func buildTelegramHTTPClient() *http.Client {
+	return buildTelegramHTTPClientWithProxy(nil)
+}
+
+func buildTelegramHTTPClientWithProxy(getter proxy_pool.Getter) *http.Client {
+	strict := getter != nil
+	if getter == nil {
+		getter = proxy_pool.Get
+	}
 	// Base transport with conservative timeouts suitable for long-polling
 	tr := &http.Transport{
 		MaxIdleConns:          100,
@@ -370,13 +384,24 @@ func buildTelegramHTTPClient() *http.Client {
 		ForceAttemptHTTP2:     false,            // more stable with some proxies
 	}
 	tr.Proxy = func(req *http.Request) (*url.URL, error) {
-		if p, err := proxy_pool.Get(proxy_pool.PreferOversea); err == nil && p != nil {
-			u, err := url.Parse(p.ProxyString())
-			if err == nil && u.Scheme != "" {
-				return u, nil
-			}
+		p, err := getter(proxy_pool.PreferOversea)
+		if errors.Is(err, proxy_pool.ErrNil) || (!strict && (err != nil || p == nil)) {
+			return nil, nil
 		}
-		return nil, nil
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, fmt.Errorf("Telegram 代理选择器未返回有效路由")
+		}
+		u, err := url.Parse(p.ProxyString())
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			if !strict {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("Telegram 代理地址无效")
+		}
+		return u, nil
 	}
 
 	return &http.Client{Transport: tr, Timeout: 75 * time.Second}

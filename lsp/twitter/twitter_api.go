@@ -103,6 +103,7 @@ func (c *QueryIdCache) IsCacheExpired() bool {
 // TwitterAPI handles official X.com API requests
 type TwitterAPI struct {
 	runtimeUserAgent string
+	proxyGetter      proxy_pool.Getter // immutable; candidate getter follows the live pool after commit
 	// mu 保护以下所有可变字段，防止配置刷新/queryId 更新与请求构造并发读写（data race）。
 	// 读取请使用 Snapshot/GetQueryId 等带锁方法，不要直接访问字段。
 	mu                  sync.RWMutex
@@ -296,7 +297,7 @@ func (t *TwitterAPI) FetchInitialState() (screenName, mainJsUrl string, err erro
 	ct0, authToken, _, _, _ := t.Snapshot()
 
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("x-csrf-token", ct0),
@@ -472,7 +473,7 @@ func (t *TwitterAPI) FetchLoggedInMainBundleUrl() (string, error) {
 	ct0, authToken, _, _, _ := t.Snapshot()
 
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("Accept", "*/*"),
@@ -638,7 +639,7 @@ func (t *TwitterAPI) FetchAllQueryIdsFromBundle(bundleUrl string) (*QueryIdCache
 	}
 
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("Accept", "*/*"),
@@ -1252,7 +1253,7 @@ func (t *TwitterAPI) doPost(ctx context.Context, apiURL string, body []byte, out
 	// 取一致性快照，避免并发配置刷新导致 header 撕裂
 	ct0, authToken, bearerToken, _, _ := t.Snapshot()
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),
@@ -1332,7 +1333,7 @@ func (t *TwitterAPI) doGetJSON(ctx context.Context, apiURL string, variables, fe
 	// 取一致性快照，避免并发配置刷新导致 header 撕裂
 	ct0, authToken, bearerToken, _, _ := t.Snapshot()
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),
@@ -1860,7 +1861,7 @@ func (t *TwitterAPI) followUnfollow(ctx context.Context, userId, action string) 
 	// 取一致性快照，避免并发配置刷新导致 header 撕裂
 	ct0, authToken, bearerToken, _, _ := t.Snapshot()
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),
@@ -1977,7 +1978,7 @@ func (t *TwitterAPI) GetUserByScreenName(ctx context.Context, screenName string)
 	// 取一致性快照，避免并发配置刷新导致 header 撕裂
 	ct0, authToken, bearerToken, _, _ := t.Snapshot()
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),
@@ -2103,7 +2104,7 @@ func (t *TwitterAPI) getUserByScreenNameWithRefresh(ctx context.Context, screenN
 	// 取一致性快照，避免并发配置刷新导致 header 撕裂
 	ct0, authToken, bearerToken, _, _ := t.Snapshot()
 	opts := []requests.Option{
-		requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, t.proxyGetter),
 		requests.TimeoutOption(time.Second * 30),
 		requests.AddUAOption(t.userAgent()),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),

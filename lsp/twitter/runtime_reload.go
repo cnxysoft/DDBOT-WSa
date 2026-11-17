@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 )
 
 type twitterRuntime struct {
@@ -62,6 +63,10 @@ func twitterBaseURLs() []string {
 }
 
 func newTwitterRuntime(s *config.Snapshot) (*twitterRuntime, error) {
+	return newTwitterRuntimeWithProxy(s, nil)
+}
+
+func newTwitterRuntimeWithProxy(s *config.Snapshot, getter proxy_pool.Getter) (*twitterRuntime, error) {
 	r := &twitterRuntime{mode: resolveTwitterMode(strings.ToLower(strings.TrimSpace(s.GetString("twitter.mode")))), fetchMode: normalizeAPIFetchMode(s.GetString("twitter.apiFetchMode")), userAgent: s.GetString("twitter.userAgent"), baseURLs: s.GetStringSlice("twitter.baseUrl")}
 	if mode := strings.TrimSpace(s.GetString("twitter.mode")); mode != "" && !strings.EqualFold(mode, ModeAPI) && !strings.EqualFold(mode, ModeMirror) {
 		return nil, fmt.Errorf("twitter.mode 必须为 api 或 mirror")
@@ -89,6 +94,7 @@ func newTwitterRuntime(s *config.Snapshot) (*twitterRuntime, error) {
 		r.api.SetUserTimelineQueryId(s.GetString("twitter.userTweetsQueryId"))
 		if r.api != nil {
 			r.api.runtimeUserAgent = r.userAgent
+			r.api.proxyGetter = getter
 		}
 	}
 	return r, nil
@@ -105,6 +111,10 @@ var validateTwitterCandidate = func(api *TwitterAPI) error {
 }
 
 func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), error) {
+	return PrepareRuntimeReloadWithProxy(previous, next, nil)
+}
+
+func PrepareRuntimeReloadWithProxy(previous, next *config.Snapshot, getter proxy_pool.Getter) (func(), func(), error) {
 	changed := previous == nil
 	for _, key := range []string{"mode", "apiFetchMode", "baseUrl", "userAgent", "ct0", "auth_token", "bearerToken", "queryId", "userTweetsQueryId", "screenName"} {
 		if previous != nil && !reflect.DeepEqual(previous.Get("twitter."+key), next.Get("twitter."+key)) {
@@ -114,7 +124,7 @@ func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), erro
 	if !changed {
 		return nil, nil, nil
 	}
-	r, err := newTwitterRuntime(next)
+	r, err := newTwitterRuntimeWithProxy(next, getter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -123,13 +133,16 @@ func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), erro
 			return nil, nil, err
 		}
 	}
+	var once sync.Once
 	return func() {
-		twitterStateMu.Lock()
-		defer twitterStateMu.Unlock()
-		liveTwitter.Store(r)
-		twitterFetchFailures.Store(0)
-		twitterRecovering.Store(false)
-	}, nil, nil
+		once.Do(func() {
+			twitterStateMu.Lock()
+			defer twitterStateMu.Unlock()
+			liveTwitter.Store(r)
+			twitterFetchFailures.Store(0)
+			twitterRecovering.Store(false)
+		})
+	}, func() { once.Do(func() {}) }, nil
 }
 
 func twitterSnapshot() *twitterRuntime {

@@ -20,6 +20,7 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/twitter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/xhs"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 )
 
 type reloadParticipant struct {
@@ -61,29 +62,43 @@ func prepareResources(previous, next *config.Snapshot, participants []reloadPart
 }
 
 func installResourceReload() {
-	config.GlobalConfig.OnPrepareReload(func(previous, next *config.Snapshot) (func(), func(), error) {
-		return prepareResources(previous, next, []reloadParticipant{
-			{"代理池", lsp.PrepareProxyReload},
-			{"图片池", lsp.Instance.PrepareImageReload},
-			{"模板或外部数据库", template.PrepareRuntimeReload},
-			{"Telegram", telegram.PrepareRuntimeReload},
-			{"B站凭据", bilibili.PrepareRuntimeReload},
-			{"ACFun凭据", acfun.PrepareRuntimeReload},
-			{"抖音凭据", douyin.PrepareRuntimeReload},
-			{"小红书凭据", xhs.PrepareRuntimeReload},
-			{"Twitch凭据", twitch.PrepareRuntimeReload},
-			{"TwitCasting凭据", twitcasting.PrepareRuntimeReload},
-			{"Twitter会话", twitter.PrepareRuntimeReload},
-			{"微博会话", weibo.PrepareRuntimeReload},
-			{"WebUI监听", admin.PrepareRuntimeReload},
-			// Connections are last: all earlier fallible preparation has finished
-			// before the brief disconnection of the active adapter.
-			{"Bot连接（协议、QQ AppID及状态路径须保持一致）", prepareBotConnection},
-		})
-	})
+	config.GlobalConfig.OnPrepareReload(prepareRuntimeResources)
 	cfg.EnableResourceHotReload()
 	bilibili.SetTransactionalReloadEnabled()
 	weibo.SetTransactionalReloadEnabled()
+}
+
+func prepareRuntimeResources(previous, next *config.Snapshot) (func(), func(), error) {
+	var candidateProxy proxy_pool.Getter
+	return prepareResources(previous, next, []reloadParticipant{
+		{"代理池", func(previous, next *config.Snapshot) (func(), func(), error) {
+			var commit, abort func()
+			var err error
+			candidateProxy, commit, abort, err = lsp.PrepareProxyReloadWithGetter(previous, next)
+			return commit, abort, err
+		}},
+		{"图片池", lsp.Instance.PrepareImageReload},
+		{"模板或外部数据库", template.PrepareRuntimeReload},
+		{"Telegram", func(previous, next *config.Snapshot) (func(), func(), error) {
+			return telegram.PrepareRuntimeReloadWithProxy(previous, next, candidateProxy)
+		}},
+		{"B站凭据", bilibili.PrepareRuntimeReload},
+		{"ACFun凭据", acfun.PrepareRuntimeReload},
+		{"抖音凭据", douyin.PrepareRuntimeReload},
+		{"小红书凭据", xhs.PrepareRuntimeReload},
+		{"Twitch凭据", func(previous, next *config.Snapshot) (func(), func(), error) {
+			return twitch.PrepareRuntimeReloadWithProxy(previous, next, candidateProxy)
+		}},
+		{"TwitCasting凭据", twitcasting.PrepareRuntimeReload},
+		{"Twitter会话", func(previous, next *config.Snapshot) (func(), func(), error) {
+			return twitter.PrepareRuntimeReloadWithProxy(previous, next, candidateProxy)
+		}},
+		{"微博会话", weibo.PrepareRuntimeReload},
+		{"WebUI监听", admin.PrepareRuntimeReload},
+		// Connections are last: all earlier fallible preparation has finished
+		// before the brief disconnection of the active adapter.
+		{"Bot连接（协议、QQ AppID及状态路径须保持一致）", prepareBotConnection},
+	})
 }
 
 func prepareBotConnection(previous, next *config.Snapshot) (func(), func(), error) {

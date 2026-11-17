@@ -6,10 +6,21 @@ import (
 	"sync"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 )
 
 func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), error) {
-	return prepareRuntimeReload(previous, next, requestAppToken)
+	return PrepareRuntimeReloadWithProxy(previous, next, nil)
+}
+
+func PrepareRuntimeReloadWithProxy(previous, next *config.Snapshot, getter proxy_pool.Getter) (func(), func(), error) {
+	return prepareRuntimeReloadWithProxy(previous, next, getter, authURL)
+}
+
+func prepareRuntimeReloadWithProxy(previous, next *config.Snapshot, getter proxy_pool.Getter, endpoint string) (func(), func(), error) {
+	return prepareRuntimeReload(previous, next, func(id, secret string) (tokenResponse, error) {
+		return requestAppTokenAtWithProxy(endpoint, id, secret, getter)
+	})
 }
 
 func prepareRuntimeReload(previous, next *config.Snapshot, fetch func(string, string) (tokenResponse, error)) (func(), func(), error) {

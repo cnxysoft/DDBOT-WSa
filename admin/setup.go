@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -169,8 +170,12 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	if err := config.GlobalConfig.Save(data, func() error {
 		return writeFileAtomic(cfgPath, data, fileMode)
 	}); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
+		var prepareErr *config.PrepareError
+		if errors.As(err, &prepareErr) {
+			writeErr(w, http.StatusBadRequest, prepareErr.Error())
+		} else {
+			writeErr(w, http.StatusInternalServerError, "Failed to write config file")
+		}
 		return
 	}
 

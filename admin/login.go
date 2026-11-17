@@ -446,7 +446,7 @@ func (s *Server) runWeiboLogin(mgr *loginManager, sess *loginSession) {
 			}
 			invalidateAccountCache(loginPlatformWeibo)
 			if !r.RuntimeLoaded {
-				sess.setState(loginStateConfirmed, "登录成功并已写入配置；Cookie 加载到内存失败，建议重启 Bot")
+				sess.setState(loginStateFailed, "凭据已保存，但运行会话未就绪；请检查登录状态后重试")
 				return
 			}
 			sess.setState(loginStateConfirmed, "登录成功，SUB 已写入配置并生效")

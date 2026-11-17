@@ -137,9 +137,17 @@ func (store *appToken) configured() bool {
 }
 
 func requestAppToken(clientID, secret string) (tokenResponse, error) {
+	return requestAppTokenWithProxy(clientID, secret, nil)
+}
+
+func requestAppTokenWithProxy(clientID, secret string, getter proxy_pool.Getter) (tokenResponse, error) {
+	return requestAppTokenAtWithProxy(authURL, clientID, secret, getter)
+}
+
+func requestAppTokenAtWithProxy(endpoint, clientID, secret string, getter proxy_pool.Getter) (tokenResponse, error) {
 	var resp tokenResponse
-	err := requests.PostWWWForm(authURL, gout.H{"client_id": clientID, "client_secret": secret, "grant_type": "client_credentials"}, &resp,
-		requests.TimeoutOption(10*time.Second), requests.RetryOption(3), requests.ProxyOption(proxy_pool.PreferOversea))
+	err := requests.PostWWWForm(endpoint, gout.H{"client_id": clientID, "client_secret": secret, "grant_type": "client_credentials"}, &resp,
+		requests.TimeoutOption(10*time.Second), requests.RetryOption(3), requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, getter))
 	if err != nil {
 		return tokenResponse{}, fmt.Errorf("Twitch API 认证请求失败")
 	}

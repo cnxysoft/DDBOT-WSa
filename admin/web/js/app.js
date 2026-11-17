@@ -1860,7 +1860,7 @@ function renderSetupSummary() {
     '<div class="ss-row"><span>管理密码</span><b>' + (pass ? '✓ 已设置' : '未设置') + '</b></div>' +
     (addr ? '<div class="ss-row"><span>OneBot ' + modeName + '</span><b class="mono">' + esc(addr) + '</b></div>'
           : '<div class="ss-row"><span>OneBot 连接</span><b>稍后在配置页设置</b></div>') +
-    '<p class="ss-note">OneBot 连接配置写入后需重启 Bot 生效。</p>';
+    '<p class="ss-note">当前使用 OneBot 时，连接配置保存后在线应用，无需重启。</p>';
 }
 
 function gotoSetupStep(n) {
