@@ -42,12 +42,16 @@ var (
 )
 
 type SatoriAdapter struct {
-	config     *adapter.AdapterConfig
-	httpClient *http.Client
-	wsConn     *websocket.Conn
-	stopChan   chan struct{}
-	readyCh    chan struct{}
-	pingDone   chan struct{}
+	config      *adapter.AdapterConfig
+	httpClient  *http.Client
+	wsConn      *websocket.Conn
+	stopChan    chan struct{}
+	readyCh     chan struct{}
+	pingDone    chan struct{}
+	readDone    chan struct{}
+	stopOnce    sync.Once
+	readStarted bool
+	pingStarted bool
 
 	mu                     sync.RWMutex
 	connected              bool
@@ -156,6 +160,7 @@ func NewSatoriAdapter(cfg *adapter.AdapterConfig) *SatoriAdapter {
 		stopChan:          make(chan struct{}),
 		readyCh:           make(chan struct{}, 1),
 		pingDone:          make(chan struct{}),
+		readDone:          make(chan struct{}),
 		idMap:             make(map[int64]string),
 		directChannelMap:  make(map[int64]string),
 		messageChannelMap: make(map[int32]string),
@@ -177,6 +182,7 @@ func (a *SatoriAdapter) Start() error {
 
 	a.mu.Lock()
 	a.wsConn = conn
+	a.readStarted = true
 	a.mu.Unlock()
 
 	go a.readLoop()
@@ -191,24 +197,35 @@ func (a *SatoriAdapter) Start() error {
 		conn.Close()
 		return fmt.Errorf("wait satori ready timeout")
 	}
+	a.mu.RLock()
+	validLogin := a.loginUserID != "" && a.platform != ""
+	a.mu.RUnlock()
+	if !validLogin {
+		_ = conn.Close()
+		return fmt.Errorf("satori ready did not include an authenticated login")
+	}
 
+	a.mu.Lock()
+	a.pingStarted = true
+	a.mu.Unlock()
 	go a.pingLoop()
 	logger.Infof("Satori adapter started: platform=%s self=%d", a.platform, a.selfID)
 	return nil
 }
 
 func (a *SatoriAdapter) Stop() error {
-	select {
-	case <-a.stopChan:
-	default:
-		close(a.stopChan)
+	a.stopOnce.Do(func() { close(a.stopChan) })
+	a.mu.RLock()
+	conn, readStarted, pingStarted := a.wsConn, a.readStarted, a.pingStarted
+	a.mu.RUnlock()
+	if conn != nil {
+		_ = conn.Close()
 	}
-	if a.wsConn != nil {
-		_ = a.wsConn.Close()
+	if readStarted {
+		<-a.readDone
 	}
-	select {
-	case <-a.pingDone:
-	case <-time.After(time.Second):
+	if pingStarted {
+		<-a.pingDone
 	}
 	a.mu.Lock()
 	a.connected = false
@@ -1054,6 +1071,7 @@ func (a *SatoriAdapter) identify() error {
 }
 
 func (a *SatoriAdapter) readLoop() {
+	defer close(a.readDone)
 	for {
 		select {
 		case <-a.stopChan:

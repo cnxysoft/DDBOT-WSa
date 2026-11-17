@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	ob11 "github.com/cnxysoft/DDBOT-WSa/adapter/onebot-v11"
 	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
@@ -271,12 +272,12 @@ func Init() {
 
 	logger.Infof("Initializing bot with adapter: %s", adapterType)
 
-	adapterCfg := adapter.GetAdapterConfig()
-	adapterInstance := adapter.NewAdapter(adapterType, adapterCfg)
-
-	if adapterInstance == nil {
+	build := adapterBuilder(config.GlobalConfig.Snapshot())
+	initial, err := build()
+	if err != nil || initial == nil {
 		logger.Fatalf("Failed to create adapter: %s", adapterType)
 	}
+	adapterInstance := adapter.NewReloadableAdapter(initial, build)
 
 	messenger := adapter.NewMessenger(adapterInstance)
 
@@ -321,7 +322,11 @@ func Init() {
 	localutils.GetBot().Bot = Instance
 
 	if err := messenger.Start(); err != nil {
-		logger.Fatalf("Failed to start %s adapter: %v", adapterType, err)
+		if adapterType == adapter.AdapterTypeQQOfficial {
+			logger.Error("QQ 官方连接未就绪；WebUI 仍可用于绑定或修复同一机器人的凭据")
+		} else {
+			logger.Fatalf("Failed to start %s adapter: %v", adapterType, err)
+		}
 	}
 
 	// 启动模块服务

@@ -210,30 +210,11 @@ func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
 			return
 		}
 
-		// 分别处理运行时加载和配置持久化
 		result := QRLoginResult{Sub: sub}
-
-		// 先更新运行时 SUB：后面刷新 Cookie 时模式判断要用到它
-		setRuntimeSUB(sub)
-
-		// 1. 配置持久化：写回 application.yaml。
-		//    放在加载 Cookie 之前——SUB 先落盘，后面无论成败，下次启动/刷新都能
-		//    按 login 模式走，不会退化成访客流程。
-		if err := WriteBackConfig(sub); err != nil {
-			qrLogger.Warnf("SUB 已获取，但写入配置失败: %v", err)
-			result.PersistError = err
-			result.PersistSuccess = false
+		if err := finishLogin(sub); err != nil {
+			result.Error = err
 		} else {
-			qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
-			result.PersistSuccess = true
-		}
-
-		// 2. 运行时加载：加载 Cookie 到内存
-		if err := freshCookieOpt(sub); err != nil {
-			qrLogger.Warnf("SUB 已获取，但加载 Cookie 到内存失败: %v", err)
-			result.RuntimeLoaded = false
-		} else {
-			result.RuntimeLoaded = true
+			result.PersistSuccess, result.RuntimeLoaded = true, true
 		}
 
 		resultChan <- result
@@ -546,4 +527,8 @@ func WriteBackConfig(sub string) error {
 // platform.weibo，顶层 weibo 段永远是空的（登录成功，重启后却仍跑访客模式）。
 func writeBackConfigToPath(sub string, cfgPath string) error {
 	return cfg.WriteConfigKeyValueToPath("weibo.sub", sub, cfgPath)
+}
+
+func writeLoginConfig(sub string) error {
+	return cfg.WriteConfigKeyValues(map[string]string{"weibo.sub": sub, "weibo.mode": "login"})
 }

@@ -3,6 +3,7 @@ package cfg
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -21,10 +22,43 @@ var intervalSites = map[string]bool{
 	"twitch": true, "weibo": true, "huya": true, "douyu": true, "xhs": true, "heybox": true,
 }
 
+var resourceHotReload atomic.Bool
+
+// EnableResourceHotReload is called only after every live resource participant is installed.
+func EnableResourceHotReload() { resourceHotReload.Store(true) }
+
+var resourceHotKeys = map[string]bool{
+	"adapter.mode": true, "websocket.mode": true, "websocket.ws-server": true, "websocket.ws-reverse": true, "websocket.token": true,
+	"admin.enable": true, "admin.addr": true, "admin.token": true,
+	"proxy.type": true, "localproxypool.oversea": true, "localproxypool.mainland": true, "pyproxypool.host": true,
+	"imagepool.type": true, "loliconpool.apikey": true, "loliconpool.proxy": true, "loliconpool.cachemin": true, "loliconpool.cachemax": true, "localpool.imagedir": true,
+	"template.enable": true, "extdb.enable": true, "extdb.path": true,
+	"telegram.enable": true, "telegram.token": true, "telegram.endpoint": true, "telegram.chats": true,
+	"bilibili.sessdata": true, "bilibili.bili_jct": true, "bilibili.qrlogin": true,
+	"weibo.mode": true, "weibo.sub": true, "weibo.qrlogin": true, "weibo.autorefresh": true, "weibo.cookierefreshapi": true, "weibo.apimodebaseurl": true,
+	"qqofficial.app-id": true, "qqofficial.app-secret": true, "qqofficial.mode": true, "qqofficial.intents": true,
+	"qqofficial.appid": true, "qqofficial.appsecret": true, "qqofficial.secret": true,
+	"qqofficial.shard-id": true, "qqofficial.shard-count": true, "qqofficial.api-base-url": true,
+	"qqofficial.http-timeout": true, "qqofficial.token-refresh-ahead": true, "qqofficial.start-timeout": true,
+	"qqofficial.state-file": true, "qqofficial.join-intro-tip": true,
+	"bilibili.account": true, "bilibili.password": true,
+	"acfun.account": true, "acfun.password": true, "acfun.authkey": true, "acfun.acpasstoken": true,
+	"douyin.useragent": true, "douyin.acsignature": true, "douyin.acnonce": true, "douyin.sessionid": true,
+	"twitch.clientid": true, "twitch.clientsecret": true,
+	"twitcasting.clientid": true, "twitcasting.clientsecret": true,
+	"twitter.mode": true, "twitter.apifetchmode": true, "twitter.baseurl": true, "twitter.useragent": true,
+	"twitter.ct0": true, "twitter.auth_token": true, "twitter.bearertoken": true, "twitter.queryid": true, "twitter.usertweetsqueryid": true, "twitter.screenname": true,
+	"twitter.queryidrefreshinterval": true,
+	"heybox.x_xhh_tokenid":           true,
+}
+
 func IsHotKey(key string) bool {
 	key = strings.ToLower(key)
+	if resourceHotReload.Load() && (resourceHotKeys[key] || strings.HasPrefix(key, "xhs.cookies.") || key == "xhs.cookies" || strings.HasPrefix(key, "telegram.commands.")) {
+		return true
+	}
 	switch key {
-	case "loglevel", "ffmpeg.loglevel", "bot.commandprefix", "customcommandprefix", "cronjob",
+	case "loglevel", "ffmpeg.loglevel", "bot.commandprefix", "customcommandprefix", "cronjob", "notify.parallel", "twitch.onlyonlinenotify",
 		"autoreply.group.command", "autoreply.private.command", "dispatch.largenotifylimit",
 		"debug.group", "debug.uin", "concern.emitinterval", "bilibili.imagemergemode",
 		"bot.onjoingroup.rename", "bot.ondisconnected", "bot.offlinequeue.enable", "bot.offlinequeue.expire",
@@ -58,6 +92,9 @@ func IsHotKey(key string) bool {
 }
 
 func ValidateReload(s *config.Snapshot) error {
+	if err := validateResourceValues(s); err != nil {
+		return err
+	}
 	if err := validateHotValues(s); err != nil {
 		return err
 	}

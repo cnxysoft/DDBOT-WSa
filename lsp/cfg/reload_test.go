@@ -9,7 +9,7 @@ import (
 
 func TestHotPolicyMatchesSupportedConsumers(t *testing.T) {
 	for _, key := range []string{
-		"bot.commandPrefix", "customCommandPrefix.Help", "cronjob", "logLevel", "ffmpeg.logLevel",
+		"notify.parallel", "twitch.onlyOnlineNotify", "bot.commandPrefix", "customCommandPrefix.Help", "cronjob", "logLevel", "ffmpeg.logLevel",
 		"platform.bilibili.enable", "bilibili.interval", "weibo.interval", "heybox.interval",
 		"imageMerge.mode", "twitter.imageMerge.maxWidth", "bilibili.hiddenSub", "twitter.translate.enabled",
 	} {
@@ -19,8 +19,8 @@ func TestHotPolicyMatchesSupportedConsumers(t *testing.T) {
 	}
 	for _, key := range []string{
 		"adapter.mode", "websocket.token", "admin.addr", "proxy.type", "extDb.path", "template.enable",
-		"notify.parallel", "bilibili.SESSDATA", "twitter.mode", "telegram.enable", "imagePool.type",
-		"twitch.onlyOnlineNotify", "unknown.setting", "twitter.imageMerge.unknown", "youtube.interval",
+		"bilibili.SESSDATA", "twitter.mode", "telegram.enable", "imagePool.type",
+		"unknown.setting", "twitter.imageMerge.unknown", "youtube.interval",
 	} {
 		if IsHotKey(key) {
 			t.Errorf("resource or unsupported key incorrectly hot: %s", key)
@@ -33,6 +33,12 @@ func TestReloadValidationRejectsWeakTypeCoercions(t *testing.T) {
 	c.ConfigureReload(ValidateReload, IsHotKey)
 	for _, input := range []string{
 		"bot:\n  commandPrefix: [oops]\n",
+		"admin:\n  enable: maybe\n",
+		"twitter:\n  auth_token: [oops]\n",
+		"localProxyPool:\n  oversea: [false]\n",
+		"notify:\n  parallel: true\n",
+		"notify:\n  parallel: 1.5\n",
+		"telegram:\n  chats: [true]\n",
 		"platform:\n  bilibili:\n    enable: typo\n",
 		"platform:\n  bilibili:\n    enable: {value: false}\n",
 		"twitter:\n  interval: true\n",

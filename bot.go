@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/admin"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 
@@ -156,17 +158,29 @@ func Run() {
 			}
 			return
 		}
-		db := template.GetTemplateDB()
 		// 添加数据库关闭钩子
-		utils.AddExitHook(func() {
-			db.Close()
-		})
 	}
+	utils.AddExitHook(template.CloseTemplateDB)
 	// 快速初始化
 	bot.Init()
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			config.GlobalConfig.BeginShutdown()
+			admin.Stop()
+			telegram.Close()
+			bot.Stop()
+			lsp.Instance.CloseResources()
+			template.Close()
+			template.CloseTemplateDB()
+		})
+	}
+	utils.AddBeforeExitHook(shutdown)
+	defer shutdown()
 
 	// 初始化 Modules
 	bot.StartService()
+	installResourceReload()
 
 	_, _ = admin.Start(&bot.Instance.Online, nil)
 
@@ -176,12 +190,11 @@ func Run() {
 
 	lsp.Instance.PostStart(bot.Instance)
 	config.GlobalConfig.WatchConfig()
-	utils.AddExitHook(config.GlobalConfig.StopWatching)
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
-	bot.Stop()
+	signal.Stop(ch)
 }
 
 var exampleConfig = func() string {
@@ -238,7 +251,7 @@ localPool:
 bilibili:
   SESSDATA: # 你的 b 站 cookie
   bili_jct: # 你的 b 站 cookie
-  qrlogin: true # 是否启用二维码登录（Cookies 失效时只需要清空 SESSDATA 和 bili_jct 重启即可再次登录）
+  qrlogin: true # 是否启用二维码登录；运行中可在 WebUI 重新扫码，验证通过后立即应用
   interval: 25s # 直播状态和动态检测间隔，过快可能导致 ip 被暂时封禁
   imageMergeMode: "auto" # 兼容旧配置；新配置使用 imageMerge.mode
                           # auto 为默认策略，存在比较刷屏的图片时会合并
@@ -337,7 +350,7 @@ weibo:
                           # api: API 模式，从外部 API 自动获取 Cookie（推荐，但当出现api获取到的sub无法使用时请尝试使用login模式并开启autorefresh）
   interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
   sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时可选）。
-  qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
+  qrlogin: true           # 是否启用二维码登录（仅 mode: login 时有效；支持 WebUI 运行中重新扫码）
   autorefresh: false      # 是否启用 SUB 自动刷新（mode: login/api 时有效）
                           # 启用后：1) 启动时若 sub 为空则从 API 获取初始化（仅内存）
                           #      2) 每小时检查 SUB 是否变化，不同则自动替换（仅内存）
@@ -512,7 +525,7 @@ admin:
 
 # 自定义数据库设置
 # 启用后才会生成自定义数据库文件，并持久化保存
-# 不启用时如果使用了相关函数，则会写入.lsp.db（慎重！）
+# 未启用时，外部数据库模板函数返回未启用错误或对应失败值
 extDb:
   enable: false
   path: ".ext.db"

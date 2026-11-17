@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -20,11 +21,28 @@ import (
 
 // captureLogs 把包内 logger 的输出接进内存，供断言日志内容与级别。
 // 本包的单测不并行（没有 t.Parallel），临时换 output 是安全的。
-func captureLogs(t *testing.T) *bytes.Buffer {
+type synchronizedLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+func (b *synchronizedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+func (b *synchronizedLogBuffer) Reset() { b.mu.Lock(); defer b.mu.Unlock(); b.buffer.Reset() }
+
+func captureLogs(t *testing.T) *synchronizedLogBuffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
+	buf := &synchronizedLogBuffer{}
 	oldOut := logger.Logger.Out
-	oldLevel := logger.Logger.Level
+	oldLevel := logger.Logger.GetLevel()
 	oldFormatter := logger.Logger.Formatter
 	logger.Logger.SetOutput(buf)
 	logger.Logger.SetLevel(logrus.DebugLevel)

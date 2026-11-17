@@ -84,6 +84,11 @@ func validInterval(value interface{}, seconds bool) bool {
 }
 
 func validateHotValues(s *config.Snapshot) error {
+	if value := s.Get("notify.parallel"); value != nil {
+		if n, ok := integerValue(value); !ok || n < 0 {
+			return fmt.Errorf("notify.parallel 必须是非负整数")
+		}
+	}
 	for _, key := range []string{
 		"logLevel", "ffmpeg.logLevel", "bot.commandPrefix", "bot.onJoinGroup.rename", "bot.onDisconnected",
 		"twitter.translate.targetLang", "twitcasting.nameStrategy",
@@ -98,7 +103,7 @@ func validateHotValues(s *config.Snapshot) error {
 		"bot.offlineQueue.enable", "bilibili.unsub", "bilibili.hiddenSub", "bilibili.disableSub",
 		"bilibili.autoParsePosts", "bilibili.secAnalysis", "bilibili.onlyOnlineNotify", "acfun.unsub",
 		"acfun.disableSub", "acfun.onlyOnlineNotify", "douyin.onlyOnlineNotify", "weibo.onlyOnlineNotify",
-		"weibo.disableCookieAlert", "youtube.onlyOnlineNotify", "xhs.onlyOnlineNotify", "heybox.onlyOnlineNotify",
+		"twitch.onlyOnlineNotify", "weibo.disableCookieAlert", "youtube.onlyOnlineNotify", "xhs.onlyOnlineNotify", "heybox.onlyOnlineNotify",
 		"twitter.unsub", "twitter.retweetFullText", "twitter.translate.enabled", "twitcasting.broadcaster.title",
 		"twitcasting.broadcaster.created", "twitcasting.broadcaster.image",
 	} {

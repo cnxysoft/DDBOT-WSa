@@ -12,6 +12,7 @@ import (
 
 func setTwitterLoginAlertDependenciesForTest(t *testing.T, admins []int64, sender func(int64, *mmsg.MSG) bool) {
 	t.Helper()
+	twitterRecoveryWorkers.Wait()
 	originalListAdmins := listTwitterLoginAlertAdmins
 	originalBotReady := twitterLoginAlertBotReady
 	originalSender := sendTwitterLoginAlertToAdmin
@@ -25,6 +26,12 @@ func setTwitterLoginAlertDependenciesForTest(t *testing.T, admins []int64, sende
 	sendTwitterLoginAlertToAdmin = sender
 
 	t.Cleanup(func() {
+		// The recovering flag becomes false before the worker finishes sending
+		// its final notification. Drain it before restoring callback globals.
+		twitterStateMu.Lock()
+		twitterRecovering.Store(false)
+		twitterStateMu.Unlock()
+		twitterRecoveryWorkers.Wait()
 		listTwitterLoginAlertAdmins = originalListAdmins
 		twitterLoginAlertBotReady = originalBotReady
 		sendTwitterLoginAlertToAdmin = originalSender

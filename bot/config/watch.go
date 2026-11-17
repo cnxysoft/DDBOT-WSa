@@ -15,7 +15,7 @@ func (c *Config) WatchConfig() {
 	defer c.watchMu.Unlock()
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
-	if c.stop != nil {
+	if c.closing || c.stop != nil {
 		return
 	}
 	path, err := filepath.Abs(c.ConfigFileUsed())

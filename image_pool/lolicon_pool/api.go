@@ -1,10 +1,15 @@
 package lolicon_pool
 
 import (
+	"context"
+	stdjson "encoding/json"
+	"fmt"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
+	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -67,6 +72,10 @@ type Response struct {
 }
 
 func LoliconAppSetu(apikey string, R18 R18Type, keyword string, num int) (*Response, error) {
+	return LoliconAppSetuContext(context.Background(), apikey, R18, keyword, num)
+}
+
+func LoliconAppSetuContext(ctx context.Context, apikey string, R18 R18Type, keyword string, num int) (*Response, error) {
 	params, err := utils.ToParams(&Request{
 		Apikey:   apikey,
 		R18:      int(R18),
@@ -78,13 +87,33 @@ func LoliconAppSetu(apikey string, R18 R18Type, keyword string, num int) (*Respo
 	if err != nil {
 		return nil, err
 	}
-	apiResp := new(Response)
-	err = requests.Get(Host, params, apiResp,
-		requests.RetryOption(3),
-		requests.TimeoutOption(time.Second*15),
-		requests.ProxyOption(proxy_pool.PreferOversea),
-	)
+	query := url.Values{}
+	for key, value := range params {
+		query.Set(key, fmt.Sprint(value))
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = func(*http.Request) (*url.URL, error) {
+		if proxy, err := proxy_pool.Get(proxy_pool.PreferOversea); err == nil && proxy != nil {
+			return url.Parse(proxy.ProxyString())
+		}
+		return nil, nil
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, Host+"?"+query.Encode(), nil)
 	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("image API HTTP status %d", response.StatusCode)
+	}
+	apiResp := new(Response)
+	if err = stdjson.NewDecoder(response.Body).Decode(apiResp); err != nil {
 		return nil, err
 	}
 	return apiResp, nil

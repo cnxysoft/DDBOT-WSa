@@ -30,14 +30,25 @@ func NewAdapter(adapterType AdapterType, cfg *AdapterConfig) Adapter {
 	return nil
 }
 
+// ConfigReader allows a complete candidate to be read from one immutable snapshot.
+type ConfigReader interface {
+	GetString(string) string
+	GetInt(string) int
+	GetDuration(string) time.Duration
+}
+
 func GetAdapterConfig() *AdapterConfig {
+	return GetAdapterConfigFrom(config.GlobalConfig.Snapshot())
+}
+
+func GetAdapterConfigFrom(reader ConfigReader) *AdapterConfig {
 	cfg := &AdapterConfig{
 		// Mode 与 GetAdapterType 走同一个收敛函数：不认识的写法回落到 onebot-v11，
 		// 免得「类型是 OneBot、Mode 还留着笔误原值」这种自相矛盾的组合流到下游。
-		Mode:    string(resolveAdapterType(config.GlobalConfig.GetString("adapter.mode"))),
-		WSMode:  config.GlobalConfig.GetString("websocket.mode"),
-		WSAddr:  getWSAddr(),
-		Token:   config.GlobalConfig.GetString("websocket.token"),
+		Mode:    string(resolveAdapterType(reader.GetString("adapter.mode"))),
+		WSMode:  reader.GetString("websocket.mode"),
+		WSAddr:  getWSAddrFrom(reader),
+		Token:   reader.GetString("websocket.token"),
 		Timeout: 10 * time.Second,
 	}
 
@@ -45,13 +56,17 @@ func GetAdapterConfig() *AdapterConfig {
 }
 
 func getWSAddr() string {
-	wsMode := config.GlobalConfig.GetString("websocket.mode")
+	return getWSAddrFrom(config.GlobalConfig.Snapshot())
+}
+
+func getWSAddrFrom(reader ConfigReader) string {
+	wsMode := reader.GetString("websocket.mode")
 	if wsMode == "" {
 		wsMode = WSModeServer
 	}
 
 	if wsMode == WSModeServer {
-		addr := config.GlobalConfig.GetString("websocket.ws-server")
+		addr := reader.GetString("websocket.ws-server")
 		if addr == "" {
 			// 默认仅监听本机回环：未配置 token 时不会把无鉴权控制端口暴露到局域网/公网
 			addr = defaultWSServerAddr
@@ -59,7 +74,7 @@ func getWSAddr() string {
 		return addr
 	}
 
-	addr := config.GlobalConfig.GetString("websocket.ws-reverse")
+	addr := reader.GetString("websocket.ws-reverse")
 	if addr == "" {
 		addr = "ws://localhost:3001"
 	}

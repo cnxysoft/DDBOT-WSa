@@ -486,15 +486,7 @@ func (c *StateManager) Start() error {
 		c.UseDispatchFunc(c.DefaultDispatch())
 	}
 	c.FreshIndex()
-	if runtime.NumCPU() >= 3 {
-		for i := 0; i < 3; i++ {
-			go c.Dispatch(&c.wg, c.eventChan, c.notifyChan)
-		}
-	} else {
-		go c.Dispatch(&c.wg, c.eventChan, c.notifyChan)
-	}
 	if c.useEmit {
-		c.emitQueue.Start()
 		_, ids, ctypes, err := c.ListConcernState(func(groupCode int64, id interface{}, p concern_type.Type) bool {
 			return true
 		})
@@ -509,7 +501,19 @@ func (c *StateManager) Start() error {
 			c.emitQueue.Add(localutils.NewEmitE(ids[index], ctypes[index]))
 		}
 	}
+	dispatchers := 1
+	if runtime.NumCPU() >= 3 {
+		dispatchers = 3
+	}
+	c.wg.Add(dispatchers)
+	for i := 0; i < dispatchers; i++ {
+		go c.Dispatch(&c.wg, c.eventChan, c.notifyChan)
+	}
+	c.freshWg.Add(1)
 	go c.Fresh(&c.freshWg, c.eventChan)
+	if c.useEmit {
+		c.emitQueue.Start()
+	}
 	return nil
 }
 
@@ -559,29 +563,29 @@ func (c *StateManager) EmitQueueFresher(doFresh func(p concern_type.Type, id int
 }
 
 func (c *StateManager) Fresh(wg *sync.WaitGroup, eventChan chan<- Event) {
-	defer func() {
-		if e := recover(); e != nil {
-			c.Logger().WithField("stack", string(debug.Stack())).
-				Errorf("StateManager %v: Fresh panic recoved", c.name)
-			go c.Fresh(wg, eventChan)
-		}
-	}()
-	wg.Add(1)
 	defer wg.Done()
-	c.freshFunc(c.ctx, eventChan)
+	for c.runWorker("Fresh", func() { c.freshFunc(c.ctx, eventChan) }) && c.ctx.Err() == nil {
+	}
 }
 
 func (c *StateManager) Dispatch(wg *sync.WaitGroup, eventChan <-chan Event, notifyChan chan<- Notify) {
+	defer wg.Done()
+	for c.runWorker("Dispatch", func() { c.dispatchFunc(eventChan, notifyChan) }) && c.ctx.Err() == nil {
+	}
+}
+
+// Recover within the registered worker. Restarting in a new goroutine could
+// race Wait when the previous worker dropped the last WaitGroup reference.
+func (c *StateManager) runWorker(name string, run func()) (panicked bool) {
 	defer func() {
 		if e := recover(); e != nil {
+			panicked = true
 			c.Logger().WithField("stack", string(debug.Stack())).
-				Errorf("StateManager %v: Dispatch panic <%v> recoved", c.name, e)
-			go c.Dispatch(wg, eventChan, notifyChan)
+				Errorf("StateManager %v: %v panic <%v> recovered", c.name, name, e)
 		}
 	}()
-	wg.Add(1)
-	defer wg.Done()
-	c.dispatchFunc(eventChan, notifyChan)
+	run()
+	return false
 }
 
 func (c *StateManager) NotifyGenerator(groupCode int64, event Event) []Notify {

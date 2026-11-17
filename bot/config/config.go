@@ -30,9 +30,11 @@ type Config struct {
 	validate    func(*Snapshot) error
 	hot         func(string) bool
 	onChange    func(fsnotify.Event)
+	prepare     func(previous, next *Snapshot) (commit func(), abort func(), err error)
 	status      ReloadStatus
 	stop        chan struct{}
 	done        chan struct{}
+	closing     bool
 }
 
 type ReloadStatus struct {
@@ -42,6 +44,13 @@ type ReloadStatus struct {
 	LastError       string    `json:"lastError,omitempty"`
 	Watching        bool      `json:"watching"`
 }
+
+// PrepareError means a live-resource candidate was rejected before persistence.
+// Resource owners must provide a message without secrets or remote response bodies.
+type PrepareError struct{ Err error }
+
+func (e *PrepareError) Error() string { return e.Err.Error() }
+func (e *PrepareError) Unwrap() error { return e.Err }
 
 // Snapshot retains one complete generation. Its getters never expose mutable configuration maps.
 type Snapshot struct {
@@ -197,6 +206,9 @@ func (c *Config) ConfigFileUsed() string {
 func (c *Config) Set(key string, value interface{}) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
+	if c.closing {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key = strings.ToLower(key)
@@ -210,7 +222,9 @@ func (c *Config) Set(key string, value interface{}) {
 	}
 	v := fromSettings(c.Viper.AllSettings())
 	v.Set(key, clone(value))
-	c.Viper = v
+	// Normalize overrides into the config map. Viper's Get(section) otherwise
+	// returns only that section's last Set override, hiding sibling fields.
+	c.Viper = fromSettings(v.AllSettings())
 }
 
 // MarkApplied is reserved for owners that have actually updated a live resource.
@@ -218,6 +232,9 @@ func (c *Config) Set(key string, value interface{}) {
 func (c *Config) MarkApplied(keys ...string) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
+	if c.closing {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.restartBase == nil {
@@ -243,6 +260,41 @@ func (c *Config) OnConfigChange(fn func(fsnotify.Event)) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
 	c.onChange = fn
+}
+
+// OnPrepareReload prepares live resources before accepting a candidate. A failed
+// preparation or persistence aborts the prepared resources. Commit runs after the
+// generation is published and must not fail or call Config mutation methods.
+// Unchanged source bytes do not prepare resources again.
+func (c *Config) OnPrepareReload(fn func(previous, next *Snapshot) (commit func(), abort func(), err error)) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.prepare = fn
+}
+
+func (c *Config) prepareReload(desired *viper.Viper, data []byte) (func(), func(), error) {
+	if c.prepare == nil {
+		return nil, nil, nil
+	}
+	c.mu.RLock()
+	if c.desired == nil || bytes.Equal(c.raw, data) {
+		c.mu.RUnlock()
+		return nil, nil, nil
+	}
+	previous := &Snapshot{c.Viper, c.raw}
+	var pending []string
+	effective := fromSettings(reconcile(c.Viper.AllSettings(), desired.AllSettings(), "", c.hot, &pending))
+	for key, value := range c.overrides {
+		if reflect.DeepEqual(c.desired.Get(key), desired.Get(key)) && !reflect.DeepEqual(value, desired.Get(key)) {
+			effective.Set(key, clone(value))
+		}
+	}
+	c.mu.RUnlock()
+	commit, abort, err := c.prepare(previous, &Snapshot{fromSettings(effective.AllSettings()), bytes.Clone(data)})
+	if err != nil {
+		err = &PrepareError{Err: err}
+	}
+	return commit, abort, err
 }
 func (c *Config) Status() ReloadStatus {
 	c.mu.RLock()
@@ -299,7 +351,7 @@ func (c *Config) ReadInConfig() error {
 	if err != nil {
 		return err
 	}
-	c.publish(v, data, true)
+	c.publish(v, data, true, nil)
 	return nil
 }
 
@@ -310,12 +362,21 @@ func (c *Config) Reload() error {
 }
 
 func (c *Config) reloadLocked() error {
+	if c.closing {
+		return errors.New("配置管理器正在关闭")
+	}
 	data, err := os.ReadFile(c.ConfigFileUsed())
 	if err == nil {
 		var v *viper.Viper
 		v, err = c.parse(data)
 		if err == nil {
-			c.publish(v, data, false)
+			var commit, abort func()
+			commit, abort, err = c.prepareReload(v, data)
+			if err == nil {
+				c.publish(v, data, false, commit)
+			} else if abort != nil {
+				abort()
+			}
 		}
 	}
 	if err != nil {
@@ -343,15 +404,37 @@ func (c *Config) Save(data []byte, persist func() error) error {
 func (c *Config) SaveAndStatus(data []byte, persist func() error) (ReloadStatus, error) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
+	if c.closing {
+		return ReloadStatus{}, errors.New("配置管理器正在关闭")
+	}
 	v, err := c.parse(data)
 	if err != nil {
 		return ReloadStatus{}, err
 	}
-	if err := persist(); err != nil {
+	commit, abort, err := c.prepareReload(v, data)
+	if err != nil {
+		if abort != nil {
+			abort()
+		}
 		return ReloadStatus{}, err
 	}
-	c.publish(v, data, false)
+	if err := persist(); err != nil {
+		if abort != nil {
+			abort()
+		}
+		return ReloadStatus{}, err
+	}
+	c.publish(v, data, false, commit)
 	return c.Status(), nil
+}
+
+// BeginShutdown drains accepted transactions and rejects new publications before
+// listeners, workers and their backing storage are retired.
+func (c *Config) BeginShutdown() {
+	c.StopWatching()
+	c.opMu.Lock()
+	c.closing = true
+	c.opMu.Unlock()
 }
 
 // reconcile recursively preserves cold settings, including removed keys and map/scalar changes.
@@ -400,7 +483,7 @@ func reconcile(old, desired map[string]interface{}, prefix string, hot func(stri
 	return out
 }
 
-func (c *Config) publish(desired *viper.Viper, data []byte, initial bool) {
+func (c *Config) publish(desired *viper.Viper, data []byte, initial bool, commit func()) {
 	c.mu.Lock()
 	if !initial && bytes.Equal(c.raw, data) && c.desired != nil {
 		c.status.LastError = ""
@@ -428,8 +511,11 @@ func (c *Config) publish(desired *viper.Viper, data []byte, initial bool) {
 	pending = nil
 	_ = reconcile(c.restartBase.AllSettings(), desired.AllSettings(), "", c.hot, &pending)
 	sort.Strings(pending)
-	c.Viper, c.desired, c.raw = effective, desired, bytes.Clone(data)
+	c.Viper, c.desired, c.raw = fromSettings(effective.AllSettings()), desired, bytes.Clone(data)
 	c.mu.Unlock()
+	if commit != nil {
+		commit()
+	}
 	if !initial && c.onChange != nil {
 		c.onChange(fsnotify.Event{Name: c.ConfigFileUsed(), Op: fsnotify.Write})
 	}

@@ -105,7 +105,8 @@ func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
 
 type twitterConcern struct {
 	*StateManager
-	homeTimelineCursor string        // 保存 HomeTimeline 翻页 cursor
+	homeTimelineCursor string // 保存 HomeTimeline 翻页 cursor
+	homeTimelineAPI    *TwitterAPI
 	mirrorNext         atomic.Uint64 // 上次成功的镜像下标
 	mirrorMu           sync.Mutex
 	mirrorFailures     map[string]mirrorFailure
@@ -187,10 +188,12 @@ func (t *twitterConcern) AddUserInfo(info *UserInfo) error {
 }
 
 func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
 	userId := id.(string)
 	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
 
-	if TwitterMode == ModeAPI {
+	if runtimeGen.mode == ModeAPI {
 		if !IsTwitterEnabled() {
 			return nil, errors.New("Twitter API 未配置有效 Cookie")
 		}
@@ -333,6 +336,8 @@ func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{
 }
 
 func (t *twitterConcern) unsubUser(userId string) {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
 	if twitterAPI == nil {
 		return
 	}
@@ -465,14 +470,15 @@ func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- conc
 // processUsersInGroup 拉取指定群订阅用户的推文。
 // groupCode<=0 表示拉取所有订阅用户
 func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan<- concern.Event, groupCode int64) {
+	runtimeGen := twitterSnapshot()
 	if IsTwitterEnabled() {
 		// HomeTimeline 是账号首页的全量时间线，无法按群过滤。
 		// 手动刷新指定群时明确提示，避免用户误以为只拉了本群
-		if groupCode > 0 && TwitterAPIFetchMode != APIFetchModePerUser {
+		if groupCode > 0 && runtimeGen.fetchMode != APIFetchModePerUser {
 			logger.WithField("groupCode", groupCode).
 				Info("API 模式手动刷新为全量 HomeTimeline 拉取（无法按群过滤），推送侧按订阅关系分发")
 		}
-		if TwitterAPIFetchMode == APIFetchModePerUser {
+		if runtimeGen.fetchMode == APIFetchModePerUser {
 			t.processPerUserTimeline(ctx, eventChan)
 		} else {
 			t.processHomeTimeline(ctx, eventChan)
@@ -502,6 +508,8 @@ func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan
 }
 
 func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
 	_, ids, _, err := t.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
 		return p.ContainAll(Tweets)
 	})
@@ -559,10 +567,10 @@ func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan c
 		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
 		if err != nil {
 			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
-			recordTwitterFetchResult(false)
+			recordTwitterFetchResultFor(twitterAPI, false)
 			continue
 		}
-		recordTwitterFetchResult(true)
+		recordTwitterFetchResultFor(twitterAPI, true)
 		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
 
 		for _, tweet := range result.Tweets {
@@ -581,6 +589,8 @@ func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan c
 }
 
 func (t *twitterConcern) getAPIUserInfo(ctx context.Context, userID string) (*UserInfo, error) {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
 	info, err := t.GetUserInfo(userID)
 	if err == nil && info != nil {
 		return info, nil
@@ -614,6 +624,12 @@ func waitTwitterRequestInterval(ctx context.Context) bool {
 }
 
 func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
+	if t.homeTimelineAPI != twitterAPI {
+		t.homeTimelineCursor = ""
+		t.homeTimelineAPI = twitterAPI
+	}
 	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
 
 	subscribedUsers := make(map[string]bool)
@@ -632,10 +648,10 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 	if err != nil {
 		logger.Errorf("HomeTimeline fetch error: %v", err)
 		t.homeTimelineCursor = "" // 清除无效 cursor
-		recordTwitterFetchResult(false)
+		recordTwitterFetchResultFor(twitterAPI, false)
 		return
 	}
-	recordTwitterFetchResult(true)
+	recordTwitterFetchResultFor(twitterAPI, true)
 
 	for _, tweet := range result.Tweets {
 		var screenName string
@@ -722,6 +738,8 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 // 避免下一轮轮询把最近 N 条存量推文当作新推文全量推送（首见即推）。
 // 仅用于 API 模式；mirror 模式的对等逻辑在 Add 的非 API 分支。
 func (t *twitterConcern) preMarkUserTweets(ctx context.Context, userId string) error {
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
 	apiUserID, err := twitterAPI.ResolveUserID(ctx, userId)
 	if err != nil {
 		return fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
@@ -788,27 +806,54 @@ var (
 	twitterFetchFailThreshold int32 = 20
 )
 
+func recordTwitterFetchResultFor(api *TwitterAPI, ok bool) {
+	twitterStateMu.Lock()
+	if api != currentTwitterAPI() {
+		twitterStateMu.Unlock()
+		return
+	}
+	generation := liveTwitter.Load()
+	trigger, failures := recordTwitterFetchResultLocked(ok)
+	twitterStateMu.Unlock()
+	if trigger {
+		enterTwitterRecoveringFor(generation, fmt.Sprintf("运行中连续%d次获取推文失败", failures))
+	}
+}
+
 func recordTwitterFetchResult(ok bool) {
+	twitterStateMu.Lock()
+	generation := liveTwitter.Load()
+	trigger, failures := recordTwitterFetchResultLocked(ok)
+	twitterStateMu.Unlock()
+	if trigger {
+		enterTwitterRecoveringFor(generation, fmt.Sprintf("运行中连续%d次获取推文失败", failures))
+	}
+}
+
+func recordTwitterFetchResultLocked(ok bool) (bool, int32) {
 	if ok {
 		twitterFetchFailures.Store(0)
-		return
+		return false, 0
 	}
 	n := twitterFetchFailures.Add(1)
 	if n >= twitterFetchFailThreshold {
 		twitterFetchFailures.Store(0)
-		if !twitterRecovering.Load() {
-			enterTwitterRecovering(fmt.Sprintf("运行中连续%d次获取推文失败", n))
-		}
+		return !twitterRecovering.Load(), n
 	}
+	return false, n
 }
 
 func SetRequestOptions() []requests.Option {
+	return setRequestOptionsFor(twitterSnapshot())
+}
+
+func setRequestOptionsFor(runtimeGen *twitterRuntime) []requests.Option {
 	//h1 := (http.DefaultTransport).(*http.Transport).Clone()
 	//h1.MaxResponseHeaderBytes = 262144
 	return []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferOversea),
 		requests.TimeoutOption(time.Second * 10),
-		requests.AddUAOption(UserAgent),
+		requests.AddUAOption(runtimeGen.userAgent),
 		requests.RequestAutoHostOption(),
 		requests.CookieOption("hlsPlayback", "on"),
 		requests.HeaderOption("Connection", "keep-alive"),
@@ -834,7 +879,7 @@ func SetRequestOptions() []requests.Option {
 		requests.HeaderOption("priority", "u=0, i"),
 		requests.RetryOption(3),
 		//requests.WithTransport(h1),
-		requests.WithCookieJar(Cookie),
+		requests.WithCookieJar(runtimeGen.jar),
 	}
 }
 

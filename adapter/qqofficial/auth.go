@@ -40,9 +40,14 @@ type TokenManager struct {
 // NewTokenManager 建一个凭据管理器。appID / appSecret 为空时 Token 会直接报错。
 func NewTokenManager(appID, appSecret string) *TokenManager {
 	cfg := GetConfig()
+	cfg.AppID, cfg.AppSecret = appID, appSecret
+	return newTokenManagerFromConfig(cfg)
+}
+
+func newTokenManagerFromConfig(cfg *Config) *TokenManager {
 	return &TokenManager{
-		appID:      appID,
-		appSecret:  appSecret,
+		appID:      cfg.AppID,
+		appSecret:  cfg.AppSecret,
 		httpClient: &http.Client{Timeout: cfg.HTTPTimeout},
 		baseURL:    cfg.APIBaseURL,
 		ahead:      cfg.TokenRefreshAhead,

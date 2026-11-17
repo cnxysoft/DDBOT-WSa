@@ -569,6 +569,7 @@ func (c *Concern) GroupWatchNotify(groupCode, mid int64) {
 }
 
 func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
+	generation, account := getVerify(), getAccount()
 	var start = time.Now()
 	resp, err := GetFollowFeedV2()
 	if err != nil {
@@ -579,8 +580,11 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 	if resp.GetResult() != 0 {
 		if resp.GetResult() == -401 {
 			logger.Errorf("刷新动态列表失败，可能是cookie失效，将尝试重新获取cookie: %v", resp.GetErrorMsg())
-			ClearCookieInfo(username)
-			atomicVerifyInfo.Store(new(VerifyInfo))
+			publishMu.Lock()
+			if atomicVerifyInfo.CompareAndSwap(generation, new(VerifyInfo)) {
+				ClearCookieInfo(account.username)
+			}
+			publishMu.Unlock()
 		} else {
 			logger.WithField("RespCode", resp.GetResult()).
 				WithField("RespMsg", resp.GetErrorMsg()).

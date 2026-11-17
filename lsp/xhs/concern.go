@@ -79,19 +79,7 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 }
 
 func (c *Concern) Start() error {
-	cookies := make(map[string]string)
-	if a1 := config.GlobalConfig.GetString("xhs.cookies.a1"); a1 != "" {
-		cookies["a1"] = a1
-	}
-	if webSession := config.GlobalConfig.GetString("xhs.cookies.web_session"); webSession != "" {
-		cookies["web_session"] = webSession
-	}
-	if webId := config.GlobalConfig.GetString("xhs.cookies.webId"); webId != "" {
-		cookies["webId"] = webId
-	}
-	if len(cookies) > 0 {
-		c.client.SetCookies(cookies)
-	}
+	c.client.SetCookies(cookiesFromSnapshot(config.GlobalConfig.Snapshot()))
 
 	c.StateManager.UseEmitQueueWithSiteInterval(Site)
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {

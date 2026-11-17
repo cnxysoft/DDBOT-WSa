@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
@@ -368,28 +368,15 @@ func (s *Server) finishBilibiliLogin(sess *loginSession, qrSession *bilibili.QRL
 		}
 	}
 
-	// 先验证再落盘：二维码偶尔会返回无效凭据，不能拿它覆盖原有配置
-	bilibili.SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
-	navResp, err := bilibili.XWebInterfaceNav(true)
-	if err != nil || navResp.GetCode() != 0 || !navResp.GetData().GetIsLogin() {
-		sess.setState(loginStateFailed, "扫码结果校验失败，Cookie 可能无效，请重试")
+	// The config transaction validates the candidate in an isolated client and
+	// updates the live account only after both credentials are durably saved.
+	if err := cfg.WriteConfigKeyValues(map[string]string{
+		"bilibili.SESSDATA": cookies.SESSDATA,
+		"bilibili.bili_jct": cookies.BILI_JCT,
+	}); err != nil {
+		sess.setState(loginStateFailed, "登录凭据验证或保存失败，请检查网络后重试")
 		return
 	}
-
-	config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
-	config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
-
-	if err := cfg.WriteConfigKeyValue("bilibili.SESSDATA", cookies.SESSDATA); err != nil {
-		sess.setState(loginStateFailed, "登录成功但写入 SESSDATA 失败："+err.Error())
-		return
-	}
-	if err := cfg.WriteConfigKeyValue("bilibili.bili_jct", cookies.BILI_JCT); err != nil {
-		sess.setState(loginStateFailed, "登录成功但写入 bili_jct 失败："+err.Error())
-		return
-	}
-
-	bilibili.FreshSelfInfo()
-	config.GlobalConfig.MarkApplied("bilibili.SESSDATA", "bilibili.bili_jct")
 	invalidateAccountCache(loginPlatformBilibili)
 	sess.setState(loginStateConfirmed, "登录成功，Cookie 已写入配置")
 }
@@ -535,30 +522,25 @@ func (s *Server) runQQOfficialLogin(mgr *loginManager, sess *loginSession) {
 	}
 }
 
-// finishQQOfficialLogin 把扫码结果落盘。
-//
-// 与 B站 那条一样先写运行时配置再落盘：两条写成功日志/失败提示各自独立。
-// 这里没有「校验凭据」这一步可做——AppSecret 刚由平台解密出来，没有任何免鉴权接口可以校验，
-// 直接以写盘结果为准。
+// finishQQOfficialLogin validates/reconnects the active same-identity adapter
+// through the config transaction before reporting success. Credentials saved
+// while another protocol is active remain pending for protocol migration.
 func (s *Server) finishQQOfficialLogin(sess *loginSession, res *qqofficial.QRBindResult) {
 	if res.AppID == "" || res.Secret == "" {
 		sess.setState(loginStateFailed, "扫码成功但凭据不完整，请重试")
 		return
 	}
 
-	config.GlobalConfig.Set("qqofficial.app-id", res.AppID)
-	config.GlobalConfig.Set("qqofficial.app-secret", res.Secret)
-
-	if err := cfg.WriteConfigKeyValue("qqofficial.app-id", res.AppID); err != nil {
-		sess.setState(loginStateFailed, "绑定成功但写入 app-id 失败："+err.Error())
+	if err := cfg.WriteConfigKeyValues(map[string]string{
+		"qqofficial.app-id": res.AppID, "qqofficial.app-secret": res.Secret,
+	}); err != nil {
+		sess.setState(loginStateFailed, "绑定凭据应用失败，配置未应用；请检查连接和机器人身份后重试")
 		return
 	}
-	if err := cfg.WriteConfigKeyValue("qqofficial.app-secret", res.Secret); err != nil {
-		sess.setState(loginStateFailed, "绑定成功但写入 app-secret 失败："+err.Error())
-		return
-	}
-
 	invalidateAccountCache(loginPlatformQQOfficial)
-	// 提示里只带 AppID（不是密钥）
-	sess.setState(loginStateConfirmed, "绑定成功，AppID "+res.AppID+" 与 AppSecret 已写入配置")
+	if adapter.GetAdapterType() == adapter.AdapterTypeQQOfficial {
+		sess.setState(loginStateConfirmed, "绑定成功，凭据已保存并连接")
+	} else {
+		sess.setState(loginStateConfirmed, "绑定凭据已保存；当前使用其他协议，切换协议需要单独迁移运行数据")
+	}
 }

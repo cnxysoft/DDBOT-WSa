@@ -2,8 +2,10 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -105,11 +107,17 @@ type LogInfo struct {
 }
 
 type Server struct {
-	addr string
+	addr       string
+	runtimeMu  sync.Mutex
+	listener   net.Listener
+	httpServer *http.Server
+	handler    http.Handler
+	retired    sync.WaitGroup
 
 	// token 支持运行期热更新（初始化向导设置密码后无需重启即可登录），读写加锁
-	tokenMu sync.RWMutex
-	token   string
+	tokenMu        sync.RWMutex
+	token          string
+	streamsRevoked chan struct{}
 
 	startedAt time.Time
 	online    *atomic.Bool
@@ -127,8 +135,36 @@ func (s *Server) getToken() string {
 
 func (s *Server) setToken(t string) {
 	s.tokenMu.Lock()
+	if s.token != t {
+		s.revokeStreamsLocked()
+	}
 	s.token = t
 	s.tokenMu.Unlock()
+}
+
+func (s *Server) revokeStreamsLocked() {
+	if s.streamsRevoked != nil {
+		close(s.streamsRevoked)
+	}
+	s.streamsRevoked = make(chan struct{})
+}
+
+func (s *Server) streamRevocation() <-chan struct{} {
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+	if s.streamsRevoked == nil {
+		s.streamsRevoked = make(chan struct{})
+	}
+	return s.streamsRevoked
+}
+
+type streamAuthKey struct{}
+
+func (s *Server) requestStreamRevocation(r *http.Request) <-chan struct{} {
+	if revoked, ok := r.Context().Value(streamAuthKey{}).(<-chan struct{}); ok {
+		return revoked
+	}
+	return s.streamRevocation()
 }
 
 type SubSummary struct {
@@ -181,24 +217,27 @@ func adminTokenHint(addr, token string) string {
 }
 
 func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
-	enable := config.GlobalConfig.GetBool("admin.enable")
-	if !enable {
-		// 面板默认关闭，关闭时没有其它任何日志。这一行是用户发现自己有这个功能的
-		// 唯一线索，别删。
-		logrus.Infof("Web 管理面板未启用（admin.enable 未开启）；如需在浏览器里管理，请在 application.yaml 中设置 admin.enable: true 后重启，说明见 %s", docsWebUI)
+	s := newServer(online)
+	activeServerMu.Lock()
+	activeServer = s
+	activeServerMu.Unlock()
+	if !config.GlobalConfig.GetBool("admin.enable") {
+		logrus.Infof("Web 管理面板未启用；可修改 admin.enable 自动启用，说明见 %s", docsWebUI)
 		return nil, nil
 	}
-	addr := config.GlobalConfig.GetString("admin.addr")
-	if addr == "" {
-		addr = defaultAdminAddr
+	addr := configuredAdminAddr(config.GlobalConfig.Snapshot())
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("Web 管理面板监听失败: %w", err)
 	}
-	token := config.GlobalConfig.GetString("admin.token")
-	if token == "" {
-		logrus.Warn("admin.token 未配置：为防止未授权访问，管理 API 将拒绝所有请求（仅 /api/v1/health 可用性另议）。请配置 admin.token 后重启")
-	}
+	s.addr = addr
+	s.serve(ln)
+	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, s.getToken()))
+	return s, nil
+}
 
-	s := &Server{addr: addr, token: token, startedAt: time.Now(), online: online}
-
+func newServer(online *atomic.Bool) *Server {
+	s := &Server{token: config.GlobalConfig.GetString("admin.token"), startedAt: time.Now(), online: online}
 	// 推送记录收集器（eventbus → 内存环形缓冲，供 REST/SSE 读取）
 	installPushCollector()
 
@@ -267,21 +306,8 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	// ServeMux 最长匹配保证 /api/* 不会被这里吞掉。静态资源见 static.go 的说明）
 	mux.Handle("/", http.HandlerFunc(serveWebFile))
 
-	// 先同步绑定端口，再把 Serve 丢到后台：端口被占用之类的问题必须当场可见，
-	// 否则用户只会看到「面板没起来」，日志里却一个字都没有。
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		logrus.Errorf("Web 管理面板启动失败(addr=%s)：%v；请检查端口是否被占用，或修改 admin.addr", addr, err)
-		return nil, err
-	}
-	server := &http.Server{Handler: mux}
-	go func() {
-		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			logrus.Errorf("admin server 异常退出(addr=%s): %v", addr, err)
-		}
-	}()
-	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, token))
-	return s, nil
+	s.handler = mux
+	return s
 }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -296,7 +322,14 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// 安全：token 为空时一律拒绝，不允许无鉴权访问（对应配置 admin.token 为空的默认情况）
-		if s.getToken() == "" {
+		s.tokenMu.Lock()
+		token := s.token
+		if s.streamsRevoked == nil {
+			s.streamsRevoked = make(chan struct{})
+		}
+		revoked := (<-chan struct{})(s.streamsRevoked)
+		s.tokenMu.Unlock()
+		if token == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"admin token not configured"}`))
 			return
@@ -307,12 +340,12 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 常量时间比较，防时序攻击
-		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(s.getToken())) != 1 {
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(token)) != 1 {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), streamAuthKey{}, revoked)))
 	}
 }
 
@@ -1061,8 +1094,14 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return writeFileAtomic(cfgPath, data, 0600)
 		})
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
+			var rejected *config.PrepareError
+			if errors.As(err, &rejected) {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": rejected.Error()})
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
+			}
 			return
 		}
 

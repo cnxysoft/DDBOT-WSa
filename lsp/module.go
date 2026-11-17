@@ -15,8 +15,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool"
-	"github.com/cnxysoft/DDBOT-WSa/image_pool/local_pool"
-	"github.com/cnxysoft/DDBOT-WSa/image_pool/lolicon_pool"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
@@ -26,9 +24,6 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/version"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/local_proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/py"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool/system_proxy"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/fsnotify/fsnotify"
@@ -37,7 +32,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
 	"go.uber.org/atomic"
-	"golang.org/x/sync/semaphore"
 )
 
 const ModuleName = "me.sora233.Lsp"
@@ -58,13 +52,13 @@ var Debug = false
 var SkipOnlineCheck = false
 
 type Lsp struct {
-	pool           image_pool.Pool
+	pool           *image_pool.ManagedPool
 	concernNotify  <-chan concern.Notify
 	stop           chan interface{}
 	wg             sync.WaitGroup
 	status         *Status
 	notifyWg       sync.WaitGroup
-	msgLimit       *semaphore.Weighted
+	msgLimit       *localutils.AdjustableLimit
 	cron           *cron.Cron
 	cronMu         sync.Mutex
 	cronConfig     []*cfg.CronJob
@@ -285,7 +279,7 @@ func ensureBotIdentity() error {
 func (l *Lsp) Init() {
 	configureLogLevels()
 	log := logger
-	l.msgLimit = semaphore.NewWeighted(int64(cfg.GetNotifyParallel()))
+	l.msgLimit = localutils.NewAdjustableLimit(int64(cfg.GetNotifyParallel()))
 
 	if Tags != "UNKNOWN" {
 		logger.Infof("DDBOT版本：Release版本【%v】", Tags)
@@ -350,105 +344,23 @@ func (l *Lsp) Init() {
 		os.Exit(exitCodeBotIdentityMismatch)
 	}
 
-	imagePoolType := config.GlobalConfig.GetString("imagePool.type")
-	log = logger.WithField("image_pool_type", imagePoolType)
-
-	switch imagePoolType {
-	case "loliconPool":
-		pool, err := lolicon_pool.NewLoliconPool(&lolicon_pool.Config{
-			ApiKey:   config.GlobalConfig.GetString("loliconPool.apikey"),
-			CacheMin: config.GlobalConfig.GetInt("loliconPool.cacheMin"),
-			CacheMax: config.GlobalConfig.GetInt("loliconPool.cacheMax"),
-		})
+	l.pool = image_pool.NewManagedPool(nil)
+	initial := config.GlobalConfig.Snapshot()
+	for _, prepare := range []func() (func(), func(), error){
+		func() (func(), func(), error) { return PrepareProxyReload(nil, initial) },
+		func() (func(), func(), error) { return PrepareImagePoolReload(nil, initial, l.pool) },
+	} {
+		commit, abort, err := prepare()
 		if err != nil {
-			log.Errorf("can not init pool %v", err)
-		} else {
-			l.pool = pool
-			log.Infof("初始化%v图片池", imagePoolType)
-			l.status.ImagePoolEnable = true
-		}
-	case "localPool":
-		pool, err := local_pool.NewLocalPool(config.GlobalConfig.GetString("localPool.imageDir"))
-		if err != nil {
-			log.Errorf("初始化%v图片池失败 %v", imagePoolType, err)
-		} else {
-			l.pool = pool
-			log.Infof("初始化%v图片池", imagePoolType)
-			l.status.ImagePoolEnable = true
-		}
-	case "off":
-		log.Debug("关闭图片池")
-	default:
-		log.Errorf("未知的图片池")
-	}
-
-	proxyType := config.GlobalConfig.GetString("proxy.type")
-	// 未配置 proxy.type 时默认使用 systemProxy：自动检测系统代理（环境变量/GNOME/Windows 注册表）
-	if proxyType == "" {
-		proxyType = "systemProxy"
-		log.Info("未配置 proxy.type，默认使用 systemProxy（自动检测系统代理）")
-	}
-	log = logger.WithField("proxy_type", proxyType)
-	switch proxyType {
-	case "pyProxyPool":
-		host := config.GlobalConfig.GetString("pyProxyPool.host")
-		log := log.WithField("host", host)
-		pyPool, err := py.NewPYProxyPool(host)
-		if err != nil {
-			log.Errorf("init py pool err %v", err)
-		} else {
-			proxy_pool.Init(pyPool)
-			l.status.ProxyPoolEnable = true
-		}
-	case "localProxyPool":
-		overseaProxies := config.GlobalConfig.GetStringSlice("localProxyPool.oversea")
-		mainlandProxies := config.GlobalConfig.GetStringSlice("localProxyPool.mainland")
-		var proxies []*local_proxy_pool.Proxy
-		for _, proxy := range overseaProxies {
-			proxies = append(proxies, &local_proxy_pool.Proxy{
-				Type:  proxy_pool.PreferOversea,
-				Proxy: proxy,
-			})
-		}
-		for _, proxy := range mainlandProxies {
-			proxies = append(proxies, &local_proxy_pool.Proxy{
-				Type:  proxy_pool.PreferMainland,
-				Proxy: proxy,
-			})
-		}
-		pool := local_proxy_pool.NewLocalPool(proxies)
-		proxy_pool.Init(pool)
-		log.WithField("local_proxy_num", len(proxies)).Debug("debug")
-		l.status.ProxyPoolEnable = true
-	case "systemProxy":
-		// 自动检测系统代理，仅用于海外请求（X、YouTube 等）
-		sysProxy, sysProxySource, enabled := system_proxy.DetectSystemProxyWithSource()
-		if enabled && sysProxy != "" {
-			log.Infof("检测到系统代理: %s（来源: %s，仅用于海外请求）", sysProxy, sysProxySource)
-			proxies := []*local_proxy_pool.Proxy{
-				{
-					Type:  proxy_pool.PreferOversea,
-					Proxy: sysProxy,
-				},
+			if abort != nil {
+				abort()
 			}
-			pool := local_proxy_pool.NewLocalPool(proxies)
-			proxy_pool.Init(pool)
-			l.status.ProxyPoolEnable = true
-		} else {
-			log.Warn("未检测到系统代理或系统代理未启用。" +
-				"检测范围：环境变量(http_proxy/https_proxy/all_proxy)、Linux GNOME 系统代理(gsettings)、Windows 注册表。" +
-				"注意：代理客户端仅监听端口不代表系统代理已开启；" +
-				"终端直接运行可先 export https_proxy=http://127.0.0.1:端口 再启动，" +
-				"或在配置中改用静态代理（proxy.oversea 等条目）；" +
-				"如需显式关闭代理检测（例如不希望自动使用环境变量里的代理），可设置 proxy.type: off")
+			logger.WithError(err).Error("初始化共享资源失败")
+		} else if commit != nil {
+			commit()
 		}
-	case "off":
-		log.Debug("proxy pool turn off")
-	default:
-		log.Errorf("unknown proxy type")
 	}
 	if cfg.GetTemplateEnabled() {
-		log.Infof("已启用模板")
 		template.InitTemplateLoader()
 	}
 	cfg.ReloadCustomCommandPrefix()
@@ -456,6 +368,7 @@ func (l *Lsp) Init() {
 		cfg.ReloadCustomCommandPrefix()
 		configureLogLevels()
 		l.CronjobReload()
+		l.msgLimit.Resize(int64(cfg.GetNotifyParallel()))
 	})
 }
 
@@ -1937,7 +1850,7 @@ var Instance = &Lsp{
 	concernNotify:          concern.ReadNotifyChan(),
 	stop:                   make(chan interface{}),
 	status:                 NewStatus(),
-	msgLimit:               semaphore.NewWeighted(3),
+	msgLimit:               localutils.NewAdjustableLimit(3),
 	PermissionStateManager: permission.NewStateManager(),
 	LspStateManager:        NewStateManager(),
 	cron:                   cron.New(cron.WithLogger(cron.VerbosePrintfLogger(cronLog)), cron.WithChain(cron.Recover(cron.PrintfLogger(cronLog)))),

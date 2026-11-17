@@ -187,7 +187,7 @@ func obNote(mode, addr string) string {
 	switch mode {
 	case "ws-server", "ws-reverse":
 		if addr != "" {
-			return "；OneBot 连接已写入配置（重启 Bot 后生效）"
+			return "；OneBot 连接配置已应用"
 		}
 	}
 	return ""

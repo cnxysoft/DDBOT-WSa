@@ -28,6 +28,7 @@ type EmitQueue struct {
 	IntervalProvider func() time.Duration
 
 	stopped   atomic.Bool
+	started   bool
 	stop      chan interface{}
 	eqlist    *list.List
 	eqlistCur *list.Element
@@ -103,8 +104,8 @@ func (q *EmitQueue) Delete(id interface{}) {
 }
 
 func (q *EmitQueue) core() {
-	q.wg.Add(1)
 	defer q.wg.Done()
+	defer q.waitTimer.Stop()
 	for {
 		q.cond.L.Lock()
 		for q.eqlist.Len() == 0 && !q.stopped.Load() {
@@ -139,15 +140,28 @@ func (q *EmitQueue) core() {
 }
 
 func (q *EmitQueue) Start() {
+	q.cond.L.Lock()
+	defer q.cond.L.Unlock()
+	if q.started || q.stopped.Load() {
+		return
+	}
+	q.started = true
+	q.wg.Add(1)
 	go q.core()
 }
 
 func (q *EmitQueue) Stop() {
-	q.stopped.Store(true)
-	if q.stop != nil {
-		close(q.stop)
+	q.cond.L.Lock()
+	if !q.stopped.Swap(true) {
+		if q.stop != nil {
+			close(q.stop)
+		}
+		q.cond.Broadcast()
+		if !q.started {
+			q.waitTimer.Stop()
+		}
 	}
-	q.cond.Broadcast()
+	q.cond.L.Unlock()
 	q.wg.Wait()
 }
 

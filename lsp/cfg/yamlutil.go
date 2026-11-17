@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,12 +26,15 @@ func GetConfigWriteMutex() *sync.Mutex { return &configWriteMu }
 // It performs line-by-line text manipulation to preserve all other content.
 // Uses atomic write (temp file + rename) to prevent corruption.
 func WriteConfigKeyValue(key, value string) error {
+	return WriteConfigKeyValues(map[string]string{key: value})
+}
+
+// WriteConfigKeyValues updates related credentials in one validated transaction.
+// No intermediate partial account or mode is written or published.
+func WriteConfigKeyValues(values map[string]string) error {
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
-
-	cfgFile := ConfigFilePath()
-
-	return updateConfigKeyValue(key, value, cfgFile, config.GlobalConfig.Save)
+	return updateConfigKeyValues(values, ConfigFilePath(), config.GlobalConfig.Save)
 }
 
 // quoteYAMLValue 把值写成 YAML 双引号标量。
@@ -80,6 +84,10 @@ func validateYAML(data []byte) error {
 }
 
 func updateConfigKeyValue(key, value, cfgPath string, save func([]byte, func() error) error) error {
+	return updateConfigKeyValues(map[string]string{key: value}, cfgPath, save)
+}
+
+func updateConfigKeyValues(values map[string]string, cfgPath string, save func([]byte, func() error) error) error {
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return err
@@ -94,9 +102,50 @@ func updateConfigKeyValue(key, value, cfgPath string, save func([]byte, func() e
 		fileMode = info.Mode()
 	}
 
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	newData := data
+	for _, key := range keys {
+		newData, err = rewriteConfigKeyValue(newData, key, values[key])
+		if err != nil {
+			return err
+		}
+	}
+	persist := func() error {
+		// 使用临时文件 + 原子替换，避免写入中途崩溃导致配置损坏。
+		// Windows 上目标文件可能被编辑器/杀毒软件瞬时占用，rename 会失败，
+		// 因此做几次退避重试，重试仍失败才返回错误（不会损坏原文件）。
+		tmpFile := cfgPath + ".tmp"
+		if err := os.WriteFile(tmpFile, newData, fileMode); err != nil {
+			return fmt.Errorf("写入临时文件失败: %w", err)
+		}
+		const maxRenameRetries = 3
+		var renameErr error
+		for attempt := 0; attempt < maxRenameRetries; attempt++ {
+			renameErr = os.Rename(tmpFile, cfgPath)
+			if renameErr == nil {
+				return nil
+			}
+			// 短暂退避后重试（200ms 起，最多约 800ms）
+			time.Sleep(time.Duration(200*(1<<attempt)) * time.Millisecond)
+		}
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("原子替换配置文件失败（已重试 %d 次）: %w", maxRenameRetries, renameErr)
+	}
+	if save != nil {
+		return save(newData, persist)
+	}
+	return persist()
+}
+
+// rewriteConfigKeyValue preserves comments, casing and line endings in memory.
+func rewriteConfigKeyValue(data []byte, key, value string) ([]byte, error) {
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
-		return fmt.Errorf("invalid config key format: %s (expected section.name)", key)
+		return nil, fmt.Errorf("invalid config key format: %s (expected section.name)", key)
 	}
 	section := parts[0]
 	keyName := parts[1]
@@ -214,31 +263,7 @@ func updateConfigKeyValue(key, value, cfgPath string, save func([]byte, func() e
 	}
 	newData := []byte(joined)
 	if err := validateYAML(newData); err != nil {
-		return err
+		return nil, err
 	}
-	persist := func() error {
-		// 使用临时文件 + 原子替换，避免写入中途崩溃导致配置损坏。
-		// Windows 上目标文件可能被编辑器/杀毒软件瞬时占用，rename 会失败，
-		// 因此做几次退避重试，重试仍失败才返回错误（不会损坏原文件）。
-		tmpFile := cfgPath + ".tmp"
-		if err := os.WriteFile(tmpFile, newData, fileMode); err != nil {
-			return fmt.Errorf("写入临时文件失败: %w", err)
-		}
-		const maxRenameRetries = 3
-		var renameErr error
-		for attempt := 0; attempt < maxRenameRetries; attempt++ {
-			renameErr = os.Rename(tmpFile, cfgPath)
-			if renameErr == nil {
-				return nil
-			}
-			// 短暂退避后重试（200ms 起，最多约 800ms）
-			time.Sleep(time.Duration(200*(1<<attempt)) * time.Millisecond)
-		}
-		_ = os.Remove(tmpFile)
-		return fmt.Errorf("原子替换配置文件失败（已重试 %d 次）: %w", maxRenameRetries, renameErr)
-	}
-	if save != nil {
-		return save(newData, persist)
-	}
-	return persist()
+	return newData, nil
 }
