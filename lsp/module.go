@@ -58,14 +58,17 @@ var Debug = false
 var SkipOnlineCheck = false
 
 type Lsp struct {
-	pool          image_pool.Pool
-	concernNotify <-chan concern.Notify
-	stop          chan interface{}
-	wg            sync.WaitGroup
-	status        *Status
-	notifyWg      sync.WaitGroup
-	msgLimit      *semaphore.Weighted
-	cron          *cron.Cron
+	pool           image_pool.Pool
+	concernNotify  <-chan concern.Notify
+	stop           chan interface{}
+	wg             sync.WaitGroup
+	status         *Status
+	notifyWg       sync.WaitGroup
+	msgLimit       *semaphore.Weighted
+	cron           *cron.Cron
+	cronMu         sync.Mutex
+	cronConfig     []*cfg.CronJob
+	cronConfigured bool
 
 	PermissionStateManager *permission.StateManager
 	LspStateManager        *StateManager
@@ -84,8 +87,9 @@ func (l *Lsp) MiraiGoModule() bot.ModuleInfo {
 }
 
 func configureLogLevels() {
-	log := logger.WithField("log_level", config.GlobalConfig.GetString("logLevel"))
-	lev, err := logrus.ParseLevel(config.GlobalConfig.GetString("logLevel"))
+	snapshot := config.GlobalConfig.Snapshot()
+	log := logger.WithField("log_level", snapshot.GetString("logLevel"))
+	lev, err := logrus.ParseLevel(snapshot.GetString("logLevel"))
 	if err != nil {
 		logrus.SetLevel(logrus.DebugLevel)
 		log.Warn("无法识别logLevel，将使用Debug级别")
@@ -94,7 +98,7 @@ func configureLogLevels() {
 		log.Infof("设置logLevel为%v", lev.String())
 	}
 
-	if err := ffmpeg.SetLogLevel(config.GlobalConfig.GetString("ffmpeg.logLevel")); err != nil {
+	if err := ffmpeg.SetLogLevel(snapshot.GetString("ffmpeg.logLevel")); err != nil {
 		logger.WithError(err).Warn("无法识别 ffmpeg.logLevel，保留原日志等级")
 	}
 }
@@ -449,12 +453,7 @@ func (l *Lsp) Init() {
 	}
 	cfg.ReloadCustomCommandPrefix()
 	config.GlobalConfig.OnConfigChange(func(in fsnotify.Event) {
-		// 如果正在写入配置，跳过这次热重载
-		if cfg.IsWritingInProgress() {
-			logrus.WithField("config", "GlobalConfig").Debug("配置文件变更被忽略（正在写入中）")
-			return
-		}
-		go cfg.ReloadCustomCommandPrefix()
+		cfg.ReloadCustomCommandPrefix()
 		configureLogLevels()
 		l.CronjobReload()
 	})

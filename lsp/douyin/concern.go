@@ -340,7 +340,6 @@ func getRefreshInterval() time.Duration {
 
 func (d *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
-		interval := getRefreshInterval()
 		ti := time.NewTimer(time.Second * 3)
 		defer ti.Stop() // 确保定时器资源释放
 
@@ -352,7 +351,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				ti.Reset(interval)
+				ti.Reset(getRefreshInterval())
 				continue
 			}
 			var start = time.Now()
@@ -403,7 +402,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			ti.Reset(interval)
+			ti.Reset(getRefreshInterval())
 		}
 	}
 }

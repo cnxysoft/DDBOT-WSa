@@ -272,10 +272,11 @@
         <div class="config-toolbar">
           <div class="config-tabs" id="config-tabs"></div>
           <div class="config-toolbar-right">
-            <span id="config-hint" class="config-hint">修改合并写入并热生效；凭据类字段仅可在配置文件中修改</span>
+            <span id="config-hint" class="config-hint">保存时校验并应用支持热更新的配置；其余配置将在重启后生效</span>
             <button id="config-save" class="btn primary sm">保存当前分区</button>
           </div>
         </div>
+        <p id="config-reload-status" class="config-hint" role="status" aria-live="polite"></p>
         <div id="config-panels"></div>
       </section>
     </main>

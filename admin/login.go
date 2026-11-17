@@ -389,6 +389,7 @@ func (s *Server) finishBilibiliLogin(sess *loginSession, qrSession *bilibili.QRL
 	}
 
 	bilibili.FreshSelfInfo()
+	config.GlobalConfig.MarkApplied("bilibili.SESSDATA", "bilibili.bili_jct")
 	invalidateAccountCache(loginPlatformBilibili)
 	sess.setState(loginStateConfirmed, "登录成功，Cookie 已写入配置")
 }

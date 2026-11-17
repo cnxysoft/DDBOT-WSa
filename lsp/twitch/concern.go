@@ -130,11 +130,8 @@ func (c *TwitchConcern) Stop() {
 func (c *TwitchConcern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		// 直接读取 twitch.interval，不使用 GetEmitIntervalForSite（它会 fallback 到 concern.emitInterval）
-		interval := config.GlobalConfig.GetDuration("twitch.interval")
-		if interval <= 0 {
-			interval = time.Second * 30
-		}
+		defer t.Stop()
+
 		var freshCount atomic.Int32
 		if !cfg.GetTwitchOnlyOnlineNotify() {
 			freshCount.Store(1000)
@@ -147,7 +144,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(interval)
+				t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 				continue
 			}
 			start := time.Now()
@@ -177,7 +174,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 					logger.Errorf("GetStreamsByLogins error %v", err)
 					// API 失败时跳过本次轮询，避免空 liveMap 将所有频道误判为下播
 					freshCount.Add(1)
-					t.Reset(interval)
+					t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 					continue
 				}
 				for i := range streams {
@@ -251,7 +248,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 			freshCount.Add(1)
 			end := time.Now()
 			logger.WithField("cost", end.Sub(start)).Tracef("twitch fresh loop done")
-			t.Reset(interval)
+			t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 		}
 	}
 }

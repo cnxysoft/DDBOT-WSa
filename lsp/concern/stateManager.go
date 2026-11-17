@@ -710,6 +710,13 @@ func (c *StateManager) UseEmitQueue() {
 	}
 	c.emitChan = make(chan *localutils.EmitE)
 	c.emitQueue = localutils.NewEmitQueue(c.emitChan, interval)
+	c.emitQueue.IntervalProvider = func() time.Duration {
+		interval := cfg.GetEmitInterval()
+		if interval <= 0 {
+			return defaultInterval
+		}
+		return interval
+	}
 }
 
 // EmitQueueEnabled 返回是否使用了EmitQueue
@@ -762,4 +769,11 @@ func (c *StateManager) UseEmitQueueWithSiteInterval(site string) {
 	}
 	c.emitChan = make(chan *localutils.EmitE)
 	c.emitQueue = localutils.NewEmitQueue(c.emitChan, interval)
+	c.emitQueue.IntervalProvider = func() time.Duration {
+		interval := cfg.GetEmitIntervalForSite(site)
+		if interval <= 0 {
+			return defaultInterval
+		}
+		return interval
+	}
 }

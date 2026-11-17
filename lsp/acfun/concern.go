@@ -207,13 +207,8 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 func (c *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		var interval time.Duration
-		if config.GlobalConfig != nil {
-			interval = config.GlobalConfig.GetDuration("acfun.interval")
-		}
-		if interval == 0 {
-			interval = time.Second * 20
-		}
+		defer t.Stop()
+
 		for {
 			select {
 			case <-t.C:
@@ -222,7 +217,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(interval)
+				t.Reset(cfg.PollInterval("acfun", 20*time.Second))
 				continue
 			}
 			var start = time.Now()
@@ -364,7 +359,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			t.Reset(interval)
+			t.Reset(cfg.PollInterval("acfun", 20*time.Second))
 		}
 	}
 }

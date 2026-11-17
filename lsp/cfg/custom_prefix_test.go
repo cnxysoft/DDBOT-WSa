@@ -21,7 +21,9 @@ func withViperConfigFile(t *testing.T, content string) {
 		t.Fatal(err)
 	}
 	old := config.GlobalConfig
-	t.Cleanup(func() { config.GlobalConfig = old })
+	oldPrefixes := GetCustomCommandPrefix()
+	customCommandPrefixAtomic.Store(map[string]string{})
+	t.Cleanup(func() { config.GlobalConfig = old; customCommandPrefixAtomic.Store(oldPrefixes) })
 	v := viper.New()
 	v.SetConfigFile(path)
 	config.GlobalConfig = &config.Config{Viper: v}
@@ -100,5 +102,22 @@ func TestReloadCustomCommandPrefixEmptyStringWarnsWithoutBlamingColon(t *testing
 	}
 	if strings.Contains(logged, "全角") {
 		t.Fatalf("空字符串不该赖全角冒号，实际日志：%s", logged)
+	}
+}
+
+func TestReloadCustomCommandPrefixRetainsLastGoodAndCopiesMaps(t *testing.T) {
+	withViperConfigFile(t, "customCommandPrefix:\n  Help: '#'\n")
+	ReloadCustomCommandPrefix()
+	got := GetCustomCommandPrefix()
+	got["Help"] = "mutated"
+	if GetCustomCommandPrefix()["Help"] != "#" {
+		t.Fatal("caller mutated the shared prefix cache")
+	}
+	if err := os.WriteFile(ConfigFilePath(), []byte("customCommandPrefix: invalid\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ReloadCustomCommandPrefix()
+	if GetCustomCommandPrefix()["Help"] != "#" {
+		t.Fatal("invalid reload erased the last valid prefix")
 	}
 }

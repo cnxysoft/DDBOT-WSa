@@ -851,14 +851,69 @@ function renderConfigForm() {
   }
 }
 
+let reloadStatusRequest = 0;
+let configLoadRequest = 0;
+let configSaveQueue = Promise.resolve();
+
+function renderReloadStatus(status) {
+  const target = $('#config-reload-status');
+  if (!target || !status) return;
+  const pending = status.restartRequired || [];
+  const details = pending.length ? '需重启：' + pending.join('、') : '支持热更新的配置已应用；轮询间隔在下一轮调度时生效';
+  target.textContent = status.lastError || `配置版本 ${status.revision}；${details}`;
+}
+
+async function refreshReloadStatus() {
+  const request = ++reloadStatusRequest;
+  try {
+    const status = await apiJSON('/api/v1/config/status');
+    if (request === reloadStatusRequest) renderReloadStatus(status);
+  } catch (_) { /* Keep the last known state on transient errors. */ }
+}
+
+function saveConfigPatch(patch) {
+  // A save invalidates status queries that started before it.
+  ++reloadStatusRequest;
+  ++configLoadRequest;
+  const body = JSON.stringify({ config: patch });
+  // Serialize all configuration forms and platform toggles in user action order.
+  const save = configSaveQueue.then(() => {
+    ++reloadStatusRequest;
+    ++configLoadRequest;
+    return apiJSON('/api/v1/config', { method: 'POST', body });
+  });
+  configSaveQueue = save.catch(() => {});
+  return save;
+}
+
+setInterval(() => {
+  const page = $('#page-config');
+  if (page && page.classList.contains('active') && !document.hidden) refreshReloadStatus();
+}, 5000);
+
+function showConfigSaved(result, label = '配置已保存') {
+  // Also invalidate queries that started while the save was in progress.
+  ++reloadStatusRequest;
+  ++configLoadRequest;
+  const status = result && result.reload;
+  renderReloadStatus(status);
+  if (!status) { toast(label + '，请刷新查看生效状态'); return; }
+  const pending = status.restartRequired || [];
+  toast(pending.length ? label + '；需重启：' + pending.slice(0, 6).join('、') + (pending.length > 6 ? '等' : '') : label + '并已应用（轮询间隔在下一轮调度生效）');
+}
+
 async function loadConfig() {
+  const request = ++configLoadRequest;
   try {
     const cfg = await apiJSON('/api/v1/config');
+    if (request !== configLoadRequest) return;
     configCache = cfg;
     loadConfig._retried = false;
     renderConfigForm();
+    refreshReloadStatus();
     loadPermOverview(); // 权限面板数据（面板由 renderConfigForm 生成）
   } catch (e) {
+    if (request !== configLoadRequest) return;
     if (e.message.includes('401')) { showLogin(); return; } // 登录失效直接回登录层
     // 网络抖动自动重试一次，重试再失败才提示。
     // _retried 只能在「成功」或「最终失败」时复位：原来放在定时器回调开头复位，
@@ -962,11 +1017,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     $('#config-save').disabled = true;
     try {
-      await apiJSON('/api/v1/config', {
-        method: 'POST',
-        body: JSON.stringify({ config: patch }),
-      });
-      toast('配置已保存（自动热生效；连接类配置需重启 Bot）');
+      const result = await saveConfigPatch(patch);
+      showConfigSaved(result);
       loadConfig();
     } catch (e) {
       toast('保存失败：' + e.message, false);
@@ -1367,14 +1419,14 @@ function collectPatchFromContainer(container) {
   return patch;
 }
 
-// setPlatformEnabled 写入 platform.<site>.enable——viper WatchConfig 热重载，
+// setPlatformEnabled 保存并同步应用 platform.<site>.enable，
 // lsp/notify.go 消费出口即时跳过停用平台的推送（订阅数据保留，恢复后继续）
 async function setPlatformEnabled(site, enabled) {
   const patch = {};
   setPath(patch, 'platform.' + site + '.enable', enabled);
   try {
-    await apiJSON('/api/v1/config', { method: 'POST', body: JSON.stringify({ config: patch }) });
-    toast(`${enabled ? '已启用' : '已停用推送'}：${(PLATFORM_META[site] || {}).name || site}${enabled ? '' : '（订阅与轮询保留，恢复开关后继续推送）'}`);
+    const result = await saveConfigPatch(patch);
+    showConfigSaved(result, `${enabled ? '已启用' : '已停用推送'}：${(PLATFORM_META[site] || {}).name || site}`);
     if (configCache) setPath(configCache, 'platform.' + site + '.enable', enabled);
   } catch (e) {
     toast('设置失败：' + e.message, false);
@@ -1673,8 +1725,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const patch = collectPatchFromContainer($('#platform-modal-body'));
       if (Object.keys(patch).length) {
-        await apiJSON('/api/v1/config', { method: 'POST', body: JSON.stringify({ config: patch }) });
-        toast('平台配置已保存');
+        const result = await saveConfigPatch(patch);
+        showConfigSaved(result, '平台配置已保存');
       } else {
         toast('没有修改需要保存');
       }

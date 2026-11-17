@@ -527,19 +527,13 @@ func WriteBackConfig(sub string) error {
 	cfg.GetConfigWriteMutex().Lock()
 	defer cfg.GetConfigWriteMutex().Unlock()
 
-	// 标记正在写入，暂停热重载
-	cfg.MarkConfigWriteStart()
-	defer cfg.MarkConfigWriteEnd()
-
 	if err := writeBackConfigToPath(sub, cfgFile); err != nil {
 		return err
 	}
 
-	// 同步到内存里的 viper。GetWeiboMode() 是看配置里有没有 weibo.sub 来判断
-	// guest/login 的，只写文件的话（热重载这会儿正被 MarkConfigWrite 挡着）
-	// 它会一直认为 SUB 是空的 —— 表现就是「扫码登录成功了，但还在跑访客 Cookie」。
+	// The login flow explicitly updates its runtime credentials.
 	config.GlobalConfig.Set("weibo.sub", sub)
-	return nil
+	return config.GlobalConfig.Reload()
 }
 
 // writeBackConfigToPath writes SUB into the config file at cfgPath using atomic rename.

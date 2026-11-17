@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/ghodss/yaml"
 	"github.com/sirupsen/logrus"
@@ -92,8 +93,6 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	cfgMu := cfg.GetConfigWriteMutex()
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
-	cfg.MarkConfigWriteStart()
-	defer cfg.MarkConfigWriteEnd()
 
 	var fileMode os.FileMode = 0600 // 文件不存在时沿用旧行为
 	if info, err := os.Stat(cfgPath); err == nil {
@@ -167,7 +166,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			logrus.Warnf("配置备份失败: %v", err)
 		}
 	}
-	if err := writeFileAtomic(cfgPath, data, fileMode); err != nil {
+	if err := config.GlobalConfig.Save(data, func() error {
+		return writeFileAtomic(cfgPath, data, fileMode)
+	}); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
 		return
@@ -175,6 +176,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 	// 热更新内存中的 token：设置完成后立即可用新密码登录，无需重启
 	s.setToken(req.Token)
+	config.GlobalConfig.Set("admin.token", req.Token)
+	config.GlobalConfig.MarkApplied("admin.token")
 	logrus.Info("初始化向导完成：admin.token 已设置" + obNote(req.ObMode, req.ObAddr))
 
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

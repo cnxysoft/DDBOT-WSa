@@ -2,13 +2,13 @@ package cfg
 
 import (
 	"errors"
-	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/ghodss/yaml"
-	"github.com/spf13/cast"
-	"go.uber.org/atomic"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/ghodss/yaml"
+	"go.uber.org/atomic"
 )
 
 func MatchCmdWithPrefix(cmd string) (prefix string, command string, err error) {
@@ -28,14 +28,14 @@ func MatchCmdWithPrefix(cmd string) (prefix string, command string, err error) {
 }
 
 // IsPlatformDisabled 判断平台是否被 WebUI 停用（platform.<site>.enable 显式为 false）。
-// 缺省或 true 均视为启用。走 viper 热配置读取，admin 原子写入配置文件后
-// 经 WatchConfig 自动重载，无需重启即生效。
+// 缺省或 true 均视为启用，配置保存成功后立即读取已发布的快照。
 func IsPlatformDisabled(site string) bool {
 	if site == "" {
 		return false
 	}
 	key := "platform." + site + ".enable"
-	return config.GlobalConfig.IsSet(key) && !config.GlobalConfig.GetBool(key)
+	s := config.GlobalConfig.Snapshot()
+	return s.IsSet(key) && !s.GetBool(key)
 }
 
 func GetCommandPrefix(commands ...string) string {
@@ -76,54 +76,60 @@ func ConfigFilePath() string {
 // YAML 里冒号写成全角「：」时，整个块不构成映射而是退化成一段多行字符串，
 // cast.ToStringMapString 拿到空 map 且不报错，用户只会看到「自定义前缀不生效」。
 func ReloadCustomCommandPrefix() {
-	var result map[string]string
-	defer func() {
-		customCommandPrefixAtomic.Store(result)
-	}()
-	data, err := os.ReadFile(ConfigFilePath())
+	data := config.GlobalConfig.Snapshot().RawYAML()
+	if data == nil { // Compatibility for callers that only configure a file path.
+		var err error
+		data, err = os.ReadFile(ConfigFilePath())
+		if err != nil {
+			return
+		}
+	}
+	result, err := parseCustomCommandPrefix(data)
 	if err != nil {
+		logger.Error(err)
 		return
 	}
-	var all = make(map[string]interface{})
+	customCommandPrefixAtomic.Store(result)
+}
 
-	err = yaml.Unmarshal(data, &all)
-	if err != nil {
-		logger.Errorf("customCommandPrefix 读取失败：配置文件 %s 不是合法 YAML: %v", ConfigFilePath(), err)
-		return
+func parseCustomCommandPrefix(data []byte) (map[string]string, error) {
+	var all map[string]interface{}
+	if err := yaml.Unmarshal(data, &all); err != nil {
+		return nil, errors.New("customCommandPrefix 读取失败：配置文件不是合法 YAML")
 	}
-	var a interface{}
-	if val, ok := all["customCommandPrefix"]; ok && val != nil {
-		a = val
-	} else if val, ok := all["customcommandprefix"]; ok {
-		a = val
+	value := all["customCommandPrefix"]
+	if value == nil {
+		value = all["customcommandprefix"]
 	}
-	if a == nil {
-		return
+	result := make(map[string]string)
+	if value == nil {
+		return result, nil
 	}
-	result = cast.ToStringMapString(a)
-	if len(result) == 0 {
-		// 显式写成空表（customCommandPrefix: {}）是合法配置——WebUI 里清空条目就是这个，
-		// 不能报错。只有「类型根本不是映射」才是要提醒的情况。
-		if _, isMap := a.(map[string]interface{}); isMap {
-			return
+	entries, ok := value.(map[string]interface{})
+	if !ok {
+		if str, ok := value.(string); ok && strings.TrimSpace(str) != "" {
+			return nil, errors.New("customCommandPrefix 解析结果为空：期望映射，请检查全角冒号「：」，应使用半角冒号和空格")
 		}
-		if str, isStr := a.(string); isStr && strings.TrimSpace(str) != "" {
-			// 全角冒号不是 YAML 键分隔符，整块会退化成一段字符串——这是最常见的踩坑形态，
-			// 报错必须点明原因，否则用户只会看到「自定义前缀不生效」。
-			logger.Errorf("customCommandPrefix 解析结果为空：期望「命令: 前缀」映射，实际是一段字符串。"+
-				"最常见的原因是键值之间的冒号写成了全角「：」（全角冒号不是 YAML 键分隔符）。实际值: %q", str)
-			return
-		}
-		logger.Errorf("customCommandPrefix 解析结果为空：期望「命令: 前缀」映射，实际类型 %T，值 %v", a, a)
+		return nil, errors.New("customCommandPrefix 解析结果为空：期望命令到前缀的映射")
 	}
+	for command, prefix := range entries {
+		str, ok := prefix.(string)
+		if !ok {
+			return nil, errors.New("customCommandPrefix 的前缀必须是字符串")
+		}
+		result[command] = str
+	}
+	return result, nil
 }
 
 func GetCustomCommandPrefix() map[string]string {
-	var m = customCommandPrefixAtomic.Load()
-	if m == nil {
-		m = make(map[string]string)
+	result := make(map[string]string)
+	if m := customCommandPrefixAtomic.Load(); m != nil {
+		for k, v := range m.(map[string]string) {
+			result[k] = v
+		}
 	}
-	return m.(map[string]string)
+	return result
 }
 
 func GetEmitInterval() time.Duration {
@@ -133,13 +139,14 @@ func GetEmitInterval() time.Duration {
 // GetEmitIntervalForSite 获取站点级别的 emit interval
 // 优先级：site.interval > concern.emitInterval > 默认值 5s
 func GetEmitIntervalForSite(site string) time.Duration {
+	s := config.GlobalConfig.Snapshot()
 	// 先尝试站点配置
-	interval := config.GlobalConfig.GetDuration(site + ".interval")
+	interval := s.GetDuration(site + ".interval")
 	if interval > 0 {
 		return interval
 	}
 	// 返回全局配置
-	return GetEmitInterval()
+	return s.GetDuration("concern.emitInterval")
 }
 
 func GetLargeNotifyLimit() int {

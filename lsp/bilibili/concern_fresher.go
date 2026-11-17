@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/bot"
-	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -22,13 +21,8 @@ import (
 func (c *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		var interval time.Duration
-		if config.GlobalConfig != nil {
-			interval = config.GlobalConfig.GetDuration("bilibili.interval")
-		}
-		if interval == 0 {
-			interval = time.Second * 20
-		}
+		defer t.Stop()
+
 		var freshCount atomic.Int32
 		if !cfg.GetBilibiliOnlyOnlineNotify() {
 			freshCount.Store(1000)
@@ -41,7 +35,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(interval)
+				t.Reset(cfg.PollInterval("bilibili", 20*time.Second))
 				continue
 			}
 			if bot.Instance == nil || bot.Instance.Messenger == nil || bot.Instance.Adapter == nil ||
@@ -277,7 +271,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			t.Reset(interval)
+			t.Reset(cfg.PollInterval("bilibili", 20*time.Second))
 		}
 	}
 }

@@ -24,6 +24,8 @@ func NewEmitE(id interface{}, t concern_type.Type) *EmitE {
 
 type EmitQueue struct {
 	TimeInterval time.Duration
+	// IntervalProvider is set before Start and evaluated by the timer owner on each round.
+	IntervalProvider func() time.Duration
 
 	stopped   atomic.Bool
 	stop      chan interface{}
@@ -162,13 +164,17 @@ func NewEmitQueue(c chan<- *EmitE, interval time.Duration) *EmitQueue {
 }
 
 func (q *EmitQueue) nextInterval() time.Duration {
-	if q.TimeInterval <= 0 {
-		return q.TimeInterval
+	interval := q.TimeInterval
+	if q.IntervalProvider != nil {
+		interval = q.IntervalProvider()
 	}
-	jitterRange := q.TimeInterval / 2
+	if interval <= 0 {
+		return interval
+	}
+	jitterRange := interval / 2
 	if jitterRange <= 0 {
-		return q.TimeInterval
+		return interval
 	}
 	jitter := time.Duration(rand.Int63n(int64(jitterRange)))
-	return q.TimeInterval + jitter - (q.TimeInterval / 4)
+	return interval + jitter - (interval / 4)
 }

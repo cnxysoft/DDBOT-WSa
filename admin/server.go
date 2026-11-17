@@ -220,6 +220,7 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
+	mux.HandleFunc("/api/v1/config/status", s.withAuth(s.handleConfigStatus))
 
 	// 平台登录态（扫码登录开着时替换掉凭据输入框）
 	mux.HandleFunc("/api/v1/platform/account", s.withAuth(s.handlePlatformAccount))
@@ -991,8 +992,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		cfgMu := cfg.GetConfigWriteMutex()
 		cfgMu.Lock()
 		defer cfgMu.Unlock()
-		cfg.MarkConfigWriteStart()
-		defer cfg.MarkConfigWriteEnd()
 
 		existing := make(map[string]interface{})
 		var oldData []byte
@@ -1046,6 +1045,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if err := config.GlobalConfig.Validate(data); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 		// 写入前备份原配置
 		if len(oldData) > 0 {
 			if err := os.WriteFile(cfgPath+".bak", oldData, 0600); err != nil {
@@ -1053,18 +1057,32 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := writeFileAtomic(cfgPath, data, 0600); err != nil {
+		reloadStatus, err := config.GlobalConfig.SaveAndStatus(data, func() error {
+			return writeFileAtomic(cfgPath, data, 0600)
+		})
+		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "success", "reload": reloadStatus,
+		})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
 	}
+}
+
+func (s *Server) handleConfigStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(config.GlobalConfig.Status())
 }
 
 // protectedConfigKeys 禁止通过 API 修改的配置键（防止改 token 提权或持久化后门）

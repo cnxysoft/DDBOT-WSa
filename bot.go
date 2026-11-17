@@ -135,6 +135,7 @@ func Run() {
 	config.GlobalConfig.AddConfigPath(".")
 	config.GlobalConfig.AddConfigPath("./config")
 
+	cfg.ConfigureReload()
 	err := config.GlobalConfig.ReadInConfig()
 	if err != nil {
 		warn.Warn(fmt.Sprintf("读取配置文件失败！请检查配置文件格式是否正确 - %v", err))
@@ -143,8 +144,6 @@ func Run() {
 	// 启动时按行校对一遍配置格式。全角冒号、同层等价键这类问题不会让 YAML 解析失败，
 	// 但会让对应的键静默读不到，所以只警告不中断。
 	cfg.CheckConfigFormatFile(cfg.ConfigFilePath())
-
-	config.GlobalConfig.WatchConfig()
 
 	// 根据配置启用 EXT 数据库
 	if cfg.GetExtDbEnable() {
@@ -176,6 +175,8 @@ func Run() {
 	// bot.RefreshList()
 
 	lsp.Instance.PostStart(bot.Instance)
+	config.GlobalConfig.WatchConfig()
+	utils.AddExitHook(config.GlobalConfig.StopWatching)
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)

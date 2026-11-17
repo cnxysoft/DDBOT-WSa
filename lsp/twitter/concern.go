@@ -686,7 +686,6 @@ func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan
 
 func (t *twitterConcern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
-		interval := getRefreshInterval()
 		ti := time.NewTimer(time.Second * 3)
 		defer ti.Stop() // 确保定时器资源释放
 
@@ -694,7 +693,7 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 		reset := func() {
 			// 添加随机抖动，避免固定间隔被识别为机器人
 			jitter := time.Duration(rand.Intn(30)) * time.Second // 0-30秒随机抖动
-			ti.Reset(interval + jitter)
+			ti.Reset(getRefreshInterval() + jitter)
 		}
 
 		for {
