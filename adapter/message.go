@@ -1,5 +1,7 @@
 package adapter
 
+import "reflect"
+
 // ElementType represents the type of a message element.
 type ElementType int
 
@@ -27,6 +29,20 @@ const (
 type IMessageElement interface {
 	Type() ElementType
 	ToSendingMessage() *SendingMessage
+}
+
+// IsNilMessageElement reports whether an element is nil, including typed nil values.
+func IsNilMessageElement(element IMessageElement) bool {
+	if element == nil {
+		return true
+	}
+	value := reflect.ValueOf(element)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // SendingMessage is a message ready for sending.

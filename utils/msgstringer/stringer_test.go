@@ -22,3 +22,17 @@ func TestAdapterMsgToString(t *testing.T) {
 	}
 	AdapterMsgToString(m)
 }
+
+func TestAdapterMsgToStringSkipsNilElements(t *testing.T) {
+	elements := []adapter.IMessageElement{
+		(*adapter.TextSegment)(nil),
+		&adapter.TextSegment{Content: "正文"},
+		(*adapter.ReplySegment)(nil),
+		(*adapter.ImageSegment)(nil),
+		&adapter.ReplySegment{ReplySeq: 42},
+		nil,
+	}
+	if got, want := AdapterMsgToString(elements), "正文[回复:42]"; got != want {
+		t.Fatalf("AdapterMsgToString() = %q, want %q", got, want)
+	}
+}
