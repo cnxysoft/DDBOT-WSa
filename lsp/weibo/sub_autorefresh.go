@@ -3,6 +3,7 @@ package weibo
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
@@ -16,77 +17,64 @@ var (
 
 var (
 	// subAutoRefreshCtx 用于控制 SUB 自动刷新协程的生命周期
+	subAutoRefreshMu     sync.Mutex
 	subAutoRefreshCtx    context.Context
 	subAutoRefreshCancel context.CancelFunc
 )
 
 // StartSubAutoRefresh 启动 SUB 自动刷新监控（仅 login 模式有效）
 func StartSubAutoRefresh() {
-	// 仅在 login 模式下启用
-	mode := cfg.GetWeiboMode()
-	if mode != "login" {
-		logger.Debug("非 login 模式，不启动 SUB 自动刷新")
-		return
-	}
+	reconcileSubAutoRefresh(cfg.GetWeiboMode() == "login" && cfg.GetWeiboAutoRefresh() && cfg.GetWeiboCookieRefreshAPI() != "")
+}
 
-	// 检查是否启用自动刷新
-	if !cfg.GetWeiboAutoRefresh() {
-		logger.Debug("weibo.autorefresh 未启用")
-		return
-	}
-
-	apiURL := cfg.GetWeiboCookieRefreshAPI()
-	if apiURL == "" {
-		logger.Warn("微博 Cookie 刷新 API 地址未配置，SUB 自动刷新功能无法启动")
-		return
-	}
-
-	// 如果已有上下文，先取消
-	if subAutoRefreshCancel != nil {
-		subAutoRefreshCancel()
-	}
-
-	subAutoRefreshCtx, subAutoRefreshCancel = context.WithCancel(context.Background())
-
-	go func() {
-		logger.Info("SUB 自动刷新已启动，将每小时从 API 刷新一次")
-
-		// 初始延迟，等待系统启动完成
-		select {
-		case <-time.After(5 * time.Second):
-		case <-subAutoRefreshCtx.Done():
-			return
+func reconcileSubAutoRefresh(enabled bool) {
+	subAutoRefreshMu.Lock()
+	defer subAutoRefreshMu.Unlock()
+	if !enabled {
+		if subAutoRefreshCancel != nil {
+			subAutoRefreshCancel()
+			subAutoRefreshCancel, subAutoRefreshCtx = nil, nil
 		}
-
-		// 每小时刷新一次
-		ticker := time.NewTicker(1 * time.Hour)
+		return
+	}
+	if subAutoRefreshCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	subAutoRefreshCtx, subAutoRefreshCancel = ctx, cancel
+	go func() {
+		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-ticker.C:
-				logger.Debug("开始自动刷新微博 SUB")
-				if err := refreshSubFromAPI(); err != nil {
-					logger.Errorf("SUB 自动刷新失败: %v", err)
+				refreshMu.Lock()
+				if ctx.Err() == nil && cfg.GetWeiboMode() == "login" && cfg.GetWeiboAutoRefresh() {
+					if err := refreshSubFromAPIUnlocked(); err != nil {
+						logger.Errorf("SUB 自动刷新失败: %v", err)
+					}
 				}
-			case <-subAutoRefreshCtx.Done():
-				logger.Info("SUB 自动刷新已停止")
+				refreshMu.Unlock()
+			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 }
 
-// StopSubAutoRefresh 停止 SUB 自动刷新
+// StopSubAutoRefresh stops only its own generation; a later start has a distinct context.
 func StopSubAutoRefresh() {
-	if subAutoRefreshCancel != nil {
-		subAutoRefreshCancel()
-		subAutoRefreshCancel = nil
-	}
+	reconcileSubAutoRefresh(false)
 }
 
 // refreshSubFromAPI 从 API 获取新的 SUB 并更新配置
 func refreshSubFromAPI() error {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	return refreshSubFromAPIUnlocked()
+}
+
+func refreshSubFromAPIUnlocked() error {
 	// 从 API 获取 Cookie
 	cookies, err := FreshCookieFromAPI()
 	if err != nil {
@@ -126,7 +114,7 @@ func refreshSubFromAPI() error {
 			opt = append(opt, requests.CookieOption(cookie.Name, cookie.Value))
 		}
 	}
-	visitorCookiesOpt.Store(opt)
+	storeCookieOptions(opt)
 
 	// 同步更新运行时 SUB，否则后续每小时定时刷新仍会使用旧 SUB，导致自动刷新失效
 	setRuntimeSUB(newSub)

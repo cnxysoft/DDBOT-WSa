@@ -24,8 +24,11 @@ func NewEmitE(id interface{}, t concern_type.Type) *EmitE {
 
 type EmitQueue struct {
 	TimeInterval time.Duration
+	// IntervalProvider is set before Start and evaluated by the timer owner on each round.
+	IntervalProvider func() time.Duration
 
 	stopped   atomic.Bool
+	started   bool
 	stop      chan interface{}
 	eqlist    *list.List
 	eqlistCur *list.Element
@@ -101,8 +104,8 @@ func (q *EmitQueue) Delete(id interface{}) {
 }
 
 func (q *EmitQueue) core() {
-	q.wg.Add(1)
 	defer q.wg.Done()
+	defer q.waitTimer.Stop()
 	for {
 		q.cond.L.Lock()
 		for q.eqlist.Len() == 0 && !q.stopped.Load() {
@@ -137,15 +140,28 @@ func (q *EmitQueue) core() {
 }
 
 func (q *EmitQueue) Start() {
+	q.cond.L.Lock()
+	defer q.cond.L.Unlock()
+	if q.started || q.stopped.Load() {
+		return
+	}
+	q.started = true
+	q.wg.Add(1)
 	go q.core()
 }
 
 func (q *EmitQueue) Stop() {
-	q.stopped.Store(true)
-	if q.stop != nil {
-		close(q.stop)
+	q.cond.L.Lock()
+	if !q.stopped.Swap(true) {
+		if q.stop != nil {
+			close(q.stop)
+		}
+		q.cond.Broadcast()
+		if !q.started {
+			q.waitTimer.Stop()
+		}
 	}
-	q.cond.Broadcast()
+	q.cond.L.Unlock()
 	q.wg.Wait()
 }
 
@@ -162,13 +178,17 @@ func NewEmitQueue(c chan<- *EmitE, interval time.Duration) *EmitQueue {
 }
 
 func (q *EmitQueue) nextInterval() time.Duration {
-	if q.TimeInterval <= 0 {
-		return q.TimeInterval
+	interval := q.TimeInterval
+	if q.IntervalProvider != nil {
+		interval = q.IntervalProvider()
 	}
-	jitterRange := q.TimeInterval / 2
+	if interval <= 0 {
+		return interval
+	}
+	jitterRange := interval / 2
 	if jitterRange <= 0 {
-		return q.TimeInterval
+		return interval
 	}
 	jitter := time.Duration(rand.Int63n(int64(jitterRange)))
-	return q.TimeInterval + jitter - (q.TimeInterval / 4)
+	return interval + jitter - (interval / 4)
 }

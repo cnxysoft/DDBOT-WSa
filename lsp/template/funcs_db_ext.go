@@ -2,6 +2,7 @@ package template
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -24,6 +25,11 @@ func decOptionsSlice(opts [][]localdb.OptionFunc) []localdb.OptionFunc {
 }
 
 func Set(key string, value string, opts ...[]localdb.OptionFunc) string {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return "ExtDB: 未启用"
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	err := GetTemplateSC().Set(localdb.ExtDbCustomKey(Keys...), value, opt...)
@@ -38,6 +44,11 @@ func Set(key string, value string, opts ...[]localdb.OptionFunc) string {
 }
 
 func Get(key string, opts ...[]localdb.OptionFunc) string {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return "ExtDB: 未启用"
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	value, err := GetTemplateSC().Get(localdb.ExtDbCustomKey(Keys...), opt...)
@@ -49,6 +60,11 @@ func Get(key string, opts ...[]localdb.OptionFunc) string {
 }
 
 func setJson(key string, data interface{}, opts ...[]localdb.OptionFunc) string {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return "ExtDB: 未启用"
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	err := GetTemplateSC().SetJson(localdb.ExtDbCustomKey(Keys...), data, opt...)
@@ -63,6 +79,11 @@ func setJson(key string, data interface{}, opts ...[]localdb.OptionFunc) string 
 }
 
 func getJson(key string, opts ...[]localdb.OptionFunc) interface{} {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return nil
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 
@@ -101,6 +122,11 @@ func getJson(key string, opts ...[]localdb.OptionFunc) interface{} {
 }
 
 func setInt64(key string, value int64, opts ...[]localdb.OptionFunc) string {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return "ExtDB: 未启用"
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	err := GetTemplateSC().SetInt64(localdb.ExtDbCustomKey(Keys...), value, opt...)
@@ -115,6 +141,11 @@ func setInt64(key string, value int64, opts ...[]localdb.OptionFunc) string {
 }
 
 func seqInt64(key string) int64 {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return -1
+	}
 	Keys := decKeys(key)
 	value, err := GetTemplateSC().SeqNext(localdb.ExtDbCustomKey(Keys...))
 	if localdb.IsRollback(err) {
@@ -128,6 +159,11 @@ func seqInt64(key string) int64 {
 }
 
 func incInt64(key string, value int64) int64 {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return -1
+	}
 	Keys := decKeys(key)
 	Value, err := GetTemplateSC().IncInt64(localdb.ExtDbCustomKey(Keys...), value)
 	if localdb.IsRollback(err) {
@@ -141,6 +177,11 @@ func incInt64(key string, value int64) int64 {
 }
 
 func getInt64(key string, opts ...[]localdb.OptionFunc) int64 {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return 0
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	value, err := GetTemplateSC().GetInt64(localdb.ExtDbCustomKey(Keys...), opt...)
@@ -152,6 +193,11 @@ func getInt64(key string, opts ...[]localdb.OptionFunc) int64 {
 }
 
 func delData(key string, opts ...[]localdb.OptionFunc) string {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return "ExtDB: 未启用"
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	_, err := GetTemplateSC().Delete(localdb.ExtDbCustomKey(Keys...), opt...)
@@ -163,6 +209,11 @@ func delData(key string, opts ...[]localdb.OptionFunc) string {
 }
 
 func existData(key string, opts ...[]localdb.OptionFunc) bool {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return false
+	}
 	Keys := decKeys(key)
 	opt := decOptionsSlice(opts)
 	return GetTemplateSC().Exist(localdb.ExtDbCustomKey(Keys...), opt...)
@@ -173,6 +224,11 @@ func existData(key string, opts ...[]localdb.OptionFunc) bool {
 // member: 成员标识
 // score: 分数/排序值（支持 float64、string、int 等类型，内部自动转换）
 func ZAdd(setName string, member string, score interface{}) error {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return fmt.Errorf("ExtDB: 未启用")
+	}
 	return GetTemplateSC().ZAdd(setName, member, toFloat64(score))
 }
 
@@ -181,6 +237,11 @@ func ZAdd(setName string, member string, score interface{}) error {
 // min/max: 分数范围（支持 float64、string、int 等类型，内部自动转换）
 // Returns a list of maps with "member" and "score" keys.
 func ZRangeByScore(setName string, min, max interface{}) []map[string]interface{} {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return nil
+	}
 	var result []map[string]interface{}
 	GetTemplateSC().ZRangeByScore(setName, toFloat64(min), toFloat64(max), func(member string, score float64) bool {
 		result = append(result, map[string]interface{}{
@@ -194,6 +255,11 @@ func ZRangeByScore(setName string, min, max interface{}) []map[string]interface{
 
 // ZRem removes members from a sorted set.
 func ZRem(setName string, members ...string) error {
+	templateDBMu.RLock()
+	defer templateDBMu.RUnlock()
+	if templateDB == nil {
+		return fmt.Errorf("ExtDB: 未启用")
+	}
 	return GetTemplateSC().ZRem(setName, members...)
 }
 

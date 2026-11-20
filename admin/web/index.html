@@ -85,13 +85,12 @@
         <i></i><span class="setup-step" data-step="3"><b>3</b><small>主题</small></span>
         <i></i><span class="setup-step" data-step="4"><b>4</b><small>确认</small></span>
       </div>
-      <button type="button" id="setup-skip" class="setup-skip">先用默认密码 520 进入 →</button>
 
       <!-- 步骤 1：协议端（OneBot 11 / QQ 开放平台） -->
       <div class="setup-pane" id="setup-pane-1">
         <div class="setup-hero"><svg class="btn-ic"><use href="#i-switch"/></svg></div>
         <h3 class="setup-title">首次使用：选择协议端</h3>
-        <p class="setup-desc">决定 Bot 用什么协议连 QQ。两种配置会分别保留，之后也能在「配置 → 网络」里随时切换（切换后需要重启 Bot）。</p>
+        <p class="setup-desc">选择接入方式，或保留现有连接并仅设置管理密码。已运行的实例跨协议切换时需先迁移运行数据。</p>
 
         <div class="adapter-grid" id="setup-adapter">
           <button type="button" class="adapter-card active" data-adapter="onebot-v11">
@@ -104,6 +103,12 @@
             <span class="adapter-emoji adapter-emoji-qq"><svg class="btn-ic"><use href="#i-robot"/></svg></span>
             <span class="adapter-name">QQ 开放平台</span>
             <span class="adapter-desc">官方机器人 · 扫码绑定 AppID / AppSecret</span>
+            <span class="adapter-check"><svg class="btn-ic"><use href="#i-check"/></svg></span>
+          </button>
+          <button type="button" class="adapter-card" data-adapter="">
+            <span class="adapter-emoji adapter-emoji-onebot"><svg class="btn-ic"><use href="#i-check"/></svg></span>
+            <span class="adapter-name">保留当前协议</span>
+            <span class="adapter-desc" id="setup-current-adapter">OneBot 11</span>
             <span class="adapter-check"><svg class="btn-ic"><use href="#i-check"/></svg></span>
           </button>
         </div>
@@ -141,12 +146,12 @@
       <div class="setup-pane hidden" id="setup-pane-2">
         <div class="setup-hero"><svg class="btn-ic"><use href="#i-key"/></svg></div>
         <h3 class="setup-title">给管理面板上把锁</h3>
-        <p class="setup-desc">默认密码是 <b>520</b>，已经帮你填好；想更安全可以改成更长的密码。忘了的话去 application.yaml 里改 admin.token。</p>
+        <p class="setup-desc">请设置至少 6 位的管理密码。忘记密码时可修改 application.yaml 中的 admin.token。</p>
         <div class="pass-wrap">
-          <input type="password" id="setup-pass" class="input" value="520" placeholder="管理密码" autocomplete="new-password">
+          <input type="password" id="setup-pass" class="input" placeholder="管理密码" autocomplete="new-password">
           <button type="button" class="pass-eye" data-eye="setup-pass" aria-label="显示密码"><svg class="btn-ic"><use href="#i-eye"/></svg></button>
         </div>
-        <input type="password" id="setup-pass2" class="input" value="520" placeholder="再输一次，确认没打错" autocomplete="new-password">
+        <input type="password" id="setup-pass2" class="input" placeholder="再输一次，确认没打错" autocomplete="new-password">
         <p id="setup-err-2" class="login-error hidden"></p>
         <div class="setup-btn-row">
           <button class="btn ghost setup-prev" data-goto="1">上一步</button>
@@ -188,7 +193,7 @@
         <h3 class="setup-title">一切就绪</h3>
         <p class="setup-desc">配置已写入 application.yaml。</p>
         <div class="setup-next-steps">
-          <div class="ns-row"><svg class="btn-ic"><use href="#i-dash"/></svg><span>接入配置需<b>重启 Bot</b>生效，之后到<b>仪表盘</b>看连接状态</span></div>
+          <div class="ns-row"><svg class="btn-ic"><use href="#i-dash"/></svg><span>到<b>仪表盘</b>查看当前接入方式和连接状态</span></div>
           <div class="ns-row"><svg class="btn-ic"><use href="#i-list"/></svg><span>去<b>订阅管理</b>添加第一个订阅</span></div>
           <div class="ns-row"><svg class="btn-ic"><use href="#i-doc"/></svg><span>遇到问题，右上角<b>文档</b>有答案</span></div>
         </div>
@@ -212,7 +217,7 @@
         <button type="submit" id="login-btn" class="btn primary">登 录</button>
       </form>
       <p id="login-error" class="login-error hidden"></p>
-      <p class="login-hint">密码请以 application.yaml 的 admin.token 为准</p>
+      <p class="login-hint" id="login-hint">请输入配置的 admin.token 登录；忘了请查看 application.yaml 中的内容</p>
       <div class="login-footer">
       </div>
     </div>
@@ -250,6 +255,8 @@
         <a class="btn ghost sm" href="https://kizunerwe.github.io/DDBOT-WSa-docs/" target="_blank" rel="noopener" title="打开文档站"><svg class="btn-ic"><use href="#i-doc"/></svg>文档</a>
         <span id="conn-badge" class="badge off">连接中…</span>
       </header>
+
+      <div id="admin-navigation" class="config-notice hidden" role="status" aria-live="polite"></div>
 
       <!-- 仪表盘 -->
       <section id="page-dashboard" class="page active">
@@ -346,11 +353,13 @@
         <div class="config-toolbar">
           <div class="config-tabs" id="config-tabs"></div>
           <div class="config-toolbar-right">
-            <span id="config-hint" class="config-hint">保存后热生效；接入方式与连接类配置需重启 Bot</span>
-            <button id="config-reload" class="btn ghost sm" title="重新读取 application.yaml（接入方式/连接类修改仍需重启）">热重载</button>
+            <span id="config-hint" class="config-hint">保存时校验并应用支持热更新的配置；其余配置将在重启后生效</span>
+            <button id="config-reload" class="btn ghost sm" title="重新读取 application.yaml">热重载</button>
             <button id="config-save" class="btn primary sm">保存当前分区</button>
           </div>
         </div>
+        <p id="config-reload-status" class="config-hint" role="status" aria-live="polite"></p>
+        <p id="config-draft-status" class="config-notice hidden" role="status" aria-live="polite"></p>
         <div id="config-panels"></div>
       </section>
     </main>

@@ -1,10 +1,10 @@
 package local_proxy_pool
 
 import (
-	"errors"
+	"net/url"
+
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"go.uber.org/atomic"
-	"net/url"
 )
 
 type Proxy struct {
@@ -37,7 +37,7 @@ type Pool struct {
 func (p *Pool) Get(prefer proxy_pool.Prefer) (proxy_pool.IProxy, error) {
 	if prefer == proxy_pool.PreferAny {
 		if len(p.proxies) == 0 {
-			return nil, errors.New("proxy pool is empty")
+			return nil, proxy_pool.ErrNil
 		}
 		cnt := p.preferCnt.Add(1) % uint32(len(p.proxies))
 		var index uint32 = 0
@@ -51,11 +51,11 @@ func (p *Pool) Get(prefer proxy_pool.Prefer) (proxy_pool.IProxy, error) {
 	}
 
 	if s, found := p.proxies[prefer]; !found || len(s) == 0 {
-		return nil, errors.New("no proxy found")
+		return nil, proxy_pool.ErrNil
 	} else {
 		c, ok := p.cnt[prefer]
 		if !ok {
-			return nil, errors.New("no proxy found")
+			return nil, proxy_pool.ErrNil
 		}
 		index := c.Add(1)
 		return s[index%uint32(len(s))], nil

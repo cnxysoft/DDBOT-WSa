@@ -4,9 +4,11 @@
 /* ===== 状态 ===== */
 const TOKEN_KEY = 'ddbot_admin_token';
 const THEME_KEY = 'ddbot_theme';
-// 与后端 admin.defaultAdminToken 保持一致：admin.token 未配置时的默认密码
-const DEFAULT_ADMIN_TOKEN = '520';
 let token = localStorage.getItem(TOKEN_KEY) || '';
+let authGeneration = 0;
+let loginRequestSeq = 0;
+let loginHideTimer = null;
+let dashboardTimer = null;
 let sseConnected = false;
 let logPaused = false;
 const logBuffer = [];      // 全量日志（上限 800）
@@ -57,53 +59,163 @@ function fmtTime(iso) {
 }
 
 /* ===== API 封装 ===== */
-async function api(path, opts = {}) {
+function authSession() {
+  return { token, generation: authGeneration };
+}
+
+function isCurrentAuth(session) {
+  return !!session && session.generation === authGeneration && session.token === token;
+}
+
+function setAuthToken(nextToken) {
+  // 即使再次登录同一个 token，也要废弃上次登录的请求和长连接。
+  ++authGeneration;
+  token = nextToken;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+  if (dashboardTimer !== null) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  logStream.stop();
+  if (window.PushPage) window.PushPage.stop();
+  closeLoginModal();
+  resetConfigDrafts();
+  // Old save callbacks are ignored below, so release their UI controls here.
+  $('#config-save').disabled = activeConfigTab === 'perm' || activeConfigTab === 'templates';
+  $('#platform-modal').classList.add('hidden');
+}
+
+async function api(path, opts = {}, session = authSession()) {
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+  if (!session.token) throw new Error('请先登录');
   const resp = await fetch(path, {
     ...opts,
     headers: {
       ...(opts.headers || {}),
       ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
-      Authorization: 'Bearer ' + token,
+      Authorization: 'Bearer ' + session.token,
     },
   });
-  if (resp.status === 401) { showLogin(); throw new Error('未授权'); }
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+  const unauthorized = resp.status === 401 ||
+    (resp.status === 403 && resp.headers.get('X-DDBOT-Auth') === 'invalid-token');
+  if (unauthorized) {
+    if (isCurrentAuth(session)) showLogin();
+    throw new Error('登录已失效，请重新登录');
+  }
   if (resp.status === 403) { throw new Error('Token 错误或无权限'); }
   return resp;
 }
 
-async function apiJSON(path, opts) {
-  const r = await api(path, opts);
+async function apiJSON(path, opts, session = authSession(), acceptStale = false, metadata = null) {
+  const r = await api(path, opts, session);
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+  if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
   if (!r.ok) {
     let msg = 'HTTP ' + r.status;
     try { const e = await r.json(); if (e.error) msg = e.error; } catch {}
-    throw new Error(msg);
+    const error = new Error(msg);
+    error.status = r.status;
+    throw error;
   }
-  return r.json();
+  const result = await r.json();
+  if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+  if (!acceptStale && !isCurrentAuth(session)) throw new Error('登录会话已变更，旧请求已取消');
+  if (metadata) metadata.etag = r.headers?.get('ETag') || '';
+  return result;
+}
+
+// 日志与推送流共用鉴权代次：注销/重新登录会终止旧连接及重连定时器。
+function createAuthStream(path, onState, onEntry, isActive) {
+  let connection = null;
+  let retryTimer = null;
+
+  function stop() {
+    if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+    const old = connection;
+    connection = null;
+    if (old) {
+      old.controller.abort();
+      if (old.reader) old.reader.cancel().catch(() => {});
+    }
+    onState(false);
+  }
+
+  async function connect() {
+    if (!token || adminNavigation || connection) return;
+    if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+    const session = authSession();
+    const current = { controller: new AbortController(), reader: null };
+    connection = current;
+    const live = () => connection === current && isCurrentAuth(session);
+    try {
+      const resp = await api(path, { signal: current.controller.signal }, session);
+      if (!live()) {
+        if (resp.body) await resp.body.cancel().catch(() => {});
+        return;
+      }
+      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      onState(true);
+      const reader = current.reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (live()) {
+        const { done, value } = await reader.read();
+        if (done || !live()) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = frame.split('\n').find((line) => line.startsWith('data: '));
+          if (!data) continue;
+          try { onEntry(JSON.parse(data.slice(6))); } catch {}
+        }
+      }
+    } catch (_) { /* A current, authenticated page retries transient failures below. */ }
+    finally {
+      if (connection === current) {
+        connection = null;
+        onState(false);
+        if (token && !adminNavigation && isCurrentAuth(session)) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null;
+            if (token && !adminNavigation && isCurrentAuth(session) && isActive()) connect();
+          }, 3000);
+        }
+      }
+    }
+  }
+
+  return { connect, stop };
 }
 
 /* ===== 登录 ===== */
 function showLogin() {
-  localStorage.removeItem(TOKEN_KEY);
-  token = '';
-  // 登录页只显示背景图 + 登录卡片：把登录后的主界面整体隐藏，
-  // 避免玻璃模式下仪表盘/侧边栏从背景里透出来。
-  const app = document.querySelector('#app');
+  ++loginRequestSeq;
+  setAuthToken('');
+  const app = $('#app');
   if (app) app.style.visibility = 'hidden';
+  if (loginHideTimer !== null) { clearTimeout(loginHideTimer); loginHideTimer = null; }
   const ov = $('#login-overlay');
+  if (adminNavigation) { ov.classList.add('hidden'); return; }
   ov.style.opacity = '';
   ov.style.transition = '';
   ov.classList.remove('hidden');
+  $('#login-btn').disabled = false;
+  $('#login-btn').textContent = '登 录';
   $('#login-token').focus();
 }
 
 function hideLogin() {
+  const session = authSession();
+  if (loginHideTimer !== null) clearTimeout(loginHideTimer);
   const ov = $('#login-overlay');
   ov.style.transition = 'opacity .25s';
   ov.style.opacity = '0';
-  // 登录成功后立刻恢复主界面，让淡出过程自然揭晓
-  const app = document.querySelector('#app');
+  const app = $('#app');
   if (app) app.style.visibility = '';
-  setTimeout(() => {
+  loginHideTimer = setTimeout(() => {
+    loginHideTimer = null;
+    if (!isCurrentAuth(session) || !token) return;
     ov.classList.add('hidden');
     ov.style.opacity = '';
     ov.style.transition = '';
@@ -121,17 +233,21 @@ function showLoginError(msg) {
 
 async function doLogin(e) {
   e.preventDefault();
+  if (adminNavigation) { showLoginError('管理服务已变更，请按页面上的持久提示手动打开管理地址'); return; }
   const t = $('#login-token').value.trim();
   if (!t) return;
+  const request = ++loginRequestSeq;
+  const session = authSession();
+  const current = () => !adminNavigation && request === loginRequestSeq && isCurrentAuth(session);
   $('#login-btn').disabled = true;
   $('#login-btn').textContent = '登录中…';
   try {
     const resp = await fetch('/api/v1/health', {
       headers: { Authorization: 'Bearer ' + t },
     });
+    if (!current()) return;
     if (resp.status === 200) {
-      token = t;
-      localStorage.setItem(TOKEN_KEY, t);
+      setAuthToken(t);
       $('#login-error').classList.add('hidden');
       hideLogin();
       boot();
@@ -139,10 +255,12 @@ async function doLogin(e) {
       showLoginError(resp.status === 401 || resp.status === 403 ? 'Token 不正确，请重试' : '登录失败：服务暂时不可用，请稍后重试');
     }
   } catch {
-    showLoginError('网络连接失败，请检查服务是否在运行');
+    if (current()) showLoginError('网络连接失败，请检查服务是否在运行');
   } finally {
-    $('#login-btn').disabled = false;
-    $('#login-btn').textContent = '登 录';
+    if (request === loginRequestSeq) {
+      $('#login-btn').disabled = false;
+      $('#login-btn').textContent = '登 录';
+    }
   }
 }
 
@@ -164,6 +282,7 @@ function route() {
   closeTemplateModal();
   if (typeof closePlatformModal === 'function') closePlatformModal();
   hideSubModal();
+  if (!token || adminNavigation) return;
   if (page === 'subscriptions') loadSubscriptions();
   if (page === 'config') loadConfig();
   if (page === 'logs') { scrollToBottom(); if (!sseConnected) connectLogs(); }
@@ -492,12 +611,15 @@ function unskeleton(id) {
 }
 
 async function refreshDashboard() {
+  if (!token || adminNavigation) return;
+  const session = authSession();
   try {
     const [ob, st, sum] = await Promise.all([
       apiJSON('/api/v1/onebot/status'),
       apiJSON('/api/v1/status'),
       apiJSON('/api/v1/subs/summary'),
     ]);
+    if (!isCurrentAuth(session)) return;
     $('#ob-status').className = 'dot ' + (ob.online ? 'on' : 'off');
     $('#ob-text').textContent = ob.online ? '在线' : '离线';
     // 接入方式由后端 adapter.mode 决定：同一份面板可以跑 OneBot / QQ 开放平台 / Satori
@@ -517,6 +639,7 @@ async function refreshDashboard() {
       ? Object.entries(bySite).map(([k, v]) => `<span class="site-badge">${esc(k)} ${v}</span>`).join('')
       : '暂无订阅';
   } catch (e) {
+    if (!isCurrentAuth(session)) return;
     unskeleton('#uptime');
     unskeleton('#subs-total');
     $('#ob-text').textContent = '获取失败';
@@ -573,38 +696,10 @@ function rerenderLogs() {
   scrollToBottom();
 }
 
-async function connectLogs(retry) {
-  if (!token) return;
-  try {
-    const resp = await fetch('/api/v1/logs/stream', {
-      headers: { Authorization: 'Bearer ' + token },
-    });
-    if (resp.status === 401) { showLogin(); return; }
-    if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
-    setSSE(true);
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const data = frame.split('\n').find((l) => l.startsWith('data: '));
-        if (!data) continue;
-        try { appendLog(JSON.parse(data.slice(6))); } catch {}
-      }
-    }
-  } catch (e) { /* fallthrough */ }
-  setSSE(false);
-  // 断线重连：仅日志页可见时保持（避免多标签页/后台页签堆积长连接占满浏览器 6 连接上限）
-  setTimeout(() => {
-    if ($('#page-logs') && $('#page-logs').classList.contains('active')) connectLogs(true);
-  }, 3000);
-}
+const logStream = createAuthStream('/api/v1/logs/stream', setSSE, appendLog,
+  () => $('#page-logs')?.classList.contains('active'));
+
+function connectLogs() { return logStream.connect(); }
 
 function setSSE(on) {
   sseConnected = on;
@@ -770,10 +865,205 @@ let activeConfigTab = 'basic';
 // 不能用 configCache 当基准：textarea 是加载时的快照，期间别处（平台开关即时保存、
 // 基础页表单）改过的键在 configCache 里已经变了，拿它比会把这些旧值当成「用户改的」发出去。
 let advBase = null;
+const configDrafts = new Map();
+let advancedDraft = null;
+let configETag = '';
+let configSourceEpoch = 0;
+const ownConfigVersions = new Map();
+let configConflictMessage = '';
+let adminNavigation = null;
 
-/* 字段类型：text / number / bool(toggle) / select / credential(只读状态)。
- * 凭据类字段（cookie/token/password）后端 API 禁止修改（防 token 泄露后篡改凭据），
- * 因此只展示配置状态，引导用户在 application.yaml 中修改。 */
+function cloneConfig(value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); }
+function sameConfig(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function draftControls(container = document) { return Array.from(container.querySelectorAll('[data-path]')); }
+function draftRaw(el) { return { value: el.value || '', checked: !!el.checked, cleared: el.dataset.cleared === '1' }; }
+function configFieldSchema(path) {
+  return SCHEMA_FIELDS[path] || (/^platform\.[^.]+\.enable$/.test(path) ? { path, type: 'bool', def: true } : null);
+}
+
+function captureConfigDrafts() {
+  for (const el of draftControls()) {
+    if (!el.dataset.draftOriginal) continue;
+    const path = el.dataset.path, raw = draftRaw(el);
+    if (sameConfig(raw, JSON.parse(el.dataset.draftOriginal))) { configDrafts.delete(path); continue; }
+    const old = configDrafts.get(path);
+    configDrafts.set(path, { raw, base: old ? old.base : cloneConfig(getPath(configCache, path)) });
+  }
+  const adv = $('#cfg-json');
+  if (adv && adv.dataset.draftOriginal !== undefined) {
+    advancedDraft = adv.value === adv.dataset.draftOriginal ? null : {
+      raw: adv.value, base: advancedDraft ? advancedDraft.base : cloneConfig(advBase),
+    };
+  }
+}
+
+function restoreConfigDrafts(container = document) {
+  for (const el of draftControls(container)) {
+    const path = el.dataset.path;
+    el.dataset.draftOriginal = JSON.stringify(draftRaw(el));
+    const draft = configDrafts.get(path);
+    if (!draft) continue;
+    el.value = draft.raw.value;
+    el.checked = draft.raw.checked;
+    if (draft.raw.cleared) el.dataset.cleared = '1'; else delete el.dataset.cleared;
+    const clear = el.parentElement?.querySelector('.cred-clear');
+    if (clear) clear.textContent = draft.raw.cleared ? '撤销清除' : '清除';
+    if (draft.raw.cleared) el.placeholder = '保存后将清除该凭据';
+  }
+  const adv = $('#cfg-json');
+  if (adv && (container === document || container.id === 'config-panels')) {
+    adv.dataset.draftOriginal = adv.value;
+    if (advancedDraft) { adv.value = advancedDraft.raw; advBase = cloneConfig(advancedDraft.base); }
+  }
+  renderConfigDraftStatus();
+}
+
+function renderConfigDraftStatus() {
+  const el = $('#config-draft-status');
+  if (!el) return;
+  const changed = [...configDrafts].filter(([path, draft]) => !sameConfig(draft.base, getPath(configCache, path)))
+    .map(([path]) => path);
+  if (advancedDraft && !sameConfig(advancedDraft.base, configCache)) changed.push('高级 JSON');
+  const count = configDrafts.size + (advancedDraft ? 1 : 0);
+  el.textContent = configConflictMessage || (changed.length
+    ? '配置来源已有更新，已保留你的草稿。请核对后手动保存：' + changed.join('、')
+    : count ? `有 ${count} 处未保存草稿；刷新配置和扫码登录不会清除。` : '');
+  el.classList.toggle('hidden', !el.textContent);
+}
+
+function resetConfigDrafts() {
+  configDrafts.clear(); advancedDraft = null; configCache = null; advBase = null;
+  configETag = ''; ++configSourceEpoch; ownConfigVersions.clear(); configConflictMessage = '';
+  $('#config-panels').innerHTML = '';
+  $('#platform-modal-body').innerHTML = '';
+  renderConfigDraftStatus();
+}
+
+function patchHasPath(patch, path) {
+  let current = patch;
+  for (const key of path.split('.')) {
+    if (current === null || typeof current !== 'object' || !Object.hasOwn(current, key)) return false;
+    current = current[key];
+  }
+  return true;
+}
+
+function mergeConfigPatch(base, patch) {
+  const out = cloneConfig(base) || {};
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = value && typeof value === 'object' && !Array.isArray(value) && key !== 'customCommandPrefix'
+      ? mergeConfigPatch(out[key], value) : cloneConfig(value);
+  }
+  return out;
+}
+
+function configSaveSnapshot(patch, advanced) {
+  captureConfigDrafts();
+  return { fields: new Map(draftControls().filter((el) => patchHasPath(patch, el.dataset.path))
+    .filter((el) => {
+      const f = configFieldSchema(el.dataset.path);
+      if (!f) return false;
+      let value = f.type === 'bool' ? el.checked : f.type === 'number' ? Number(el.value) : el.value;
+      if (f.type === 'credential' && el.dataset.cleared === '1') value = '';
+      if (f.type === 'jsonmap') { try { value = JSON.parse(el.value || '{}'); } catch { return false; } }
+      return sameConfig(value, getPath(patch, el.dataset.path));
+    }).map((el) => [el.dataset.path, draftRaw(el)])), advanced: advanced && advancedDraft ? cloneConfig(advancedDraft) : null };
+}
+
+function acknowledgeConfigSave(patch, sent) {
+  captureConfigDrafts();
+  const safePatch = cloneConfig(patch);
+  for (const [path, field] of Object.entries(SCHEMA_FIELDS)) {
+    if (field.type === 'credential' && patchHasPath(safePatch, path)) {
+      setPath(safePatch, path, getPath(safePatch, path) ? '***REDACTED***' : '');
+    }
+  }
+  configCache = mergeConfigPatch(configCache, safePatch);
+  for (const [path, submitted] of sent.fields) {
+    const draft = configDrafts.get(path);
+    if (!draft || sameConfig(draft.raw, submitted)) configDrafts.delete(path);
+    else draft.base = cloneConfig(getPath(configCache, path));
+  }
+  for (const el of draftControls()) {
+    const path = el.dataset.path, submitted = sent.fields.get(path);
+    if (!submitted) continue;
+    const raw = draftRaw(el), credential = configFieldSchema(path)?.type === 'credential';
+    const baseline = credential ? { value: '', checked: false, cleared: false } : submitted;
+    el.dataset.draftOriginal = JSON.stringify(baseline);
+    if (sameConfig(raw, submitted)) {
+      configDrafts.delete(path);
+      if (credential) { el.value = ''; delete el.dataset.cleared; }
+    } else configDrafts.set(path, { raw, base: cloneConfig(getPath(configCache, path)) });
+  }
+  if (sent.advanced && advancedDraft) {
+    if (advancedDraft.raw === sent.advanced.raw) {
+      advancedDraft = null;
+      const adv = $('#cfg-json');
+      if (adv) { adv.value = JSON.stringify(configCache, null, 2); adv.dataset.draftOriginal = adv.value; }
+      advBase = cloneConfig(configCache);
+    } else {
+      advancedDraft.base = mergeConfigPatch(advancedDraft.base, safePatch);
+      advBase = cloneConfig(advancedDraft.base);
+    }
+  }
+  configConflictMessage = '';
+  renderConfigDraftStatus();
+}
+
+function adminNavigationURL(addr, current = location) {
+  const match = /^(?:\[([0-9a-fA-F:.]+)\]|([a-zA-Z0-9.-]*)):(\d+)$/.exec(addr || '');
+  if (!match || Number(match[3]) < 1 || Number(match[3]) > 65535) return null;
+  let host = match[1] ?? match[2];
+  if (!host || host === '0.0.0.0' || host === '::') host = current.hostname.replace(/^\[|\]$/g, '');
+  if (!/^[a-zA-Z0-9.:-]+$/.test(host)) return null;
+  try {
+    const url = new URL('http://' + (host.includes(':') ? '[' + host + ']' : host) + ':' + match[3] + '/');
+    url.hash = '/config';
+    return url.href;
+  } catch { return null; }
+}
+
+function applyAdminNavigation(navigation, fromSave = true) {
+  const action = fromSave ? '配置已保存并生效。' : '配置已重载。';
+  captureConfigDrafts();
+  closeLoginModal();
+  adminNavigation = { enabled: !!navigation.enabled, addr: String(navigation.addr || '') };
+  ++loginRequestSeq;
+  ++reloadStatusRequest; ++configLoadRequest;
+  if (dashboardTimer !== null) { clearInterval(dashboardTimer); dashboardTimer = null; }
+  logStream.stop();
+  if (window.PushPage) window.PushPage.stop();
+  const banner = $('#admin-navigation');
+  banner.replaceChildren();
+  const title = document.createElement('strong');
+  title.textContent = adminNavigation.enabled ? '管理服务监听地址已变更' : '管理服务已关闭';
+  banner.appendChild(title);
+  const message = document.createElement('p');
+  message.textContent = adminNavigation.enabled
+    ? action + '本页面已停止请求旧地址；请核对新地址后手动打开，未保存草稿仍保留在此页。'
+    : action + '本页面已停止连接。重新启用时，请在 application.yaml 中设置 admin.enable: true；配置文件热更新会重新开启管理服务。未保存草稿仍保留在此页。';
+  banner.appendChild(message);
+  if (adminNavigation.enabled) {
+    const addr = document.createElement('p');
+    addr.textContent = '当前监听：' + adminNavigation.addr;
+    banner.appendChild(addr);
+    const href = adminNavigationURL(adminNavigation.addr);
+    if (href) {
+      const link = document.createElement('a');
+      link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.className = 'btn sm'; link.textContent = '手动打开新管理地址';
+      banner.appendChild(link);
+    }
+    const proxy = document.createElement('p');
+    proxy.textContent = '以上链接用于 HTTP 直连。若通过 HTTPS、反向代理或子路径访问，请先检查代理目标与公开访问地址，再手动打开；登录凭据不会放入链接。';
+    banner.appendChild(proxy);
+  }
+  banner.classList.remove('hidden');
+  $('#config-save').disabled = true;
+}
+
+/* 字段类型：text / number / bool(toggle) / select / credential(只写凭据)。
+ * 平台凭据只展示脱敏状态，允许覆盖或显式清除；管理及 WebSocket token 禁止通过 API 修改。 */
 function normalizeImageMergeOption(value) {
   const normalized = String(value).trim().toLowerCase();
   if (normalized === 'false') return 'off';
@@ -838,7 +1128,7 @@ const CONFIG_SCHEMA = [
           qqofficial: 'QQ 开放平台（官方机器人）',
           satori: 'Satori（兼容实现端）',
         },
-        hint: '决定 Bot 用什么协议连 IM。切换后需重启 Bot 生效；两套连接配置会分别保留，可以随时切回来。' },
+        hint: '决定 Bot 用什么协议连 IM。同协议的连接配置可在线更新；跨协议切换需迁移运行数据。' },
     ]},
     { title: 'OneBot 11 / Satori 连接', fields: [
       { path: 'websocket.mode', label: '连接方向', type: 'select', options: ['ws-server','ws-reverse'], def: 'ws-server',
@@ -995,7 +1285,7 @@ function adapterBannerHTML(mode) {
   const name = ADAPTER_NAMES[key] || key;
   const icon = key === 'qqofficial' ? 'i-robot' : 'i-plug';
   return `<span class="adapter-banner-icon"><svg class="btn-ic"><use href="#${icon}"/></svg></span>` +
-    `<span class="adapter-banner-main">当前接入方式：<b>${esc(name)}</b><small>保存后需重启 Bot 生效</small></span>` +
+    `<span class="adapter-banner-main">配置中的接入方式：<b>${esc(name)}</b><small>同协议的连接配置可在线更新；跨协议切换涉及运行数据迁移</small></span>` +
     `<span class="adapter-banner-tag">${key === 'qqofficial' ? '官方机器人' : key === 'satori' ? 'Satori 协议' : 'OneBot 协议'}</span>`;
 }
 
@@ -1150,7 +1440,7 @@ function renderConfigForm() {
           `<span class="p-name">${esc(meta.name)}</span>` +
           `</div>` +
           `<label class="toggle" title="停用后该平台不再推送（订阅与轮询保留，恢复后继续）">` +
-          `<input type="checkbox" data-platform="${esc(site)}" ${enabled ? 'checked' : ''}>` +
+          `<input type="checkbox" data-platform="${esc(site)}" data-path="platform.${esc(site)}.enable" ${enabled ? 'checked' : ''}>` +
           `<span class="toggle-slider"></span></label>` +
           `</div>` +
           `<div class="p-ops">` +
@@ -1199,23 +1489,129 @@ function renderConfigForm() {
     adv.value = JSON.stringify(configCache, null, 2);
     advBase = JSON.parse(adv.value);
   }
+  restoreConfigDrafts(panelsEl);
+}
+
+let reloadStatusRequest = 0;
+let configLoadRequest = 0;
+let configSaveQueue = Promise.resolve();
+
+function renderReloadStatus(status) {
+  const target = $('#config-reload-status');
+  if (!target || !status) return;
+  const pending = status.restartRequired || [];
+  const details = pending.length ? '需重启：' + pending.join('、') : '支持热更新的配置已应用；轮询间隔在下一轮调度时生效';
+  target.textContent = status.lastError || `配置版本 ${status.revision}；${details}`;
+}
+
+async function refreshReloadStatus() {
+  if (adminNavigation || !token) return;
+  const request = ++reloadStatusRequest;
+  const session = authSession();
+  try {
+    const status = await apiJSON('/api/v1/config/status', {}, session);
+    if (!adminNavigation && request === reloadStatusRequest && isCurrentAuth(session)) renderReloadStatus(status);
+  } catch (_) { /* Keep the last known state on transient errors. */ }
+}
+
+function saveConfigPatch(patch, options = {}) {
+  const session = authSession();
+  const sent = configSaveSnapshot(patch, options.advanced);
+  const originalETag = configETag;
+  const sourceEpoch = configSourceEpoch;
+  // A save invalidates status queries that started before it.
+  ++reloadStatusRequest;
+  ++configLoadRequest;
+  const body = JSON.stringify({ config: patch });
+  // Serialize all configuration forms and platform toggles in user action order.
+  const save = configSaveQueue.then(() => {
+    if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置保存已取消');
+    if (adminNavigation) throw new Error('管理服务地址已变更或已关闭，请按页面提示继续');
+    if (sourceEpoch !== configSourceEpoch) {
+      throw new Error('配置来源已变更，已取消排队中的旧保存；草稿已保留，请核对后手动保存');
+    }
+    ++reloadStatusRequest;
+    ++configLoadRequest;
+    const metadata = {};
+    const etag = ownConfigVersions.get(originalETag) || originalETag;
+    const headers = etag ? { 'If-Match': etag } : {};
+    return apiJSON('/api/v1/config', { method: 'POST', headers, body }, session, false, metadata).then((result) => {
+      if (!isCurrentAuth(session)) throw new Error('登录会话已变更，旧配置响应已忽略');
+      if (sourceEpoch !== configSourceEpoch && metadata.etag !== configETag) {
+        throw new Error('配置来源已变更，旧保存响应已忽略；草稿已保留，请核对当前配置');
+      }
+      ++reloadStatusRequest; ++configLoadRequest;
+      if (metadata.etag) {
+        for (const [base, accepted] of ownConfigVersions) if (accepted === etag) ownConfigVersions.set(base, metadata.etag);
+        ownConfigVersions.set(etag, metadata.etag);
+        ownConfigVersions.set(originalETag, metadata.etag);
+        configETag = metadata.etag;
+      }
+      acknowledgeConfigSave(patch, sent);
+      if (result.navigation) applyAdminNavigation(result.navigation);
+      return result;
+    }).catch(async (error) => {
+      if (error.status === 409 && isCurrentAuth(session)) {
+        configConflictMessage = '保存发生冲突：配置已在其他位置更新。草稿已保留，正在刷新配置基线，请核对后手动再次保存。';
+        renderConfigDraftStatus();
+        await loadConfig();
+      }
+      throw error;
+    });
+  });
+  configSaveQueue = save.catch(() => {});
+  return save;
+}
+
+setInterval(() => {
+  const page = $('#page-config');
+  if (!adminNavigation && page && page.classList.contains('active') && !document.hidden) refreshReloadStatus();
+}, 5000);
+
+function showConfigSaved(result, label = '配置已保存') {
+  // Also invalidate queries that started while the save was in progress.
+  ++reloadStatusRequest;
+  ++configLoadRequest;
+  const status = result && result.reload;
+  renderReloadStatus(status);
+  if (result?.navigation) { toast(label + '，请按页面提示继续访问管理服务'); return; }
+  if (!status) { toast(label + '，请刷新查看生效状态'); return; }
+  const pending = status.restartRequired || [];
+  toast(pending.length ? label + '；需重启：' + pending.slice(0, 6).join('、') + (pending.length > 6 ? '等' : '') : label + '并已应用（轮询间隔在下一轮调度生效）');
 }
 
 async function loadConfig() {
+  if (adminNavigation) return;
+  const request = ++configLoadRequest;
+  const session = authSession();
   try {
-    const cfg = await apiJSON('/api/v1/config');
+    const metadata = {};
+    const cfg = await apiJSON('/api/v1/config', {}, session, false, metadata);
+    if (adminNavigation || request !== configLoadRequest || !isCurrentAuth(session)) return;
+    captureConfigDrafts();
     configCache = cfg;
+    if (metadata.etag && metadata.etag !== configETag) {
+      ++configSourceEpoch;
+      ownConfigVersions.clear();
+      configETag = metadata.etag;
+    }
     loadConfig._retried = false;
     renderConfigForm();
+    const modal = $('#platform-modal');
+    if (!modal.classList.contains('hidden') && $('#platform-modal-body').dataset.site) {
+      renderPlatformModal($('#platform-modal-body').dataset.site);
+    }
+    refreshReloadStatus();
     loadPermOverview(); // 权限面板数据（面板由 renderConfigForm 生成）
   } catch (e) {
+    if (adminNavigation || request !== configLoadRequest || !isCurrentAuth(session)) return;
     if (e.message.includes('401')) { showLogin(); return; } // 登录失效直接回登录层
     // 网络抖动自动重试一次，重试再失败才提示。
     // _retried 只能在「成功」或「最终失败」时复位：原来放在定时器回调开头复位，
     // 递归调用永远看到 false，于是变成无限重试，用户永远等不到失败提示。
     if (!loadConfig._retried) {
       loadConfig._retried = true;
-      setTimeout(loadConfig, 1500);
+      setTimeout(() => { if (isCurrentAuth(session) && request === configLoadRequest) loadConfig(); }, 1500);
       return;
     }
     loadConfig._retried = false;
@@ -1277,6 +1673,11 @@ function validateQQOfficialPatch(patch) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const trackDraft = (event) => {
+    if (event.target.matches('[data-path], #cfg-json')) { captureConfigDrafts(); renderConfigDraftStatus(); }
+  };
+  document.addEventListener('input', trackDraft);
+  document.addEventListener('change', trackDraft);
   // 凭据「清除/撤销」按钮（动态生成，委托到 document——覆盖配置面板与平台弹层）
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.cred-clear');
@@ -1295,6 +1696,8 @@ document.addEventListener('DOMContentLoaded', () => {
       btn.textContent = '清除';
       input.placeholder = '已配置（脱敏显示）—— 留空保持不变，输入新值覆盖';
     }
+    captureConfigDrafts();
+    renderConfigDraftStatus();
   });
 
   // tabs 为动态生成，用容器级事件委托
@@ -1310,10 +1713,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 功能开关 Tab 即时保存，保存按钮在该 Tab 下停用
   const saveBtn = $('#config-save');
-  const syncSaveBtn = () => { saveBtn.disabled = activeConfigTab === 'perm' || activeConfigTab === 'templates'; };
+  const syncSaveBtn = () => { saveBtn.disabled = !!adminNavigation || activeConfigTab === 'perm' || activeConfigTab === 'templates'; };
   syncSaveBtn();
 
   $('#config-save').addEventListener('click', async () => {
+    const session = authSession();
     let patch;
     try {
       patch = collectConfigPatch(activeConfigTab);
@@ -1328,30 +1732,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     $('#config-save').disabled = true;
     try {
-      await apiJSON('/api/v1/config', {
-        method: 'POST',
-        body: JSON.stringify({ config: patch }),
-      });
-      toast('配置已保存并热生效（接入方式/连接类配置需重启 Bot）');
+      const result = await saveConfigPatch(patch, { advanced: activeConfigTab === 'advanced' });
+      if (!isCurrentAuth(session)) return;
+      showConfigSaved(result);
       loadConfig();
     } catch (e) {
-      toast('保存失败：' + e.message, false);
+      if (isCurrentAuth(session)) toast('保存失败：' + e.message, false);
     } finally {
-      $('#config-save').disabled = false;
+      if (isCurrentAuth(session)) $('#config-save').disabled = !!adminNavigation;
     }
   });
 
-  // 手动热重载：直接修改 application.yaml 后不用重启（接入方式/连接类仍需重启）
-  $('#config-reload').addEventListener('click', async () => {
+  $('#config-reload')?.addEventListener('click', async () => {
+    if (adminNavigation) return;
+    const session = authSession();
     const btn = $('#config-reload');
     btn.disabled = true;
     btn.textContent = '重载中…';
     try {
-      await apiJSON('/api/v1/config/reload', { method: 'POST' });
-      toast('配置已热重载（接入方式/连接类修改仍需重启）');
+      const result = await apiJSON('/api/v1/config/reload', { method: 'POST' }, session);
+      if (!isCurrentAuth(session)) return;
+      if (result.navigation) applyAdminNavigation(result.navigation, false);
+      showConfigSaved(result, '配置已重载');
       await loadConfig();
     } catch (e) {
-      toast('热重载失败：' + e.message, false);
+      if (isCurrentAuth(session)) toast('热重载失败：' + e.message, false);
     } finally {
       btn.disabled = false;
       btn.textContent = '热重载';
@@ -1672,6 +2077,7 @@ const PLATFORM_COLORS = {
 
 // renderPlatformModal 打开某平台的细化配置弹层（字段组复用 renderField）
 function renderPlatformModal(site) {
+  captureConfigDrafts();
   const tab = CONFIG_SCHEMA.find((t) => t.id === 'platform');
   const groups = tab.groups.filter((g) => g.site === site);
   if (!groups.length) return;
@@ -1701,6 +2107,14 @@ function renderPlatformModal(site) {
     '<button class="btn primary" id="platform-modal-save">保存</button>';
   body.appendChild(actions);
   $('#platform-modal').classList.remove('hidden');
+  restoreConfigDrafts(body);
+}
+
+function closePlatformModal() {
+  captureConfigDrafts();
+  $('#platform-modal').classList.add('hidden');
+  $('#platform-modal-body').innerHTML = '';
+  delete $('#platform-modal-body').dataset.site;
 }
 
 // collectPatchFromContainer 从任意容器（配置面板/平台弹层）收集 diff 补丁
@@ -1708,7 +2122,7 @@ function collectPatchFromContainer(container) {
   const patch = {};
   container.querySelectorAll('[data-path]').forEach((el) => {
     const path = el.dataset.path;
-    const f = SCHEMA_FIELDS[path];
+    const f = configFieldSchema(path);
     if (!f) return;
     const original = configFieldValue(f);
     if (f.type === 'jsonmap') {
@@ -1750,16 +2164,19 @@ function collectPatchFromContainer(container) {
   return patch;
 }
 
-// setPlatformEnabled 写入 platform.<site>.enable——viper WatchConfig 热重载，
+// setPlatformEnabled 保存并同步应用 platform.<site>.enable，
 // lsp/notify.go 消费出口即时跳过停用平台的推送（订阅数据保留，恢复后继续）
 async function setPlatformEnabled(site, enabled) {
+  const session = authSession();
   const patch = {};
   setPath(patch, 'platform.' + site + '.enable', enabled);
   try {
-    await apiJSON('/api/v1/config', { method: 'POST', body: JSON.stringify({ config: patch }) });
-    toast(`${enabled ? '已启用' : '已停用推送'}：${(PLATFORM_META[site] || {}).name || site}${enabled ? '' : '（订阅与轮询保留，恢复开关后继续推送）'}`);
+    const result = await saveConfigPatch(patch);
+    if (!isCurrentAuth(session)) return;
+    showConfigSaved(result, `${enabled ? '已启用' : '已停用推送'}：${(PLATFORM_META[site] || {}).name || site}`);
     if (configCache) setPath(configCache, 'platform.' + site + '.enable', enabled);
   } catch (e) {
+    if (!isCurrentAuth(session)) return;
     toast('设置失败：' + e.message, false);
     loadConfig();
   }
@@ -1777,6 +2194,7 @@ function closeSidebar() {
 const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博', qqofficial: 'QQ 开放平台' };
 
 let loginSession = null; // 服务端会话 id
+let loginSessionAuth = null;
 let loginTimer = null;   // 轮询定时器
 let loginReqSeq = 0;     // 建会话请求的序号，用来丢掉过期请求的迟到响应
 let loginSite = null;    // 当前平台，供「重新获取二维码」用
@@ -1797,13 +2215,9 @@ const LOGIN_ENDPOINTS = {
   },
 };
 
-function loginEndpoint() {
-  return loginSetupMode ? LOGIN_ENDPOINTS.setup : LOGIN_ENDPOINTS.normal;
-}
-
 // 统一扫码接口调用：普通模式走带 token 的 apiJSON；setup 模式没有 token，直接 fetch。
-async function loginRequest(path, opts) {
-  if (!loginSetupMode) return apiJSON(path, opts);
+async function loginRequest(path, opts, session, acceptStale, setup) {
+  if (!setup) return apiJSON(path, opts, session, acceptStale);
   const resp = await fetch(path, {
     ...opts,
     headers: {
@@ -1828,7 +2242,9 @@ function loginActionsHTML(done, site) {
       : '<button class="btn" id="login-refresh">重新获取二维码</button>') +
     '<button class="btn' + (done ? ' primary' : '') + '" id="login-cancel">' + (done ? '关闭' : '取消') + '</button>' +
     '</div>' +
-    (done ? '' : '<p class="config-note">扫码成功后服务端会直接把凭据写入配置文件并热生效，不需要再点保存。</p>');
+    (done ? '' : '<p class="config-note">' + (loginSite === 'qqofficial'
+      ? '扫码成功后会保存凭据。当前使用 QQ 开放平台时可在线应用，其他协议会继续运行。'
+      : '扫码成功后会保存并在线应用凭据，不需要再点保存。') + '</p>');
 }
 
 // 有结果之后就把二维码换掉：码已经没用了，留着会让人以为还没走完。
@@ -1846,55 +2262,64 @@ function renderLoginBody(html) {
   $('#login-modal-body').innerHTML = html;
 }
 
-function cancelLoginSession() {
-  if (!loginSession) return;
-  const sid = loginSession;
-  const ep = loginEndpoint();
-  loginSession = null;
-  loginRequest(ep.cancel, { method: 'POST', body: JSON.stringify({ session: sid }) }).catch(() => {});
+function cancelLoginSession(sid = loginSession, session = loginSessionAuth, setup = loginSetupMode) {
+  if (!sid) return;
+  if (sid === loginSession) { loginSession = null; loginSessionAuth = null; }
+  const path = (setup ? LOGIN_ENDPOINTS.setup : LOGIN_ENDPOINTS.normal).cancel;
+  const request = { method: 'POST', body: JSON.stringify({ session: sid }) };
+  if (setup) loginRequest(path, request, session, false, true).catch(() => {});
+  else api(path, request, session || authSession()).catch(() => {});
 }
 
 function stopLoginPolling() {
-  if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+  if (loginTimer !== null) { clearInterval(loginTimer); loginTimer = null; }
 }
 
 function closeLoginModal() {
+  ++loginReqSeq;
+  loginSite = null;
   $('#login-modal').classList.add('hidden');
   stopLoginPolling();
   cancelLoginSession();
 }
 
 async function startPlatformLogin(site, opts = {}) {
+  const setup = !!opts.setup;
+  if (!setup && !token) { showLogin(); return; }
+  if (setup && site !== 'qqofficial') return;
+  const ep = setup ? LOGIN_ENDPOINTS.setup : LOGIN_ENDPOINTS.normal;
   const name = LOGIN_PLATFORM_NAME[site] || site;
   stopLoginPolling();
   cancelLoginSession();
   loginSite = site;
-  loginSetupMode = !!opts.setup;
+  loginSetupMode = setup;
 
   $('#login-modal-title').textContent = name + (loginSetupMode ? ' · 扫码绑定' : ' 扫码登录');
   renderLoginBody('<div class="login-qr-box"><div class="login-qr-loading">正在获取二维码…</div></div>');
   $('#login-modal').classList.remove('hidden');
 
   const seq = ++loginReqSeq;
-  const ep = loginEndpoint();
+  const session = authSession();
+  const current = () => seq === loginReqSeq && loginSite === site && isCurrentAuth(session);
   let resp;
   try {
     resp = await loginRequest(ep.start, {
       method: 'POST',
       body: JSON.stringify({ platform: site }),
-    });
+    }, session, true, setup); // 迟到响应仍要读取 session id，随后显式取消服务端任务。
   } catch (e) {
     // 已经有更新的一次点击/切平台了，这次的结果作废
-    if (seq !== loginReqSeq || loginSite !== site) return;
+    if (!current()) return;
     renderLoginBody('<div class="login-qr-box"><div class="login-qr-err">' + esc(e.message) + '</div></div>' + loginActionsHTML());
     return;
   }
 
-  if (seq !== loginReqSeq || loginSite !== site) return;
+  if (!current()) { cancelLoginSession(resp.session, session, setup); return; }
   // 连点两次扫码时两个请求会先后回来：后一个把 loginSession 覆盖掉，
   // 前一个挂的定时器就再也没人清了。这里先停一次再挂新的。
   stopLoginPolling();
   loginSession = resp.session;
+  loginSessionAuth = session;
   renderLoginBody(
     '<div class="login-qr-box"><img class="login-qr" alt="登录二维码" src="' + resp.image + '"></div>' +
     '<div class="login-status" id="login-status">' + esc(resp.message || '请扫码') + '</div>' +
@@ -1908,14 +2333,17 @@ async function startPlatformLogin(site, opts = {}) {
 // 不能再来动界面 —— 否则它会劫持弹层、掐掉新会话的轮询，还弹一条莫名其妙的成功提示。
 async function pollLoginStatus(sid) {
   if (!sid || loginSession !== sid) return;
-  const ep = loginEndpoint();
+  const session = loginSessionAuth;
+  if (!isCurrentAuth(session)) return;
   let r;
   try {
-    r = await loginRequest(ep.status + '?session=' + encodeURIComponent(sid));
+    const setup = loginSetupMode;
+    const ep = setup ? LOGIN_ENDPOINTS.setup : LOGIN_ENDPOINTS.normal;
+    r = await loginRequest(ep.status + '?session=' + encodeURIComponent(sid), {}, session, false, setup);
   } catch (e) {
     return; // 网络抖动，等下一次
   }
-  if (loginSession !== sid) return; // 等响应期间被切走/关掉了
+  if (loginSession !== sid || !isCurrentAuth(session)) return; // 等响应期间被切走/关掉了
   const el = $('#login-status');
   if (el && r.message) el.textContent = r.message;
 
@@ -1942,6 +2370,7 @@ async function pollLoginStatus(sid) {
   } else if (r.state === 'failed' || r.state === 'expired') {
     stopLoginPolling();
     loginSession = null;
+    loginSessionAuth = null;
     renderLoginBody(loginResultHTML('err', r.message || '登录未完成，请重新扫码', r.platform));
   } else if (r.state === 'scanned') {
     if (el) el.className = 'login-status scanned';
@@ -1995,9 +2424,12 @@ function accountCardHTML(site, acc) {
 
 /* ===== 启动 ===== */
 function boot() {
+  if (adminNavigation) return;
   refreshDashboard();
-  setInterval(refreshDashboard, 5000);
+  if (dashboardTimer !== null) clearInterval(dashboardTimer);
+  dashboardTimer = setInterval(refreshDashboard, 5000);
   if (!sseConnected) connectLogs();
+  route();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2058,7 +2490,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#login-form').addEventListener('submit', doLogin);
-  $('#logout-btn').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); showLogin(); });
+  $('#logout-btn').addEventListener('click', showLogin);
   $('#theme-toggle').addEventListener('click', () => {
     applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
   });
@@ -2077,7 +2509,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (card) card.classList.toggle('disabled', !input.checked);
       return;
     }
-    // 接入方式切换：顶部提示条即时跟着变（真正生效仍需点保存 + 重启）
+    // 顶部提示条跟随未保存的接入方式选项。
     const adapterSel = e.target.closest('select[data-path="adapter.mode"]');
     if (adapterSel) {
       const banner = $('#adapter-banner');
@@ -2165,8 +2597,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 平台弹层：关闭/保存全部委托到静态容器 #platform-modal
   // （cancel/save 按钮是弹层 body 动态生成的，初始化时不存在，不能直接绑定）
-  const closePlatformModal = () => $('#platform-modal').classList.add('hidden');
   const savePlatformModal = async () => {
+    const session = authSession();
     const saveBtn = $('#platform-modal-save');
     if (!saveBtn) return;
     saveBtn.disabled = true;
@@ -2175,18 +2607,21 @@ document.addEventListener('DOMContentLoaded', () => {
       const patch = collectPatchFromContainer($('#platform-modal-body'));
       validateQQOfficialPatch(patch);
       if (Object.keys(patch).length) {
-        await apiJSON('/api/v1/config', { method: 'POST', body: JSON.stringify({ config: patch }) });
-        toast('平台配置已保存');
+        const result = await saveConfigPatch(patch);
+        if (!isCurrentAuth(session)) return;
+        showConfigSaved(result, '平台配置已保存');
       } else {
         toast('没有修改需要保存');
       }
       closePlatformModal();
       await loadConfig();
     } catch (e) {
-      toast('保存失败：' + e.message, false);
+      if (isCurrentAuth(session)) toast('保存失败：' + e.message, false);
     } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = '保存';
+      if (isCurrentAuth(session)) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+      }
     }
   };
   $('#platform-modal').addEventListener('click', (e) => {
@@ -2258,26 +2693,40 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   window.addEventListener('hashchange', route);
-  route();
 
   bindSetupWizard();
   // 启动入口：先探测是否需要初始化（admin.token 未设置），需要则向导优先于登录层
   checkSetupThenStart();
 });
 
+// 登录页提示随初始化状态切换：已初始化看默认文案，未初始化且当前来源不能初始化时
+// 明确告诉用户去哪里完成，别让它对着登录框猜一个不存在的密码。
+function setLoginHint(text) {
+  const el = document.getElementById('login-hint');
+  if (el) el.textContent = text;
+}
+
 async function checkSetupThenStart() {
+  if (adminNavigation) return;
+  const session = authSession();
   try {
     const r = await fetch('/api/v1/setup/status');
     const st = await r.json();
+    if (adminNavigation || !isCurrentAuth(session)) return;
     if (st && st.needed) {
-      // 已经扫过码 / 写过接入方式的实例：向导直接落在对应分支上，不用重新选。
-      setupAdapter = st.adapterMode === 'qqofficial' ? 'qqofficial' : 'onebot-v11';
+      setupCurrentAdapter = st.adapterMode || 'onebot-v11';
+      setupAdapter = st.adapterMode ? '' : 'onebot-v11';
       setupQQ.bound = !!st.qqSecretSet;
       setupQQ.appId = st.qqAppId || '';
       showSetup();
       return;
     }
+    if (st && st.initialized === false) {
+      setLoginHint('还没有设置 admin.token：请在运行 bot 的机器上打开 http://127.0.0.1:15631 完成初始化');
+    }
   } catch { /* 探测失败按常规流程走 */ }
+  if (adminNavigation) return;
+  if (!isCurrentAuth(session)) return;
   if (token) {
     hideLogin();
     boot();
@@ -2289,7 +2738,8 @@ async function checkSetupThenStart() {
 /* ===== 初始化向导 ===== */
 let setupStep = 1;
 let setupMode = 'ws-server';
-let setupAdapter = 'onebot-v11'; // onebot-v11 | qqofficial
+let setupAdapter = 'onebot-v11'; // 空值表示保留当前协议
+let setupCurrentAdapter = 'onebot-v11';
 const setupQQ = { bound: false, appId: '', appSecret: '' };
 
 function showSetup() {
@@ -2319,6 +2769,8 @@ function syncSetupAdapterUI() {
   document.querySelectorAll('#setup-adapter .adapter-card').forEach((b) => {
     b.classList.toggle('active', b.dataset.adapter === setupAdapter);
   });
+  const current = $('#setup-current-adapter');
+  if (current) current.textContent = ADAPTER_NAMES[setupCurrentAdapter] || setupCurrentAdapter;
   const onebot = $('#setup-onebot');
   const qq = $('#setup-qq');
   if (onebot) onebot.classList.toggle('hidden', setupAdapter !== 'onebot-v11');
@@ -2352,15 +2804,17 @@ function renderSetupSummary() {
     html += appId
       ? '<div class="ss-row"><span>AppID</span><b class="mono">' + esc(appId) + '</b></div>'
       : '<div class="ss-row"><span>AppID / AppSecret</span><b>尚未填写</b></div>';
-  } else {
+  } else if (setupAdapter === 'onebot-v11') {
     const addr = $('#setup-ob-addr').value.trim();
     const modeName = setupMode === 'ws-server' ? '正向（Bot 监听）' : '反向（Bot 主动连）';
     html += '<div class="ss-row"><span>接入方式</span><b>OneBot 11</b></div>';
     html += addr
       ? '<div class="ss-row"><span>' + modeName + '</span><b class="mono">' + esc(addr) + '</b></div>'
       : '<div class="ss-row"><span>OneBot 连接</span><b>使用默认配置</b></div>';
+  } else {
+    html += '<div class="ss-row"><span>接入方式</span><b>保留 ' + esc(ADAPTER_NAMES[setupCurrentAdapter] || setupCurrentAdapter) + '</b></div>';
   }
-  $('#setup-summary').innerHTML = html + '<p class="ss-note">接入配置写入后需重启 Bot 生效。</p>';
+  $('#setup-summary').innerHTML = html + '<p class="ss-note">当前协议的连接配置可在线应用；切换协议需要另行迁移运行数据。</p>';
 }
 
 function gotoSetupStep(n) {
@@ -2406,7 +2860,7 @@ function bindSetupWizard() {
     }
     if (setupStep === 2) {
       const p = $('#setup-pass').value, p2 = $('#setup-pass2').value;
-      if (p.length < 3) { setupError(2, '管理密码至少 3 位（默认 520）'); return; }
+      if (p.length < 6) { setupError(2, '管理密码至少 6 位'); return; }
       if (p !== p2) { setupError(2, '两次输入的密码不一致'); return; }
       setupError(2, '');
       gotoSetupStep(3);
@@ -2461,41 +2915,43 @@ function bindSetupWizard() {
   const scanBtn = $('#setup-qq-scan');
   if (scanBtn) scanBtn.addEventListener('click', () => startPlatformLogin('qqofficial', { setup: true }));
 
-  // 不想现在选协议端：用默认密码 520 直接进入，之后可在「配置 → 网络」里改
-  const skipBtn = $('#setup-skip');
-  if (skipBtn) skipBtn.addEventListener('click', skipSetup);
-
   syncSetupAdapterUI();
 
   // 提交
   $('#setup-submit').addEventListener('click', async () => {
+    if (adminNavigation) return;
+    const session = authSession();
+    const setupToken = $('#setup-pass').value;
     const btn = $('#setup-submit');
     btn.disabled = true;
     btn.textContent = '初始化中…';
     const isQQ = setupAdapter === 'qqofficial';
-    const obAddr = $('#setup-ob-addr').value.trim();
+    const isOneBot = setupAdapter === 'onebot-v11';
+    const obAddr = isOneBot ? $('#setup-ob-addr').value.trim() : '';
     try {
       const resp = await fetch('/api/v1/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          token: $('#setup-pass').value,
+          token: setupToken,
           adapterMode: setupAdapter,
-          obMode: !isQQ && obAddr ? setupMode : '',
-          obAddr: isQQ ? '' : obAddr,
-          obToken: isQQ ? '' : $('#setup-ob-token').value,
+          obMode: obAddr ? setupMode : '',
+          obAddr,
+          obToken: isOneBot ? $('#setup-ob-token').value : '',
           qqAppId: isQQ ? ($('#setup-qq-appid').value.trim() || setupQQ.appId) : '',
           qqAppSecret: isQQ ? $('#setup-qq-secret').value : '',
         }),
       });
+      if (adminNavigation || !isCurrentAuth(session)) return;
       if (!resp.ok) {
         let msg = '初始化失败（' + resp.status + '）';
         try { const e = await resp.json(); if (e.error) msg = e.error; } catch {}
         throw new Error(msg);
       }
+      const result = await resp.json();
+      if (adminNavigation || !isCurrentAuth(session)) return;
       // 成功：展示带「接下来去哪」指引的完成页，用户读完手动进入
-      token = $('#setup-pass').value;
-      localStorage.setItem(TOKEN_KEY, token);
+      setAuthToken(setupToken);
       for (let i = 1; i <= 4; i++) $('#setup-pane-' + i).classList.add('hidden');
       const done = $('#setup-pane-done');
       done.classList.remove('hidden');
@@ -2504,11 +2960,12 @@ function bindSetupWizard() {
         $('#setup-enter').removeEventListener('click', enter);
         hideSetup();
         hideLogin();
+        showConfigSaved(result, '初始化完成');
         boot();
-        toast('初始化完成，欢迎使用');
       };
       $('#setup-enter').addEventListener('click', enter);
     } catch (e) {
+      if (adminNavigation || !isCurrentAuth(session)) return;
       // 协议端/凭据错误回第 1 步，密码错误回第 2 步，别让用户在第 4 步发懵
       if (/AppID|AppSecret|接入方式|连接模式|Access Token/.test(e.message)) {
         gotoSetupStep(1);
@@ -2524,42 +2981,4 @@ function bindSetupWizard() {
       btn.textContent = '完成初始化';
     }
   });
-}
-
-// skipSetup 用默认密码 520 完成初始化：只写 admin.token，不改接入方式。
-// 这样用户第一次进来可以先看面板，协议端稍后在「配置 → 网络」里选。
-async function skipSetup() {
-  const btn = $('#setup-skip');
-  if (!btn) return;
-  btn.disabled = true;
-  try {
-    const resp = await fetch('/api/v1/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: DEFAULT_ADMIN_TOKEN,
-        adapterMode: '',
-        obMode: '',
-        obAddr: '',
-        obToken: '',
-        qqAppId: '',
-        qqAppSecret: '',
-      }),
-    });
-    if (!resp.ok) {
-      let msg = '进入失败（' + resp.status + '）';
-      try { const e = await resp.json(); if (e.error) msg = e.error; } catch {}
-      throw new Error(msg);
-    }
-    token = DEFAULT_ADMIN_TOKEN;
-    localStorage.setItem(TOKEN_KEY, token);
-    hideSetup();
-    hideLogin();
-    boot();
-    toast('已使用默认密码 520 进入，可在「配置 → 网络」里选择协议端');
-  } catch (e) {
-    toast('跳过引导失败：' + e.message, false);
-  } finally {
-    btn.disabled = false;
-  }
 }

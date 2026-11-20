@@ -23,8 +23,14 @@ type OneBotAdapter struct {
 	config   *adapter.AdapterConfig
 	wsClient *adapter.WSClient
 	// selfID 会被事件 goroutine 写入、轮询 goroutine 读取，必须原子访问避免 int64 撕裂
-	selfID   atomic.Int64
-	stopChan chan struct{}
+	selfID               atomic.Int64
+	expectedSelfID       atomic.Int64
+	identityConfirmed    atomic.Bool
+	identityRejected     atomic.Bool
+	identityMu           sync.Mutex
+	connectionGeneration uint64
+	stopChan             chan struct{}
+	stopOnce             sync.Once
 
 	groupMessageHandlers   []func(*adapter.GroupMessageEvent)
 	privateMessageHandlers []func(*adapter.PrivateMessageEvent)
@@ -131,24 +137,72 @@ func (a *OneBotAdapter) Start() error {
 		wsMode,
 		a.config.WSAddr,
 		adapter.WithWSToken(a.config.Token),
-		adapter.WithWSMessageHandler(a.handleMessage),
+		adapter.WithWSGenerationMessageHandler(func(data []byte, generation uint64) { a.handleMessage(data, generation) }),
+		adapter.WithWSConnectionHandler(func(generation uint64) {
+			a.identityMu.Lock()
+			a.connectionGeneration = generation
+			a.identityConfirmed.Store(false)
+			a.identityMu.Unlock()
+		}),
 	)
 
+	a.wsClient = wsClient
 	if err := wsClient.Start(); err != nil {
 		return fmt.Errorf("failed to start ws client: %v", err)
 	}
 
-	a.wsClient = wsClient
 	logger.Infof("OneBot v11 adapter started in %s mode", wsMode)
 	return nil
 }
 
 func (a *OneBotAdapter) Stop() error {
-	close(a.stopChan)
+	a.stopOnce.Do(func() { close(a.stopChan) })
 	if a.wsClient != nil {
 		return a.wsClient.Stop()
 	}
 	return nil
+}
+
+// AdoptReloadState retains the last known self ID while the client reconnects.
+// The old adapter must already be stopped.
+func (a *OneBotAdapter) AdoptReloadState(previous adapter.Adapter) error {
+	if old, ok := previous.(*OneBotAdapter); ok {
+		a.selfID.Store(old.selfID.Load())
+		a.expectedSelfID.Store(old.selfID.Load())
+	}
+	return nil
+}
+
+// StartForReload verifies outbound connectivity before the configuration is
+// committed. A server is ready once its listening socket is bound.
+func (a *OneBotAdapter) StartForReload() error {
+	if err := a.Start(); err != nil {
+		return err
+	}
+	if a.config.WSMode != adapter.WSModeReverse {
+		return nil
+	}
+	timeout := a.config.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if a.identityRejected.Load() {
+			return fmt.Errorf("OneBot candidate connected as a different bot identity")
+		}
+		if a.IsConnected() {
+			return nil
+		}
+		select {
+		case <-timer.C:
+			return fmt.Errorf("new OneBot connection did not become ready before timeout")
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *OneBotAdapter) GetAdapterName() string {
@@ -164,6 +218,9 @@ func (a *OneBotAdapter) GetSelfID() int64 {
 }
 
 func (a *OneBotAdapter) IsConnected() bool {
+	if a.identityRejected.Load() || (a.expectedSelfID.Load() != 0 && !a.identityConfirmed.Load()) {
+		return false
+	}
 	if a.wsClient != nil {
 		return a.wsClient.IsConnected()
 	}
@@ -171,6 +228,9 @@ func (a *OneBotAdapter) IsConnected() bool {
 }
 
 func (a *OneBotAdapter) SendApi(action string, params map[string]interface{}) (interface{}, error) {
+	if a.identityRejected.Load() || (a.expectedSelfID.Load() != 0 && !a.identityConfirmed.Load()) {
+		return nil, fmt.Errorf("%w: OneBot identity is not confirmed", adapter.ErrRequestNotSent)
+	}
 	if a.wsClient == nil {
 		return nil, fmt.Errorf("ws client not initialized")
 	}
@@ -347,7 +407,7 @@ func (a *OneBotAdapter) OnRequestEvent(handler func(*adapter.RequestEvent)) {
 	a.requestEventHandlers = append(a.requestEventHandlers, handler)
 }
 
-func (a *OneBotAdapter) handleMessage(data []byte) {
+func (a *OneBotAdapter) handleMessage(data []byte, generations ...uint64) {
 	var msg map[string]interface{}
 	if err := json.Unmarshal(data, &msg); err != nil {
 		logger.Errorf("Failed to parse message: %v", err)
@@ -355,6 +415,36 @@ func (a *OneBotAdapter) handleMessage(data []byte) {
 	}
 
 	postType, _ := msg["post_type"].(string)
+	a.identityMu.Lock()
+	if len(generations) > 0 && generations[0] != a.connectionGeneration {
+		a.identityMu.Unlock()
+		return
+	}
+	if postType != "" {
+		selfID := getInt64(msg["self_id"])
+		if selfID > 0 {
+			expected := a.expectedSelfID.Load()
+			if expected == 0 {
+				a.expectedSelfID.CompareAndSwap(0, selfID)
+				expected = a.expectedSelfID.Load()
+			}
+			if expected != selfID {
+				if !a.identityRejected.Swap(true) {
+					logger.Error("OneBot connected as a different bot; rejecting events and sends to protect subscriptions")
+				}
+				a.identityConfirmed.Store(false)
+				a.identityMu.Unlock()
+				return
+			}
+			a.identityRejected.Store(false)
+			a.identityConfirmed.Store(true)
+			a.selfID.Store(selfID)
+		} else if a.expectedSelfID.Load() != 0 && !a.identityConfirmed.Load() {
+			a.identityMu.Unlock()
+			return
+		}
+	}
+	a.identityMu.Unlock()
 
 	// Debug: print echo value for API responses
 	rawEcho := msg["echo"]

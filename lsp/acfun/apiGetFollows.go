@@ -79,7 +79,7 @@ func GetAttentionList() ([]*Follow, error) {
 		}
 		resp, err := GetFollows(page)
 		if err != nil {
-			logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("获取关注列表失败：%v", err)
+			logger.WithField("FuncName", utils.FuncName()).WithField("UserId", getAccount().username).Errorf("获取关注列表失败：%v", err)
 			return nil, err
 		}
 		if resp.GetResult() != 0 {

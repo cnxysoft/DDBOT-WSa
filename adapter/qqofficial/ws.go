@@ -143,11 +143,15 @@ type Gateway struct {
 
 // NewGateway 建一个网关。h 为 nil 时事件会被丢掉（只剩连接能力）。
 func NewGateway(tm *TokenManager, h EventHandler) *Gateway {
-	cfg := GetConfig()
+	return newGatewayFromConfig(tm, h, GetConfig())
+}
+
+func newGatewayFromConfig(tm *TokenManager, h EventHandler, cfg *Config) *Gateway {
+	copyConfig := *cfg
 	return &Gateway{
 		tm:         tm,
 		handler:    h,
-		cfg:        cfg,
+		cfg:        &copyConfig,
 		httpClient: &http.Client{Timeout: GatewayFetchTimeout},
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),

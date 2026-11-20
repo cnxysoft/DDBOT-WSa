@@ -2,10 +2,10 @@ package twitter
 
 import (
 	"errors"
-	"net/http/cookiejar"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +53,8 @@ func normalizeAPIFetchMode(value string) string {
 }
 
 func apiFetchModeNeedsFollow() bool {
-	return TwitterAPIFetchMode != APIFetchModePerUser
+	runtimeGen := twitterSnapshot()
+	return runtimeGen.fetchMode != APIFetchModePerUser
 }
 
 // cleanupTmpDir 清理 ./tmp 目录下的所有临时文件
@@ -85,69 +86,30 @@ func cleanupTmpDir() {
 }
 
 func setCookies() {
-	ua := config.GlobalConfig.GetString("twitter.userAgent")
-	url := config.GlobalConfig.GetStringSlice("twitter.BaseUrl")
-	Cookie, _ = cookiejar.New(nil)
-	if ua != "" {
-		UserAgent = ua
+	r, err := newTwitterRuntime(config.GlobalConfig.Snapshot())
+	if err != nil {
+		logger.WithError(err).Warn("Twitter 配置无效，保持旧会话")
+		return
 	}
-	if len(url) > 0 {
-		BaseURL = url
-	}
-	TwitterAPIFetchMode = normalizeAPIFetchMode(config.GlobalConfig.GetString("twitter.apiFetchMode"))
-
-	mode := strings.ToLower(strings.TrimSpace(config.GlobalConfig.GetString("twitter.mode")))
-	TwitterMode = resolveTwitterMode(mode)
-
-	if TwitterMode == ModeAPI {
-		ct0 := config.GlobalConfig.GetString("twitter.ct0")
-		authToken := config.GlobalConfig.GetString("twitter.auth_token")
-		bearerToken := config.GlobalConfig.GetString("twitter.bearerToken")
-		queryId := config.GlobalConfig.GetString("twitter.queryId")
-		userTweetsQueryId := config.GlobalConfig.GetString("twitter.userTweetsQueryId")
-		screenName := config.GlobalConfig.GetString("twitter.screenName")
-
-		twitterAPI = NewTwitterAPI(ct0, authToken, bearerToken, queryId, screenName)
-		if twitterAPI != nil {
-			twitterAPI.SetUserTimelineQueryId(userTweetsQueryId)
-		}
-
-		// 自动获取 screenName 和 queryId
-		if twitterAPI != nil && twitterAPI.IsEnabled() {
-			if screenName == "" {
-				logger.Info("Cookie验证：正在获取账号信息...")
-				if sn, _, err := verifyTwitterAPI(); err == nil && sn != "" {
-					logger.Infof("Cookie验证成功！账号: %s", sn)
-				} else {
-					reason := "未知原因"
-					if err != nil {
-						reason = err.Error()
-					}
-					logger.Errorf("Twitter Cookie验证失败：%v，进入自动恢复模式", err)
-					enterTwitterRecovering(reason)
-				}
-			} else {
-				logger.Infof("使用配置的screenName: %s", screenName)
-				twitterAPI.SetScreenName(screenName)
-
-				// 从 sw.js 刷新 queryId 缓存
-				logger.Info("正在从 sw.js 刷新 queryId 缓存...")
-				if err := RefreshAPIFromMainJS(); err != nil {
-					logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
-				} else {
-					logger.Infof("成功获取 queryId: %s", twitterAPI.GetQueryId())
-				}
-			}
+	twitterStateMu.Lock()
+	liveTwitter.Store(r)
+	twitterStateMu.Unlock()
+	if r.api != nil && r.api.IsEnabled() {
+		if _, _, err := verifyTwitterAPI(); err != nil {
+			enterTwitterRecovering("Twitter Cookie 验证失败")
 		}
 	}
 }
 
 func IsTwitterEnabled() bool {
-	return TwitterMode == ModeAPI && twitterAPI != nil && twitterAPI.IsEnabled() && !twitterRecovering.Load()
+	runtimeGen := twitterSnapshot()
+	twitterAPI := runtimeGen.api
+	return runtimeGen.mode == ModeAPI && twitterAPI != nil && twitterAPI.IsEnabled() && !twitterRecovering.Load()
 }
 
 func IsMirrorMode() bool {
-	return TwitterMode == ModeMirror
+	runtimeGen := twitterSnapshot()
+	return runtimeGen.mode == ModeMirror
 }
 
 // resolveTwitterMode 解析twitter.mode配置。
@@ -162,6 +124,11 @@ func resolveTwitterMode(mode string) string {
 // verifyTwitterAPI 单次验证Cookie：拉取账号信息并刷新queryId缓存。
 // 验证成功会就地设置twitterAPI的screenName和mainJSURL。
 func verifyTwitterAPI() (screenName, mainJsUrl string, err error) {
+	return verifyTwitterAPIFor(twitterSnapshot())
+}
+
+func verifyTwitterAPIFor(runtimeGen *twitterRuntime) (screenName, mainJsUrl string, err error) {
+	twitterAPI := runtimeGen.api
 	if twitterAPI == nil || !twitterAPI.IsEnabled() {
 		return "", "", errors.New("Twitter API 未配置 Cookie")
 	}
@@ -173,9 +140,9 @@ func verifyTwitterAPI() (screenName, mainJsUrl string, err error) {
 		return "", "", errors.New("screenName为空")
 	}
 	twitterAPI.SetScreenName(sn)
-	twitterAPI.mainJSURL = mjUrl
+	twitterAPI.setMainJS(mjUrl)
 	// 获取 queryId（从 sw.js → LoggedInMain 提取缓存），失败不阻塞验证
-	if err := RefreshAPIFromMainJS(mjUrl); err != nil {
+	if err := twitterAPI.refreshAPIFromMainJS(false, mjUrl); err != nil {
 		logger.Warnf("获取 queryId 失败，使用默认配置: %v", err)
 	} else {
 		logger.Infof("成功获取 queryId: %s", twitterAPI.GetQueryId())
@@ -186,7 +153,8 @@ func verifyTwitterAPI() (screenName, mainJsUrl string, err error) {
 var (
 	twitterRecovering      atomic.Bool
 	twitterRecoveringSince atomic.Int64
-	twitterVerifyFunc      = func() (string, string, error) { return verifyTwitterAPI() }
+	twitterRecoveryWorkers sync.WaitGroup
+	twitterVerifyFunc      func() (string, string, error) // optional test verifier
 	// twitterRecoveryBackoff 自动恢复重试的退避序列，超出后按最后一项封顶
 	twitterRecoveryBackoff = []time.Duration{
 		15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute,
@@ -197,29 +165,58 @@ var (
 // enterTwitterRecovering 进入自动恢复模式：暂停Twitter刷新、向管理员发一次告警，
 // 并后台按退避节奏重试验证，成功后自动恢复推送并通知。重复调用只会启动一个恢复循环。
 func enterTwitterRecovering(reason string) {
-	if !twitterRecovering.CompareAndSwap(false, true) {
+	enterTwitterRecoveringFor(liveTwitter.Load(), reason)
+}
+
+func enterTwitterRecoveringFor(generation *twitterRuntime, reason string) {
+	twitterStateMu.Lock()
+	if liveTwitter.Load() != generation || !twitterRecovering.CompareAndSwap(false, true) {
+		twitterStateMu.Unlock()
 		return
 	}
 	twitterRecoveringSince.Store(time.Now().Unix())
+	twitterRecoveryWorkers.Add(1)
+	twitterStateMu.Unlock()
 	logger.Errorf("Twitter进入自动恢复模式：%v", reason)
 	notifyTwitterLoginExpired(reason)
-	go twitterRecoveryLoop()
+	verifier := twitterVerifyFunc
+	if verifier == nil {
+		runtimeGen := generation
+		if runtimeGen == nil {
+			runtimeGen = twitterSnapshot()
+		}
+		verifier = func() (string, string, error) { return verifyTwitterAPIFor(runtimeGen) }
+	}
+	backoff := append([]time.Duration(nil), twitterRecoveryBackoff...)
+	go func() {
+		defer twitterRecoveryWorkers.Done()
+		twitterRecoveryLoopFor(generation, verifier, backoff)
+	}()
 }
 
-func twitterRecoveryLoop() {
+func twitterRecoveryLoopFor(generation *twitterRuntime, verifier func() (string, string, error), backoff []time.Duration) {
 	for attempt := 0; ; attempt++ {
-		delay := twitterRecoveryBackoff[len(twitterRecoveryBackoff)-1]
-		if attempt < len(twitterRecoveryBackoff) {
-			delay = twitterRecoveryBackoff[attempt]
+		delay := backoff[len(backoff)-1]
+		if attempt < len(backoff) {
+			delay = backoff[attempt]
 		}
 		time.Sleep(delay)
+		if liveTwitter.Load() != generation || !twitterRecovering.Load() {
+			return
+		}
 
-		if _, _, err := twitterVerifyFunc(); err != nil {
+		if _, _, err := verifier(); err != nil {
 			logger.Warnf("Twitter自动恢复第%d次重试失败: %v", attempt+1, err)
 			continue
 		}
+		twitterStateMu.Lock()
+		if liveTwitter.Load() != generation {
+			twitterStateMu.Unlock()
+			return
+		}
 		downtime := time.Since(time.Unix(twitterRecoveringSince.Load(), 0))
 		twitterRecovering.Store(false)
+		twitterStateMu.Unlock()
 		notifyTwitterLoginRecovered(downtime)
 		logger.Infof("Twitter已自动恢复，本次中断时长 %v", downtime)
 		return

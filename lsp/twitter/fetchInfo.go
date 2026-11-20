@@ -128,6 +128,10 @@ func GetIdList(tweets []*Tweet) []string {
 }
 
 func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challenges, error) {
+	return parseRespWithRuntime(htmlContent, Url, twitterSnapshot())
+}
+
+func parseRespWithRuntime(htmlContent []byte, Url string, runtimeGen *twitterRuntime) (*UserProfile, []*Tweet, *Challenges, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(htmlContent))
 	if err != nil {
 		return nil, nil, nil, err
@@ -181,7 +185,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		logger.Debugf("poast final cookie value: %s", cookieValue)
 
 		// 设置cookie
-		Cookie.SetCookies(parsedURL, []*http.Cookie{
+		runtimeGen.jar.SetCookies(parsedURL, []*http.Cookie{
 			{
 				Name:     cookieName,
 				Value:    cookieValue,

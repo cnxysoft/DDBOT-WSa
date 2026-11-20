@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -28,9 +29,7 @@ const (
 	// setupQQModeWebSocket 是目前 qqofficial 唯一实现的连接方式。
 	setupQQModeWebSocket = "websocket"
 
-	// minAdminTokenLen 是管理密码的最小长度。默认密码 520 只有 3 位，
-	// 首次使用时允许直接沿用；想更安全可改成更长的密码。
-	minAdminTokenLen = 3
+	minAdminTokenLen = 6
 )
 
 // SetupStatus GET /api/v1/setup/status 的响应。
@@ -40,6 +39,7 @@ const (
 // 这里**不返回 AppSecret**，只返回「是否已配置」的布尔值。
 type SetupStatus struct {
 	Needed      bool   `json:"needed"`                // true = admin.token 未设置，需要初始化
+	Initialized bool   `json:"initialized"`           // true = admin.token 已设置；非回环来源据此提示去本机初始化
 	AdapterMode string `json:"adapterMode,omitempty"` // 当前 adapter.mode；空 = 未配置（按 onebot-v11）
 	QQAppID     string `json:"qqAppId,omitempty"`     // 已绑定的 QQ 官方机器人 AppID（非密钥）
 	QQSecretSet bool   `json:"qqSecretSet,omitempty"` // QQ AppSecret 是否已配置
@@ -134,12 +134,14 @@ func configValueString(v interface{}) string {
 
 // nestedConfigString 读 existing[top][key...] 中第一个非空值，兼容 app-secret 的几种别名。
 func nestedConfigString(existing map[string]interface{}, top string, keys ...string) string {
-	sub, ok := existing[top].(map[string]interface{})
+	actualTop, _ := configMapKey(existing, top)
+	sub, ok := existing[actualTop].(map[string]interface{})
 	if !ok {
 		return ""
 	}
 	for _, key := range keys {
-		if s := configValueString(sub[key]); s != "" {
+		actual, _ := configMapKey(sub, key)
+		if s := configValueString(sub[actual]); s != "" {
 			return s
 		}
 	}
@@ -157,9 +159,14 @@ func firstNonEmpty(values ...string) string {
 
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	// 初始化向导只在本机回环访问时展示：远端（面板暴露到局域网/反代）直接看登录页，
-	// 用默认密码 520 或配置里的 admin.token 登录；setup 写接口本身也有 guardSetup 限制。
-	status := SetupStatus{Needed: s.setupNeeded() && isLoopbackAddr(r.RemoteAddr)}
+	// 使用与 guardSetup 相同的来源限制，避免向远端响应机器人信息。
+	// Initialized 只报告「有没有设置管理密码」这一位，不含任何凭据；
+	// 非回环来源据此提示去本机完成初始化，而不是对着登录框猜密码。
+	token := s.getToken()
+	status := SetupStatus{
+		Needed:      token == "" && isLoopbackAddr(r.RemoteAddr) && isLoopbackHost(r.Host) && sameOriginRequest(r),
+		Initialized: token != "",
+	}
 	// 额外的接入方式 / AppID 只回给本机：面板暴露在局域网时，匿名请求
 	// 仍然只需要知道「要不要初始化」，不该顺带读到机器人的 AppID。
 	if status.Needed {
@@ -171,10 +178,12 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(status)
 }
 
+var errSetupCompleted = errors.New("setup already completed")
+
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// 已初始化的实例：向导接口整体关闭，避免任何形式的越权写配置
-	if !s.setupNeeded() {
+	if s.getToken() != "" {
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "setup already completed"})
 		return
@@ -194,7 +203,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Token) < minAdminTokenLen {
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "管理密码至少 3 位"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "管理密码至少 6 位"})
 		return
 	}
 
@@ -205,49 +214,59 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	cfgMu := cfg.GetConfigWriteMutex()
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
-	cfg.MarkConfigWriteStart()
-	defer cfg.MarkConfigWriteEnd()
-
-	var fileMode os.FileMode = 0600 // 文件不存在时沿用旧行为
-	if info, err := os.Stat(cfgPath); err == nil {
-		fileMode = info.Mode() // 保留原文件权限
+	if s.getToken() != "" {
+		writeErr(w, http.StatusNotFound, "setup already completed")
+		return
 	}
 
 	existing := make(map[string]interface{})
-	var oldData []byte
-	if data, err := os.ReadFile(cfgPath); err == nil {
-		oldData = data
+	version, err := cfg.ReadConfigFileVersion(cfgPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取现有配置失败")
+		return
+	}
+	var fileMode os.FileMode = 0600
+	if version.Exists() {
+		fileMode = version.Mode()
+		data := version.Bytes()
 		if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
 			// 解析失败时 existing 停在空 map，向导照常写白名单键 = 把用户原有配置清空。
 			// 宁可拒绝写入，让用户先修好 YAML。
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
+				"error": "现有配置解析失败，已拒绝写入以免覆盖；请检查 YAML 格式",
 			})
 			return
 		}
-	} else if !os.IsNotExist(err) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "读取现有配置失败: " + err.Error()})
-		return
+		if err := validateConfigDocument(data); err != nil {
+			writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
+			return
+		}
 	}
 	if existing == nil {
 		// 同 handleConfig：空内容 / 纯注释 / 字面 null 会被解析成 nil map，
 		// setNested 往 nil map 写会 panic。
 		existing = make(map[string]interface{})
 	}
+	var identityErr error
+	existing, identityErr = normalizeConfigPaths(existing)
+	if identityErr != nil {
+		writeErr(w, http.StatusBadRequest, "现有配置字段存在歧义，已拒绝写入："+identityErr.Error())
+		return
+	}
 
 	setNested := func(top, key string, val interface{}) {
-		sub, ok := existing[top].(map[string]interface{})
+		actualTop, _ := configMapKey(existing, top)
+		sub, ok := existing[actualTop].(map[string]interface{})
 		if !ok {
 			sub = make(map[string]interface{})
-			existing[top] = sub
+			existing[actualTop] = sub
 		}
-		sub[key] = val
+		actualKey, _ := configMapKey(sub, key)
+		sub[actualKey] = val
 	}
 
 	setNested("admin", "token", req.Token)
-	patches := []cfg.ConfigPatch{{Path: []string{"admin", "token"}, Value: req.Token}}
 
 	// 接入方式：显式选择优先；只填了 QQ 凭据时按 QQ 开放平台推断，
 	// 免得老前端 / 手写请求漏传 adapterMode 导致凭据写了却不生效。
@@ -280,11 +299,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 		if appID != "" {
 			setNested("qqofficial", "app-id", appID)
-			patches = append(patches, cfg.ConfigPatch{Path: []string{"qqofficial", "app-id"}, Value: appID})
 		}
 		if appSecret != "" {
 			setNested("qqofficial", "app-secret", appSecret)
-			patches = append(patches, cfg.ConfigPatch{Path: []string{"qqofficial", "app-secret"}, Value: appSecret})
 		}
 
 		// 扫码绑定会先一步把凭据写进配置，此时前端提交的 AppSecret 是空的。
@@ -313,21 +330,14 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setNested("adapter", "mode", setupAdapterQQOfficial)
-		patches = append(patches, cfg.ConfigPatch{Path: []string{"adapter", "mode"}, Value: setupAdapterQQOfficial})
-		// qqofficial 目前只实现 websocket；用户自己写了别的值就保留，启动时会给出明确报错。
-		if sub, ok := existing["qqofficial"].(map[string]interface{}); ok {
-			if _, exists := sub["mode"]; !exists {
-				patches = append(patches, cfg.ConfigPatch{Path: []string{"qqofficial", "mode"}, Value: setupQQModeWebSocket})
-			}
-		} else {
-			patches = append(patches, cfg.ConfigPatch{Path: []string{"qqofficial", "mode"}, Value: setupQQModeWebSocket})
+		if nestedConfigString(existing, "qqofficial", "mode") == "" {
+			setNested("qqofficial", "mode", setupQQModeWebSocket)
 		}
 
 	case setupAdapterOneBot, "":
 		// 显式选择 OneBot 时写入 adapter.mode；空值保持旧行为，不改 adapter.mode。
 		if adapterMode == setupAdapterOneBot {
 			setNested("adapter", "mode", setupAdapterOneBot)
-			patches = append(patches, cfg.ConfigPatch{Path: []string{"adapter", "mode"}, Value: setupAdapterOneBot})
 		}
 		switch req.ObMode {
 		case "ws-server", "ws-reverse":
@@ -339,13 +349,8 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 				}
 				setNested("websocket", "mode", req.ObMode)
 				setNested("websocket", req.ObMode, req.ObAddr)
-				patches = append(patches,
-					cfg.ConfigPatch{Path: []string{"websocket", "mode"}, Value: req.ObMode},
-					cfg.ConfigPatch{Path: []string{"websocket", req.ObMode}, Value: req.ObAddr},
-				)
 				if req.ObToken != "" {
 					setNested("websocket", "token", req.ObToken)
-					patches = append(patches, cfg.ConfigPatch{Path: []string{"websocket", "token"}, Value: req.ObToken})
 				}
 			}
 		case "":
@@ -356,50 +361,45 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	if len(oldData) > 0 {
-		if err := os.WriteFile(cfgPath+".bak", oldData, fileMode); err != nil {
-			logrus.Warnf("配置备份失败: %v", err)
-		}
-	}
-	// 只改白名单里的键值行：默认生成的 application.yaml 里那些说明性注释、
-	// 空行、缩进和行内注释都必须原样保留，否则用户下次启动看到的是一份被
-	// 整份重写过的配置。
-	if err := cfg.WriteConfigPatchesToPath(patches, cfgPath); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "写入配置失败: " + err.Error()})
+	if err := validateQQOfficialConfig(existing); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// 向导写完后主动热重载一次：日志等级 / 定时任务等运行期配置立即生效；
-	// adapter.mode 这类启动时构造的配置仍需重启（完成页已提示）。
-	if err := cfg.ReloadConfigFile(); err != nil {
-		logrus.Warnf("配置已写入，但热重载失败（重启后生效）: %v", err)
+	data, err := renderConfigCandidate(version.Bytes(), existing)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "Failed to marshal config")
+		return
 	}
-
+	reloadStatus, err := config.GlobalConfig.SaveAndStatus(data, func() error {
+		if s.getToken() != "" {
+			return errSetupCompleted
+		}
+		return version.Persist(data, fileMode, true)
+	})
+	if err != nil {
+		var prepareErr *config.PrepareError
+		if errors.Is(err, cfg.ErrConfigConflict) {
+			writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
+		} else if errors.Is(err, errSetupCompleted) {
+			writeErr(w, http.StatusNotFound, errSetupCompleted.Error())
+		} else if errors.As(err, &prepareErr) {
+			writeErr(w, http.StatusBadRequest, prepareErr.Error())
+		} else {
+			writeErr(w, http.StatusInternalServerError, "Failed to write config file")
+		}
+		return
+	}
 	// 热更新内存中的 token：设置完成后立即可用新密码登录，无需重启
-	s.setToken(req.Token)
-	s.setTokenDefault(false)
-	logrus.Info("初始化向导完成：admin.token 已设置" + setupNote(adapterMode, req.ObAddr, effectiveQQAppID))
-
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// setupNote 生成写入成功后的日志尾注。只包含接入方式、地址与 AppID，绝不带 Secret。
-func setupNote(adapterMode, obAddr, qqAppID string) string {
-	switch adapterMode {
-	case setupAdapterQQOfficial:
-		if qqAppID != "" {
-			return "；接入方式：QQ 开放平台（AppID " + qqAppID + "，重启 Bot 后生效）"
+	// Normally the admin runtime participant already rotated the token. The
+	// fallback is for a server initialized without runtime participants.
+	if s.getToken() == "" && config.GlobalConfig.Status().Revision == reloadStatus.Revision {
+		s.setToken(req.Token)
+		if config.GlobalConfig.GetString("admin.token") != req.Token {
+			config.GlobalConfig.Set("admin.token", req.Token)
+			config.GlobalConfig.MarkApplied("admin.token")
+			reloadStatus = config.GlobalConfig.Status()
 		}
-		return "；接入方式：QQ 开放平台（重启 Bot 后生效）"
-	case setupAdapterOneBot:
-		if obAddr != "" {
-			return "；接入方式：OneBot 11（" + obAddr + "，重启 Bot 后生效）"
-		}
-		return "；接入方式：OneBot 11（重启 Bot 后生效）"
 	}
-	if obAddr != "" {
-		return "；OneBot 连接已写入配置（重启 Bot 后生效）"
-	}
-	return ""
+	logrus.Info("初始化向导完成：admin.token 已设置")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "reload": reloadStatus})
 }

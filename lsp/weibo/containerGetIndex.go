@@ -40,29 +40,25 @@ func ApiContainerGetIndexProfile(uid int64) (*ApiContainerGetIndexProfileRespons
 }
 
 func apiContainerGetIndexProfileLogin(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
-	cookieOpts := CookieOption()
-	opts := buildRequestOptions(CreateReferer(uid))
-	opts = append(opts, cookieOpts...)
-	opts = append(opts, SetXsrfToken(opts))
+	generation, opts := snapshotCookieRequest(CreateReferer(uid), false)
 
 	profileResp := new(ApiContainerGetIndexProfileResponse)
 	err := requests.Get(PathConcainerGetIndex_Profile_Login, CreateParam(uid), &profileResp, opts...)
 	if err != nil {
-		markCookieUnhealthy(err)
+		markCookieUnhealthy(err, generation)
 		return nil, err
 	}
 	return profileResp, nil
 }
 
 func apiContainerGetIndexProfileGuest(uid int64) (*ApiContainerGetIndexProfileResponse, error) {
-	opts := buildRequestOptions(CreateGuestReferer(uid))
-	opts = append(opts, CookieOption()...)
+	generation, opts := snapshotCookieRequest(CreateGuestReferer(uid), true)
 	GetUserPage(uid, opts...)
 
 	guestResp := new(apiContainerGetIndexGuestProfileResponse)
 	err := requests.Get(PathContainerGetIndex_Guest, CreateGuestProfileParam(uid), &guestResp, opts...)
 	if err != nil {
-		markCookieUnhealthy(err)
+		markCookieUnhealthy(err, generation)
 		return nil, err
 	}
 	return guestResp.ToProfileResponse(), nil
@@ -101,10 +97,7 @@ func ApiContainerGetIndexCards(uid int64) (*ApiContainerGetIndexCardsResponse, e
 }
 
 func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
-	cookieOpts := CookieOption()
-	opts := buildRequestOptions(CreateReferer(uid))
-	opts = append(opts, cookieOpts...)
-	opts = append(opts, SetXsrfToken(opts))
+	generation, opts := snapshotCookieRequest(CreateReferer(uid), false)
 
 	profileResp := new(ApiContainerGetIndexCardsResponse)
 	err := requests.Get(PathContainerGetIndex_Cards_Login, CreateParam(uid), &profileResp, opts...)
@@ -112,35 +105,32 @@ func apiContainerGetIndexCardsLogin(uid int64) (*ApiContainerGetIndexCardsRespon
 		// 检测是否是 Cookie 失效（返回 HTML）
 		if isCookieFailure(err) {
 			logger.Warnf("uid=%d: 检测到 Cookie 失效，尝试刷新会话 cookie", uid)
-			if RefreshSessionCookie() {
+			if RefreshSessionCookie(generation) {
 				// 刷新成功，重新构建请求并重试
-				cookieOpts = CookieOption()
-				opts = buildRequestOptions(CreateReferer(uid))
-				opts = append(opts, cookieOpts...)
-				opts = append(opts, SetXsrfToken(opts))
+				generation, opts = snapshotCookieRequest(CreateReferer(uid), false)
 				profileResp = new(ApiContainerGetIndexCardsResponse)
 				err = requests.Get(PathContainerGetIndex_Cards_Login, CreateParam(uid), &profileResp, opts...)
 				if err != nil {
 					// 刷新后仍失败，可能是 SUB 过期
 					if isCookieFailure(err) {
 						logger.Errorf("uid=%d: 会话 cookie 刷新后仍返回 HTML，SUB 可能已过期", uid)
-						NotifySUBExpired()
+						notifySUBExpiredForGeneration(generation)
 					} else {
 						logger.Errorf("uid=%d: 刷新后重试仍失败: %v", uid, err)
 					}
-					markCookieUnhealthy(err)
+					markCookieUnhealthy(err, generation)
 					return nil, err
 				}
 				logger.Infof("uid=%d: Cookie 刷新后重试成功", uid)
 			} else {
 				// 刷新失败，可能是 SUB 过期
 				logger.Errorf("uid=%d: 会话 cookie 刷新失败，SUB 可能已过期", uid)
-				NotifySUBExpired()
-				markCookieUnhealthy(err)
+				notifySUBExpiredForGeneration(generation)
+				markCookieUnhealthy(err, generation)
 				return nil, err
 			}
 		} else {
-			markCookieUnhealthy(err)
+			markCookieUnhealthy(err, generation)
 			logger.Errorf("uid=%d: 请求失败 - %v", uid, err)
 			return nil, err
 		}
@@ -166,52 +156,48 @@ func apiContainerGetIndexCardsAPI(uid int64) (*ApiContainerGetIndexCardsResponse
 }
 
 func apiContainerGetIndexCardsGuest(uid int64) (*ApiContainerGetIndexCardsResponse, error) {
-	// Guest 模式：使用自动生成的访客 Cookie
-	cookieOpts := CookieOption()
-	if len(cookieOpts) == 0 {
-		logger.Warnf("uid=%d: 移动端 CookieOption 为空", uid)
-	}
-
-	opts := buildRequestOptions(CreateGuestReferer(uid))
-	opts = append(opts, cookieOpts...)
+	generation, opts := snapshotCookieRequest(CreateGuestReferer(uid), true)
 	GetUserPage(uid, opts...)
 
 	guestResp := new(apiContainerGetIndexGuestCardsResponse)
 	err := requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
 	if err != nil {
-		markCookieUnhealthy(err)
+		markCookieUnhealthy(err, generation)
 		return nil, err
 	}
 
 	resp := guestResp.ToCardsResponse()
 
 	// Guest 模式：处理错误码
-	if !cfg.IsWeiboAPIMode() {
+	if sessionGeneration.Load() == generation && !cfg.IsWeiboAPIMode() {
 		if resp.GetOk() == -100 {
 			// -100: 频率限制触发，暂停刷新 10 分钟
 			logger.Warnf("uid=%d: 检测到 -100 错误（频率限制），暂停刷新 Cookie 10 分钟", uid)
-			PauseRefreshOnRateLimit(time.Minute * 10)
+			PauseRefreshOnRateLimit(time.Minute*10, generation)
 			return resp, nil
 		}
 		if resp.GetOk() == 432 {
 			// 432: 需要人机验证，正常刷新 Cookie
 			logger.Warnf("uid=%d: 检测到 432 错误（人机验证），尝试刷新", uid)
-			if !TryRefreshGuestCookie() {
-				cookieHealthy.Store(false)
-				consecutiveCookieFails.Inc()
+			if !TryRefreshGuestCookie(generation) {
+				markCookieUnhealthy(fmt.Errorf("invalid character '<' in stale guest response"), generation)
 				return resp, nil
 			}
 			// 刷新成功后重试一次
 			// 随机延迟 1-3s，避免固定间隔被检测
 			time.Sleep(time.Duration(1000+rand.Intn(2000)) * time.Millisecond)
-			cookieOpts = CookieOption()
-			opts = buildRequestOptions(CreateGuestReferer(uid))
-			opts = append(opts, cookieOpts...)
+			refreshMu.Lock()
+			if !isGuestMode() || cfg.IsWeiboAPIMode() {
+				refreshMu.Unlock()
+				return resp, nil
+			}
+			generation, opts = snapshotCookieRequest(CreateGuestReferer(uid), true)
+			refreshMu.Unlock()
 			GetUserPage(uid, opts...)
 			guestResp := new(apiContainerGetIndexGuestCardsResponse)
 			err = requests.Get(PathContainerGetIndex_Guest, CreateGuestCardsParam(uid), &guestResp, opts...)
 			if err != nil {
-				markCookieUnhealthy(err)
+				markCookieUnhealthy(err, generation)
 				return nil, err
 			}
 			resp = guestResp.ToCardsResponse()
@@ -227,6 +213,18 @@ func buildRequestOptions(referer string) []requests.Option {
 		requests.TimeoutOption(time.Second * 10),
 		requests.HeaderOption("referer", referer),
 	}
+}
+
+// Read a session and its generation together; a late failure must never be
+// attributed to credentials published after the request began.
+func snapshotCookieRequest(referer string, guest bool) (uint64, []requests.Option) {
+	cookieStateMu.Lock()
+	defer cookieStateMu.Unlock()
+	opts := append(buildRequestOptions(referer), CookieOption()...)
+	if !guest {
+		opts = append(opts, SetXsrfToken(opts))
+	}
+	return sessionGeneration.Load(), opts
 }
 
 type apiContainerGetIndexGuestProfileResponse struct {
@@ -555,14 +553,26 @@ func isGuestMode() bool {
 	return strings.EqualFold(cfg.GetWeiboMode(), "guest")
 }
 
-func markCookieUnhealthy(err error) {
+func markCookieUnhealthy(err error, expected ...uint64) {
+	cookieStateMu.Lock()
+	defer cookieStateMu.Unlock()
+	if len(expected) > 0 && sessionGeneration.Load() != expected[0] {
+		return
+	}
 	if err != nil && isCookieFailure(err) {
 		cookieHealthy.Store(false)
 		consecutiveCookieFails.Inc()
 	}
 }
 
-// isCookieFailure 判断是否是 Cookie 失效导致的错误（API 返回了 HTML）
+func notifySUBExpiredForGeneration(expected uint64) {
+	cookieStateMu.Lock()
+	defer cookieStateMu.Unlock()
+	if sessionGeneration.Load() == expected {
+		NotifySUBExpired()
+	}
+}
+
 func isCookieFailure(err error) bool {
 	if err == nil {
 		return false
@@ -572,28 +582,16 @@ func isCookieFailure(err error) bool {
 		strings.Contains(msg, "looking for beginning of value")
 }
 
-// isAuthFailure 判断错误是否属于明确的凭据失效（非网络层错误）
-// 只把以下情况归类为凭据失效：
-// - Cookie/SUB 失效返回登录页 HTML 导致的 JSON 解析失败（isCookieFailure）
-// - HTTP 401/403 明确鉴权拒绝
-// 其余情况（429 限流、414 请求错误、空响应/截断 JSON、5xx 服务端错误等）按临时错误
-// 或状态未知处理，避免 429/414 等非鉴权错误错误触发凭据失效告警。
+// Only explicit authentication failures invalidate credentials; rate limits,
+// network errors, truncated responses and server failures remain transient.
 func isAuthFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	if isCookieFailure(err) {
-		return true
-	}
-	// 微博明确拒绝凭据的 HTTP 状态码：401 未授权、403 禁止
-	if strings.Contains(msg, "http code error 401") ||
-		strings.Contains(msg, "http code error 403") {
-		return true
-	}
-	return false
+	return isCookieFailure(err) || strings.Contains(err.Error(), "http code error 401") ||
+		strings.Contains(err.Error(), "http code error 403")
 }
 
-func GetUserPage(id int64, Opts ...requests.Option) error {
-	return requests.Get(CreateGuestReferer(id), nil, nil, Opts...)
+func GetUserPage(id int64, opts ...requests.Option) error {
+	return requests.Get(CreateGuestReferer(id), nil, nil, opts...)
 }
