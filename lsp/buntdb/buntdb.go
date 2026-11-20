@@ -5,10 +5,10 @@
 package buntdb
 
 import (
-	"fmt"
 	"github.com/gofrs/flock"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/modern-go/gls"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
 )
 
@@ -31,18 +31,20 @@ type DB struct {
 // dbpath: 数据库文件路径，使用 ":memory:" 创建内存数据库
 // 返回创建的数据库实例和可能的错误
 // 示例:
-// 
+//
 // db, err := buntdb.NewDB(":memory:")
-// if err != nil {
-//     log.Fatal(err)
-// }
+//
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
 // defer db.Close()
-// 
+//
 // // 使用 db 进行操作
 func NewDB(dbpath string) (*DB, error) {
 	var buntDB *buntdb.DB
 	var fileLock *flock.Flock
-	
+
 	if dbpath == "" {
 		dbpath = LSPDB
 	}
@@ -51,7 +53,7 @@ func NewDB(dbpath string) (*DB, error) {
 		fileLock = flock.New(dblock)
 		ok, err := fileLock.TryLock()
 		if err != nil {
-			fmt.Printf("buntdb tryLock err: %v", err)
+			logrus.WithError(err).Error("buntdb tryLock 失败")
 		}
 		if !ok {
 			return nil, ErrLockNotHold
