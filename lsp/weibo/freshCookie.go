@@ -172,10 +172,12 @@ func refreshLoginXsrfToken(jar *cookiejar.Jar, ua string) error {
 }
 
 func FreshCookieGuest() ([]*http.Cookie, error) {
-	jar, _ := cookiejar.New(nil)
-
 	ua := requests.RandomUA(requests.Chrome)
-	visitorUA.Store(ua)
+	return freshCookieGuestWithUA(ua)
+}
+
+func freshCookieGuestWithUA(ua string) ([]*http.Cookie, error) {
+	jar, _ := cookiejar.New(nil)
 
 	// 取 rid 和 UA（本地随机生成）
 	info, err := getRid(ua)
@@ -236,16 +238,18 @@ func FreshCookieGuest() ([]*http.Cookie, error) {
 	if err != nil {
 		panic(fmt.Sprintf("path %v url parse error", pathWeiboCN))
 	}
-	visitorUA.Store(ua)
 	return jar.Cookies(cookieUrl), nil
 }
 
 func FreshCookieLogin() ([]*http.Cookie, error) {
+	ua := requests.RandomUA(requests.Chrome)
+	return freshCookieLoginWithUA(ua)
+}
+
+func freshCookieLoginWithUA(ua string) ([]*http.Cookie, error) {
 	jar, _ := cookiejar.New(nil)
 
 	// 使用随机 UA 并存储
-	ua := requests.RandomUA(requests.Chrome)
-	visitorUA.Store(ua)
 
 	genVisitorResp, err := genvisitorLogin(requests.WithCookieJar(jar), requests.AddUAOption(ua))
 	if err != nil {
@@ -301,7 +305,15 @@ func FreshCookie() ([]*http.Cookie, error) {
 // TryRefreshGuestCookie 尝试刷新 Guest Cookie
 // 刷新后丢弃旧的 Cookie，用新的替代
 // 如果在暂停期内（-100 频率限制），则跳过刷新
-func TryRefreshGuestCookie() bool {
+func TryRefreshGuestCookie(expected ...uint64) bool {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	if len(expected) > 0 && sessionGeneration.Load() != expected[0] {
+		return false
+	}
+	if !isGuestMode() || cfg.IsWeiboAPIMode() {
+		return false
+	}
 	// 检查是否在暂停期内（-100 频率限制触发）
 	now := time.Now().Unix()
 	if freshCookiePauseUntil.Load() > now {
@@ -310,7 +322,8 @@ func TryRefreshGuestCookie() bool {
 	}
 
 	logger.Info("检测到 -100/432 错误，开始刷新 Guest Cookie")
-	cookies, err := FreshCookieGuest()
+	ua := requests.RandomUA(requests.Chrome)
+	cookies, err := freshCookieGuestWithUA(ua)
 	if err != nil {
 		logger.Errorf("刷新 Guest Cookie 失败: %v", err)
 		return false
@@ -321,7 +334,7 @@ func TryRefreshGuestCookie() bool {
 	for _, cookie := range cookies {
 		opt = append(opt, requests.CookieOption(cookie.Name, cookie.Value))
 	}
-	visitorCookiesOpt.Store(opt)
+	storeCookieOptions(opt, ua)
 
 	logger.Infof("Guest Cookie 刷新成功，已更新到内存")
 	return true
@@ -344,7 +357,8 @@ func ForceFreshCookie() bool {
 
 	if isGuestMode() {
 		// Guest 模式：直接刷新全部 cookie
-		cookies, err := FreshCookieGuest()
+		ua := requests.RandomUA(requests.Chrome)
+		cookies, err := freshCookieGuestWithUA(ua)
 		if err != nil {
 			fails := consecutiveCookieFails.Inc()
 			cookieHealthy.Store(false)
@@ -355,7 +369,7 @@ func ForceFreshCookie() bool {
 		for _, cookie := range cookies {
 			opt = append(opt, requests.CookieOption(cookie.Name, cookie.Value))
 		}
-		visitorCookiesOpt.Store(opt)
+		storeCookieOptions(opt, ua)
 		cookieHealthy.Store(true)
 		consecutiveCookieFails.Store(0)
 		logger.Infof("微博 Guest Cookie 刷新成功")
@@ -382,7 +396,8 @@ func ForceFreshCookie() bool {
 		}
 	}
 
-	cookies, err := FreshCookieLogin()
+	ua := requests.RandomUA(requests.Chrome)
+	cookies, err := freshCookieLoginWithUA(ua)
 	if err != nil {
 		fails := consecutiveCookieFails.Inc()
 		cookieHealthy.Store(false)
@@ -423,7 +438,7 @@ func ForceFreshCookie() bool {
 		opt = append(opt, requests.CookieOption("XSRF-TOKEN", existingXSRF))
 	}
 
-	visitorCookiesOpt.Store(opt)
+	storeCookieOptions(opt, ua)
 	cookieHealthy.Store(true)
 	consecutiveCookieFails.Store(0)
 	logger.Infof("微博 Login Cookie 刷新成功（保留 SUB 和 XSRF-TOKEN）")
@@ -436,9 +451,15 @@ func extractCookieValue(opts []requests.Option, name string) string {
 
 // RefreshSessionCookie 刷新会话 cookie（XSRF-TOKEN、WBPSESS 等），保留 SUB
 // 用于 Cookie 失效时自动恢复，不影响用户登录状态
-func RefreshSessionCookie() bool {
+func RefreshSessionCookie(expected ...uint64) bool {
 	refreshMu.Lock()
 	defer refreshMu.Unlock()
+	if len(expected) > 0 && sessionGeneration.Load() != expected[0] {
+		return false
+	}
+	if isGuestMode() || cfg.IsWeiboAPIMode() {
+		return false
+	}
 
 	// 获取当前的 SUB
 	currentOpts := CookieOption()
@@ -452,7 +473,8 @@ func RefreshSessionCookie() bool {
 	}
 
 	// 获取新的会话 cookie
-	cookies, err := FreshCookieLogin()
+	ua := requests.RandomUA(requests.Chrome)
+	cookies, err := freshCookieLoginWithUA(ua)
 	if err != nil {
 		logger.Errorf("RefreshSessionCookie: FreshCookieLogin 失败: %v", err)
 		return false
@@ -470,14 +492,19 @@ func RefreshSessionCookie() bool {
 	// 添加保留的 SUB
 	opt = append(opt, requests.CookieOption("SUB", existingSUB))
 
-	visitorCookiesOpt.Store(opt)
+	storeCookieOptions(opt, ua)
 	logger.Infof("会话 cookie 已刷新，保留 SUB，共加载 %d 个 cookie", len(opt))
 	return true
 }
 
 // PauseRefreshOnRateLimit 当触发 -100（频率限制）时暂停刷新
 // pauseDuration 暂停时长，默认 10 分钟
-func PauseRefreshOnRateLimit(pauseDuration time.Duration) {
+func PauseRefreshOnRateLimit(pauseDuration time.Duration, expected ...uint64) {
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
+	if len(expected) > 0 && sessionGeneration.Load() != expected[0] {
+		return
+	}
 	if pauseDuration == 0 {
 		pauseDuration = time.Minute * 10
 	}

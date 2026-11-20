@@ -15,7 +15,11 @@ func (tc *TwitCastConcern) GetIsLive(user string) (*LiveStatus, error) {
 		Living: true, // 一开始为正在直播，直到 404 错误出现
 	}
 
-	movie, err := tc.client.UserCurrentLive(user)
+	client, err := tc.clientSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	movie, err := client.UserCurrentLive(user)
 
 	if err != nil {
 		// 没有直播

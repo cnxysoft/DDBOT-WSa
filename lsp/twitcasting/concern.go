@@ -11,6 +11,7 @@ import (
 	"github.com/nobuf/cas"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var logger = utils.GetModuleLogger("twitcasting-concern")
@@ -28,7 +29,11 @@ func (tc *TwitCastConcern) getUserName(id string) (*string, error) {
 		return &name, nil
 	}
 
-	userInfo, err := tc.client.User(id)
+	client, err := tc.clientSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	userInfo, err := client.User(id)
 
 	if err != nil {
 		return nil, err
@@ -69,7 +74,7 @@ func (tc *tcStateManager) GetGroupConcernConfig(groupCode int64, id interface{})
 
 type TwitCastConcern struct {
 	*tcStateManager
-	client *cas.Client
+	client atomic.Pointer[cas.Client]
 }
 
 func (tc *TwitCastConcern) Site() string {
@@ -118,6 +123,9 @@ func (tc *TwitCastConcern) removeLastStatus(id string) error {
 func (tc *TwitCastConcern) tcFresh() concern.FreshFunc {
 
 	return tc.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
+		if tc.client.Load() == nil {
+			return nil, nil
+		}
 		userId := id.(string)
 
 		// 恢复原本 userId
@@ -126,6 +134,9 @@ func (tc *TwitCastConcern) tcFresh() concern.FreshFunc {
 		logger.Tracef("正在检测 Twitcasting 用户 (%v) 的直播状态..", userId)
 
 		liveStatus, err := tc.GetIsLive(userId)
+		if err != nil {
+			return nil, err
+		}
 
 		var movieId int
 
@@ -199,7 +210,11 @@ func (tc *TwitCastConcern) tcFresh() concern.FreshFunc {
 					username = name.(string)
 				} else {
 
-					user, err := tc.client.User(userId)
+					client, clientErr := tc.clientSnapshot()
+					if clientErr != nil {
+						return nil, clientErr
+					}
+					user, err := client.User(userId)
 
 					if err != nil {
 						logger.Warnf("刷新用户名时出现错误: %v", err)
@@ -246,24 +261,18 @@ func (tc *TwitCastConcern) tcNotifyGenerator() concern.NotifyGeneratorFunc {
 
 func (tc *TwitCastConcern) Start() error {
 	tc.UseEmitQueue()
-
-	if config.GlobalConfig.Get("twitcasting") == nil {
-		return fmt.Errorf("找不到 TwitCasting 配置， TC 订阅将不会启动。")
-	}
-
-	tc.client = cas.New(config.GlobalConfig.GetString("twitcasting.clientId"), config.GlobalConfig.GetString("twitcasting.clientSecret"))
+	id, secret := strings.TrimSpace(config.GlobalConfig.GetString("twitcasting.clientId")), strings.TrimSpace(config.GlobalConfig.GetString("twitcasting.clientSecret"))
 
 	tc.UseFreshFunc(tc.tcFresh())
 	tc.UseNotifyGeneratorFunc(tc.tcNotifyGenerator())
 
-	// 检查 config 中的 twitcasting token 是否有效
-	if _, err := tc.client.RecommendedLives(); err != nil {
-		// 无效 token
-		if tcErr, ok := err.(*cas.RequestError); ok && tcErr.Content.Code == 1000 {
-			return fmt.Errorf("无效的 TwitCasting API Token, 你请确保你填写了正确的 Twitcasting token 资料")
-		} else {
-			return err
+	if id != "" && secret != "" {
+		tc.client.Store(cas.New(id, secret))
+		if err := validateCredentials(id, secret, cas.TwitCastingAPI); err != nil {
+			logger.Warn("TwitCasting 认证暂不可用，保留调度继续重试；也可保存新凭据")
 		}
+	} else {
+		logger.Info("TwitCasting 凭据未配置，暂停轮询；保存有效凭据后自动恢复")
 	}
 
 	return tc.StateManager.Start()
@@ -352,7 +361,7 @@ func (tc *TwitCastConcern) GetStateManager() concern.IStateManager {
 // 如果 ParseId 中选择了int64类型， 则此处可以选择 concern.NewStateManagerWithInt64ID
 func NewConcern(notify chan<- concern.Notify) *TwitCastConcern {
 	sm := &tcStateManager{concern.NewStateManagerWithStringID(Site, notify)}
-	return &TwitCastConcern{sm, nil}
+	return &TwitCastConcern{tcStateManager: sm}
 }
 
 // init 向框架注册这个插件，引用这个插件即可使用

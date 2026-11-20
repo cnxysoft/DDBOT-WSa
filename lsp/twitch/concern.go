@@ -90,27 +90,19 @@ func (c *TwitchConcern) GetStateManager() concern.IStateManager {
 
 // Start 初始化 Twitch API 凭据并启动轮询
 func (c *TwitchConcern) Start() error {
-	if config.GlobalConfig.Get("twitch") == nil {
-		logger.Errorf("找不到 Twitch 配置，Twitch 订阅将不会启动")
-		return fmt.Errorf("找不到 Twitch 配置，Twitch 订阅将不会启动。")
-	}
-
 	clientId := config.GlobalConfig.GetString("twitch.clientId")
 	clientSecret := config.GlobalConfig.GetString("twitch.clientSecret")
-
-	if clientId == "" || clientSecret == "" {
-		logger.Errorf("twitch.clientId 和 twitch.clientSecret 不能为空，请在 application.yaml 中配置")
-		return fmt.Errorf("twitch.clientId 和 twitch.clientSecret 不能为空，请在 application.yaml 中配置")
-	}
 
 	logger.Debug("正在初始化 Twitch API 凭据")
 	InitToken(clientId, clientSecret)
 
 	// 验证凭据有效性
-	_, err := getAccessToken()
-	if err != nil {
-		logger.Errorf("Twitch API 认证失败: %v", err)
-		return fmt.Errorf("Twitch API 认证失败: %w", err)
+	if tokenStore.configured() {
+		if _, err := getAccessToken(); err != nil {
+			logger.Warn("Twitch API 认证暂不可用，后台保留调度，等待凭据更新")
+		}
+	} else {
+		logger.Info("Twitch 凭据未配置，暂停轮询；保存有效凭据后自动恢复")
 	}
 
 	c.UseFreshFunc(c.fresh())
@@ -130,15 +122,9 @@ func (c *TwitchConcern) Stop() {
 func (c *TwitchConcern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		// 直接读取 twitch.interval，不使用 GetEmitIntervalForSite（它会 fallback 到 concern.emitInterval）
-		interval := config.GlobalConfig.GetDuration("twitch.interval")
-		if interval <= 0 {
-			interval = time.Second * 30
-		}
+		defer t.Stop()
+
 		var freshCount atomic.Int32
-		if !cfg.GetTwitchOnlyOnlineNotify() {
-			freshCount.Store(1000)
-		}
 		for {
 			select {
 			case <-t.C:
@@ -147,7 +133,11 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(interval)
+				t.Reset(cfg.PollInterval("twitch", 30*time.Second))
+				continue
+			}
+			if !tokenStore.configured() {
+				t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 				continue
 			}
 			start := time.Now()
@@ -177,7 +167,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 					logger.Errorf("GetStreamsByLogins error %v", err)
 					// API 失败时跳过本次轮询，避免空 liveMap 将所有频道误判为下播
 					freshCount.Add(1)
-					t.Reset(interval)
+					t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 					continue
 				}
 				for i := range streams {
@@ -204,7 +194,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 						event := c.buildLiveEvent(login, stream, isLive, false, nil)
 						title = event.Title
 						event.liveStatusChanged = true
-						if freshCount.Load() >= freshCountLiveThreshold {
+						if !cfg.GetTwitchOnlyOnlineNotify() || freshCount.Load() >= freshCountLiveThreshold {
 							eventChan <- event
 						}
 					}
@@ -220,7 +210,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 							event := c.buildLiveEvent(login, stream, isLive, hasLast, last)
 							event.titleChanged = true
 							event.liveStatusChanged = false
-							if freshCount.Load() >= freshCountLiveThreshold {
+							if !cfg.GetTwitchOnlyOnlineNotify() || freshCount.Load() >= freshCountLiveThreshold {
 								eventChan <- event
 							}
 							c.updateLastStatus(login, &LastStatus{Live: isLive, Title: stream.Title})
@@ -235,13 +225,13 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 				if isLive {
 					// 开播
 					event.liveStatusChanged = true
-					if freshCount.Load() >= freshCountLiveThreshold {
+					if !cfg.GetTwitchOnlyOnlineNotify() || freshCount.Load() >= freshCountLiveThreshold {
 						eventChan <- event
 					}
 				} else {
 					// 下播
 					event.liveStatusChanged = true
-					if freshCount.Load() >= freshCountOfflineThreshold {
+					if !cfg.GetTwitchOnlyOnlineNotify() || freshCount.Load() >= freshCountOfflineThreshold {
 						eventChan <- event
 					}
 				}
@@ -251,7 +241,7 @@ func (c *TwitchConcern) fresh() concern.FreshFunc {
 			freshCount.Add(1)
 			end := time.Now()
 			logger.WithField("cost", end.Sub(start)).Tracef("twitch fresh loop done")
-			t.Reset(interval)
+			t.Reset(cfg.PollInterval("twitch", 30*time.Second))
 		}
 	}
 }

@@ -1,4 +1,4 @@
-/* 推送记录页（依赖 app.js 的 $/esc/apiJSON/token/showLogin/PLATFORM_META） */
+/* 推送记录页（依赖 app.js 的 $/esc/apiJSON/createAuthStream/PLATFORM_META） */
 window.PushPage = (() => {
   let sseConnected = false;
   let inited = false;
@@ -94,37 +94,8 @@ window.PushPage = (() => {
     $('#push-status-filter').addEventListener('change', render);
   }
 
-  async function connectStream() {
-    if (!token) return;
-    try {
-      const resp = await fetch('/api/v1/pushes/stream', {
-        headers: { Authorization: 'Bearer ' + token },
-      });
-      if (resp.status === 401) { showLogin(); return; }
-      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
-      setSSE(true);
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const frame = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          const data = frame.split('\n').find((l) => l.startsWith('data: '));
-          if (!data) continue;
-          try { append(JSON.parse(data.slice(6))); } catch {}
-        }
-      }
-    } catch (e) { /* fallthrough */ }
-    setSSE(false);
-    setTimeout(() => {
-      if ($('#page-pushes') && $('#page-pushes').classList.contains('active')) connectStream();
-    }, 3000);
-  }
+  const stream = createAuthStream('/api/v1/pushes/stream', setSSE, append,
+    () => $('#page-pushes')?.classList.contains('active'));
 
   // dedupeKey：SSE 回放可能与 REST 历史重叠，按内容特征去重
   function dedupeKey(e) {
@@ -132,8 +103,10 @@ window.PushPage = (() => {
   }
 
   async function loadHistory() {
+    const session = authSession();
     try {
       const data = await apiJSON('/api/v1/pushes?limit=500');
+      if (!isCurrentAuth(session)) return;
       const seen = new Set(buffer.map(dedupeKey));
       for (const e of data.pushes || []) {
         if (!seen.has(dedupeKey(e))) { buffer.push(e); seen.add(dedupeKey(e)); }
@@ -147,8 +120,8 @@ window.PushPage = (() => {
   function enter() {
     init();
     loadHistory();
-    if (!sseConnected) connectStream();
+    if (!sseConnected) stream.connect();
   }
 
-  return { enter };
+  return { enter, stop: stream.stop };
 })();

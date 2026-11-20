@@ -57,10 +57,7 @@ func (pool *LoliconPool) store() {
 	for k, v := range pool.cache {
 		var img []*Setu
 		root := v.Front()
-		if root == nil {
-			continue
-		}
-		for {
+		for root != nil {
 			img = append(img, root.Value.(*Setu))
 			if root == v.Back() {
 				break

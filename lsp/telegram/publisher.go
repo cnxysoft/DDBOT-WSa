@@ -1,206 +1,363 @@
 package telegram
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sirupsen/logrus"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
-	"sync"
-	"time"
 )
 
-var (
-	log         = logrus.WithField("module", "telegram")
-	initOnce    sync.Once
-	bot         *tgbotapi.BotAPI
-	enabled     bool
-	initErr     error
-	globalChats []int64 // independent telegram chat ids
-)
+var log = logrus.WithField("module", "telegram")
 
-// recvOnce ensures we only start one receiving loop
-var recvOnce sync.Once
+var managerMu sync.RWMutex
+var prepareMu sync.Mutex
+var current *generation
+var globalChats []int64
+var receiver func(chatID, fromID int64, text string)
+var initialized bool
+var offsets = make(map[string]int)
+var dispatchOnce sync.Once
+var dispatchQueue = make(chan incomingText, 100)
+var activeCommands sync.WaitGroup
 
-// Publish sends MSG to globally configured Telegram chats (independent of QQ).
-func Publish(m *mmsg.MSG) {
-	if m == nil {
-		return
+type incomingText struct {
+	g              *generation
+	handler        func(int64, int64, string)
+	chatID, fromID int64
+	text           string
+}
+
+type generation struct {
+	bot      *tgbotapi.BotAPI
+	token    string
+	endpoint string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	polling  bool // protected by managerMu
+	client   *http.Client
+}
+
+type pollingClient struct {
+	client *http.Client
+	ctx    context.Context
+}
+
+func (c pollingClient) Do(req *http.Request) (*http.Response, error) {
+	// Cancel long polls on retirement; sends already in progress may finish.
+	if strings.HasSuffix(req.URL.Path, "/getUpdates") {
+		req = req.Clone(c.ctx)
 	}
+	return c.client.Do(req)
+}
+
+func snapshotBot() *tgbotapi.BotAPI {
 	if !ensureInit() {
+		return nil
+	}
+	managerMu.RLock()
+	defer managerMu.RUnlock()
+	if current == nil {
+		return nil
+	}
+	return current.bot
+}
+
+func Publish(m *mmsg.MSG) {
+	if m == nil || !ensureInit() {
 		return
 	}
-	if len(globalChats) == 0 {
+	managerMu.RLock()
+	g := current
+	chats := append([]int64(nil), globalChats...)
+	managerMu.RUnlock()
+	if g == nil {
 		return
 	}
-	// Convert DDBOT MSG to SendingMessage list
 	sms := m.ToMessage(mmsg.NewGroupTarget(0))
-	for _, chatID := range globalChats {
+	for _, chatID := range chats {
 		for _, sm := range sms {
-			go sendToTelegram(chatID, sm)
+			go sendToTelegramWithBot(g.bot, chatID, sm)
 		}
 	}
 }
 
 func ensureInit() bool {
-	initOnce.Do(func() {
-		enabled = config.GlobalConfig.GetBool("telegram.enable")
-		if !enabled {
-			return
-		}
-		token := config.GlobalConfig.GetString("telegram.token")
-		if token == "" {
-			initErr = Err("telegram.token is empty")
-			return
-		}
-		// Parse global independent chats: telegram.chats: ["-1002003004005", "-1009998887777"]
-		globalChats = nil
-		for _, s := range config.GlobalConfig.GetStringSlice("telegram.chats") {
-			id := parseInt64(strings.TrimSpace(s))
-			if id != 0 {
-				globalChats = append(globalChats, id)
+	managerMu.RLock()
+	ready := initialized
+	managerMu.RUnlock()
+	if !ready {
+		commit, abort, err := PrepareRuntimeReload(nil, config.GlobalConfig.Snapshot())
+		if err != nil {
+			if abort != nil {
+				abort()
 			}
+			log.Warn("Telegram 初始化失败，请检查凭据与连接")
+			return false
 		}
+		if commit != nil {
+			commit()
+		}
+	}
+	managerMu.RLock()
+	defer managerMu.RUnlock()
+	return current != nil
+}
 
-		// Build tuned HTTP client (with or without proxy)
-		httpClient := buildTelegramHTTPClient()
-		// Determine API endpoint
-		endpoint := config.GlobalConfig.GetString("telegram.endpoint")
+// PrepareRuntimeReload authorizes a new client before persistence. A rejected
+// candidate cannot overwrite the live client, chats, or receiving offset.
+func PrepareRuntimeReload(previous, next *config.Snapshot) (func(), func(), error) {
+	return PrepareRuntimeReloadWithProxy(previous, next, nil)
+}
+
+func PrepareRuntimeReloadWithProxy(previous, next *config.Snapshot, getter proxy_pool.Getter) (func(), func(), error) {
+	if previous != nil && reflect.DeepEqual(previous.Get("telegram"), next.Get("telegram")) {
+		return nil, nil, nil
+	}
+	prepareMu.Lock()
+	managerMu.RLock()
+	old := current
+	alreadyInitialized := initialized
+	managerMu.RUnlock()
+	// A concurrent lazy initializer may have finished while we waited.
+	if previous == nil && alreadyInitialized {
+		prepareMu.Unlock()
+		return nil, nil, nil
+	}
+	var chats []int64
+	for _, value := range next.GetStringSlice("telegram.chats") {
+		id, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil || id == 0 {
+			prepareMu.Unlock()
+			return nil, nil, fmt.Errorf("telegram.chats 包含无效聊天 ID")
+		}
+		chats = append(chats, id)
+	}
+	var candidate *generation
+	if next.GetBool("telegram.enable") {
+		token := strings.TrimSpace(next.GetString("telegram.token"))
+		endpoint := next.GetString("telegram.endpoint")
 		if endpoint == "" {
 			endpoint = tgbotapi.APIEndpoint
 		}
-		// Create bot with explicit endpoint and client
-		b, err := tgbotapi.NewBotAPIWithClient(token, endpoint, httpClient)
-		if err != nil {
-			initErr = err
-			return
+		if token == "" {
+			prepareMu.Unlock()
+			return nil, nil, fmt.Errorf("telegram.token 不能为空")
 		}
-		bot = b
-		log.Infof("telegram bot authorized as %s", bot.Self.UserName)
-	})
-	if !enabled || initErr != nil || bot == nil {
-		if initErr != nil {
-			log.WithError(initErr).Error("telegram init failed")
+		if old != nil && old.token == token && old.endpoint == endpoint {
+			candidate = old
+		} else {
+			ctx, cancel := context.WithCancel(context.Background())
+			client := buildTelegramHTTPClientWithProxy(getter)
+			client.Timeout = 75 * time.Second
+			b, err := tgbotapi.NewBotAPIWithClient(token, endpoint, pollingClient{client, ctx})
+			if err != nil {
+				cancel()
+				client.CloseIdleConnections()
+				prepareMu.Unlock()
+				return nil, nil, fmt.Errorf("Telegram 授权失败，请检查 token、endpoint 与网络连接")
+			}
+			candidate = &generation{bot: b, token: token, endpoint: endpoint, ctx: ctx, cancel: cancel, done: make(chan struct{}), client: client}
 		}
-		return false
 	}
-	return true
+	var once sync.Once
+	abort := func() {
+		once.Do(func() {
+			if candidate != nil && candidate != old {
+				candidate.cancel()
+				candidate.client.CloseIdleConnections()
+			}
+			prepareMu.Unlock()
+		})
+	}
+	commit := func() {
+		once.Do(func() {
+			// Stop old polls before publishing the next receiver. No user callback runs
+			// in the polling goroutine, so saving config from a command cannot deadlock.
+			if old != nil && old != candidate {
+				old.cancel()
+				managerMu.RLock()
+				polling := old.polling
+				managerMu.RUnlock()
+				if polling {
+					<-old.done
+				}
+				old.client.CloseIdleConnections()
+			}
+			managerMu.Lock()
+			current = candidate
+			globalChats = chats
+			initialized = true
+			startReceiverLocked(candidate)
+			managerMu.Unlock()
+			prepareMu.Unlock()
+		})
+	}
+	return commit, abort, nil
 }
 
-// reinitTelegram re-creates the Telegram bot client using current config.
-func reinitTelegram() error {
-	if !config.GlobalConfig.GetBool("telegram.enable") {
-		return Err("telegram disabled")
-	}
-	token := config.GlobalConfig.GetString("telegram.token")
-	if token == "" {
-		return Err("telegram.token is empty")
-	}
-	httpClient := buildTelegramHTTPClient()
-	endpoint := config.GlobalConfig.GetString("telegram.endpoint")
-	if endpoint == "" {
-		endpoint = tgbotapi.APIEndpoint
-	}
-	b, err := tgbotapi.NewBotAPIWithClient(token, endpoint, httpClient)
-	if err != nil {
-		return err
-	}
-	bot = b
-	log.Infof("telegram bot re-authorized as %s", bot.Self.UserName)
-	return nil
-}
-
-// SendToChat sends the given MSG to a specific Telegram chat.
-// It converts the MSG into one or more SendingMessage chunks and streams them out.
 func SendToChat(chatID int64, m *mmsg.MSG) {
 	if m == nil {
 		return
 	}
-	if !ensureInit() {
+	b := snapshotBot()
+	if b == nil {
 		return
 	}
-	// Use group target 0 when building messages (no QQ routing semantics)
-	sms := m.ToMessage(mmsg.NewGroupTarget(0))
-	for _, sm := range sms {
-		sendToTelegram(chatID, sm)
+	for _, sm := range m.ToMessage(mmsg.NewGroupTarget(0)) {
+		sendToTelegramWithBot(b, chatID, sm)
 	}
 }
 
-// StartReceiving begins a long-polling loop delivering plain-text Telegram messages
-// to the provided callback. It is safe to call multiple times; the loop will start once.
-func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
+// StartReceiving registers the handler even while disabled, enabling off->on.
+func StartReceiving(onText func(chatID, fromID int64, text string)) {
 	if onText == nil {
 		return
 	}
-	if !ensureInit() {
-		return
-	}
-	recvOnce.Do(func() {
+	dispatchOnce.Do(func() {
 		go func() {
-			log.Info("telegram receiving loop started")
-			var offset int = 0
-			var backoff time.Duration = 3 * time.Second
-			const maxBackoff = 60 * time.Second
-			consecutiveErrs := 0
-			for {
-				u := tgbotapi.NewUpdate(offset)
-				u.Timeout = 60
-				u.AllowedUpdates = []string{"message", "edited_message", "channel_post"}
-				updates, err := bot.GetUpdates(u)
-				if err != nil {
-					consecutiveErrs++
-					log.WithError(err).
-						WithField("offset", offset).
-						WithField("backoff", backoff.String()).
-						WithField("consecutive", consecutiveErrs).
-						Warn("telegram getUpdates failed; retrying")
-					time.Sleep(backoff)
-					if backoff < maxBackoff {
-						backoff *= 2
-						if backoff > maxBackoff {
-							backoff = maxBackoff
-						}
-					}
-					if consecutiveErrs%5 == 0 {
-						if err := reinitTelegram(); err != nil {
-							log.WithError(err).Warn("telegram reinit failed")
-						} else {
-							log.Info("telegram reinitialized after errors")
-						}
-					}
-					continue
-				}
-				if len(updates) > 0 {
-					log.WithField("count", len(updates)).Debug("telegram updates received")
-				}
-				consecutiveErrs = 0
-				backoff = 3 * time.Second
-				for _, update := range updates {
-					if update.UpdateID >= offset {
-						offset = update.UpdateID + 1
-					}
-					if update.Message == nil || update.Message.From == nil {
-						continue
-					}
-					txt := strings.TrimSpace(update.Message.Text)
-					if txt == "" {
-						continue
-					}
-					log.WithField("chat", update.Message.Chat.ID).
-						WithField("from", update.Message.From.ID).
-						WithField("offset", offset).
-						Debug("telegram incoming text")
-					onText(update.Message.Chat.ID, update.Message.From.ID, txt)
-				}
+			for message := range dispatchQueue {
+				dispatch(message)
 			}
 		}()
 	})
+	managerMu.Lock()
+	receiver = onText
+	managerMu.Unlock()
+	if !ensureInit() {
+		return
+	}
+	managerMu.Lock()
+	startReceiverLocked(current)
+	managerMu.Unlock()
+}
+
+func dispatch(message incomingText) {
+	managerMu.Lock()
+	if message.g == nil || current != message.g || message.g.ctx.Err() != nil {
+		managerMu.Unlock()
+		return
+	}
+	activeCommands.Add(1)
+	managerMu.Unlock()
+	defer activeCommands.Done()
+	defer func() {
+		if recover() != nil {
+			log.Error("Telegram 命令处理异常")
+		}
+	}()
+	message.handler(message.chatID, message.fromID, message.text)
+}
+
+func startReceiverLocked(g *generation) {
+	if g == nil || g.polling || receiver == nil {
+		return
+	}
+	g.polling = true
+	go g.receive()
+}
+
+func (g *generation) receive() {
+	defer close(g.done)
+	backoff := time.Second
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		default:
+		}
+		managerMu.RLock()
+		offset := offsets[g.token]
+		managerMu.RUnlock()
+		u := tgbotapi.NewUpdate(offset)
+		u.Timeout = 60
+		u.AllowedUpdates = []string{"message", "edited_message", "channel_post"}
+		updates, err := g.bot.GetUpdates(u)
+		if g.ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Warn("Telegram 接收失败，将重试")
+			select {
+			case <-g.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = time.Second
+		for _, update := range updates {
+			managerMu.Lock()
+			if g.ctx.Err() != nil || current != g {
+				managerMu.Unlock()
+				return
+			}
+			if update.UpdateID >= offsets[g.token] {
+				offsets[g.token] = update.UpdateID + 1
+			}
+			handler := receiver
+			managerMu.Unlock()
+			message := update.Message
+			if message == nil {
+				message = update.EditedMessage
+			}
+			if message == nil {
+				message = update.ChannelPost
+			}
+			if message == nil || message.From == nil || message.Chat == nil || handler == nil {
+				continue
+			}
+			text := strings.TrimSpace(message.Text)
+			if text != "" {
+				// A separate serial worker preserves command order and allows a
+				// command to save config while the old long poll is cancelled.
+				select {
+				case dispatchQueue <- incomingText{g, handler, message.Chat.ID, message.From.ID, text}:
+				case <-g.ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+// Close retires the current poller; existing sends are allowed to complete.
+func Close() {
+	prepareMu.Lock()
+	managerMu.Lock()
+	old := current
+	current = nil
+	initialized = true
+	managerMu.Unlock()
+	if old != nil {
+		old.cancel()
+		if old.polling {
+			<-old.done
+		}
+		old.client.CloseIdleConnections()
+	}
+	// Release prepareMu before waiting: a running command may itself save config.
+	// The application closes its config manager first, so no new generation starts.
+	prepareMu.Unlock()
+	activeCommands.Wait()
 }
 
 // buildTelegramHTTPClient constructs an *http.Client using the global proxy pool
@@ -208,6 +365,14 @@ func StartReceiving(onText func(chatID int64, fromID int64, text string)) {
 // 代理池未初始化或无可用代理时直连。
 // 支持 http(s) 与 socks5 代理 URL（http.Transport.Proxy 原生支持 socks5 scheme）。
 func buildTelegramHTTPClient() *http.Client {
+	return buildTelegramHTTPClientWithProxy(nil)
+}
+
+func buildTelegramHTTPClientWithProxy(getter proxy_pool.Getter) *http.Client {
+	strict := getter != nil
+	if getter == nil {
+		getter = proxy_pool.Get
+	}
 	// Base transport with conservative timeouts suitable for long-polling
 	tr := &http.Transport{
 		MaxIdleConns:          100,
@@ -218,18 +383,28 @@ func buildTelegramHTTPClient() *http.Client {
 		ResponseHeaderTimeout: 70 * time.Second, // > long-poll Timeout
 		ForceAttemptHTTP2:     false,            // more stable with some proxies
 	}
-	if p, err := proxy_pool.Get(proxy_pool.PreferOversea); err == nil && p != nil {
-		proxyURL := p.ProxyString()
-		if u, err := url.Parse(proxyURL); err == nil && u.Scheme != "" {
-			tr.Proxy = http.ProxyURL(u)
-			log.WithField("proxy", proxyURL).Info("telegram 将经由全局代理池(oversea)连接")
-		} else {
-			log.Warnf("全局代理池返回的代理地址无法解析，telegram 直连: %s", proxyURL)
+	tr.Proxy = func(req *http.Request) (*url.URL, error) {
+		p, err := getter(proxy_pool.PreferOversea)
+		if errors.Is(err, proxy_pool.ErrNil) || (!strict && (err != nil || p == nil)) {
+			return nil, nil
 		}
-	} else {
-		log.Debug("全局代理池不可用或未配置代理，telegram 直连")
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, fmt.Errorf("Telegram 代理选择器未返回有效路由")
+		}
+		u, err := url.Parse(p.ProxyString())
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			if !strict {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("Telegram 代理地址无效")
+		}
+		return u, nil
 	}
-	return &http.Client{Transport: tr}
+
+	return &http.Client{Transport: tr, Timeout: 75 * time.Second}
 }
 
 func parseInt64(s string) int64 {
@@ -252,6 +427,12 @@ func parseInt64(s string) int64 {
 }
 
 func sendToTelegram(chatID int64, sm *adapter.SendingMessage) {
+	if b := snapshotBot(); b != nil {
+		sendToTelegramWithBot(b, chatID, sm)
+	}
+}
+
+func sendToTelegramWithBot(bot *tgbotapi.BotAPI, chatID int64, sm *adapter.SendingMessage) {
 	if sm == nil || bot == nil {
 		return
 	}
@@ -281,17 +462,17 @@ func sendToTelegram(chatID int64, sm *adapter.SendingMessage) {
 	caption := tb.String()
 	switch {
 	case len(videos) > 0:
-		sendVideo(chatID, videos[0], caption)
+		sendVideo(bot, chatID, videos[0], caption)
 		for i := 1; i < len(videos); i++ {
-			sendVideo(chatID, videos[i], "")
+			sendVideo(bot, chatID, videos[i], "")
 		}
 		for _, img := range images {
-			sendPhoto(chatID, img, "")
+			sendPhoto(bot, chatID, img, "")
 		}
 	case len(images) > 0:
-		sendPhoto(chatID, images[0], caption)
+		sendPhoto(bot, chatID, images[0], caption)
 		for i := 1; i < len(images); i++ {
-			sendPhoto(chatID, images[i], "")
+			sendPhoto(bot, chatID, images[i], "")
 		}
 	default:
 		if len(caption) > 0 {
@@ -303,7 +484,7 @@ func sendToTelegram(chatID int64, sm *adapter.SendingMessage) {
 	}
 }
 
-func sendPhoto(chatID int64, img *adapter.ImageSegment, caption string) {
+func sendPhoto(bot *tgbotapi.BotAPI, chatID int64, img *adapter.ImageSegment, caption string) {
 	if img == nil || bot == nil {
 		return
 	}
@@ -338,7 +519,7 @@ func sendPhoto(chatID int64, img *adapter.ImageSegment, caption string) {
 		log.WithError(err).WithField("chat", chatID).Warn("send photo failed")
 	}
 }
-func sendVideo(chatID int64, v *adapter.VideoSegment, caption string) {
+func sendVideo(bot *tgbotapi.BotAPI, chatID int64, v *adapter.VideoSegment, caption string) {
 	if v == nil || bot == nil {
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 )
 
 // 配置段：application.yaml 里的 qqofficial.*
@@ -41,7 +42,7 @@ const (
 	//
 	// 长文案**不是配置项**：走全局模板 trigger.group.bot_joined.tmpl，由 lsp 渲染后交给
 	// SendJoinIntro。tip 留空 = 只发模板；
-	// 全都没有 = 一条都不发，这是默认行为。发送时才读，改完配置**重启**即生效。
+	// 全都没有 = 一条都不发，这是默认行为。配置保存并完成适配器更新后生效。
 	ConfigKeyJoinIntroTip = "join-intro-tip"
 )
 
@@ -77,17 +78,25 @@ type Config struct {
 
 // GetConfig 读 qqofficial.* 配置，缺项补默认值。
 func GetConfig() *Config {
+	return GetConfigFrom(config.GlobalConfig.Snapshot())
+}
+
+// GetConfigFrom decodes one candidate without changing the running configuration.
+func GetConfigFrom(reader adapter.ConfigReader) *Config {
+	str := func(key string) string { return strings.TrimSpace(reader.GetString(ConfigKeyPrefix + "." + key)) }
+	integer := func(key string) int { return reader.GetInt(ConfigKeyPrefix + "." + key) }
+	duration := func(key string) time.Duration { return reader.GetDuration(ConfigKeyPrefix + "." + key) }
 	cfg := &Config{
-		AppID:             firstNonEmpty(getString(ConfigKeyAppID), getString("appId")),
-		AppSecret:         firstNonEmpty(getString(ConfigKeyAppSecret), getString("appSecret"), getString("secret")),
-		Mode:              strings.ToLower(getString(ConfigKeyMode)),
-		Intents:           getInt(ConfigKeyIntents),
-		ShardID:           getInt(ConfigKeyShardID),
-		ShardCount:        getInt(ConfigKeyShardCount),
-		APIBaseURL:        getString(ConfigKeyAPIBaseURL),
-		HTTPTimeout:       getDuration(ConfigKeyHTTPTimeout),
-		TokenRefreshAhead: getDuration(ConfigKeyTokenRefreshAhead),
-		StartTimeout:      getDuration(ConfigKeyStartTimeout),
+		AppID:             firstNonEmpty(str(ConfigKeyAppID), str("appId")),
+		AppSecret:         firstNonEmpty(str(ConfigKeyAppSecret), str("appSecret"), str("secret")),
+		Mode:              strings.ToLower(str(ConfigKeyMode)),
+		Intents:           integer(ConfigKeyIntents),
+		ShardID:           integer(ConfigKeyShardID),
+		ShardCount:        integer(ConfigKeyShardCount),
+		APIBaseURL:        str(ConfigKeyAPIBaseURL),
+		HTTPTimeout:       duration(ConfigKeyHTTPTimeout),
+		TokenRefreshAhead: duration(ConfigKeyTokenRefreshAhead),
+		StartTimeout:      duration(ConfigKeyStartTimeout),
 	}
 	cfg.ApplyDefaults()
 	return cfg
