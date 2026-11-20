@@ -1,0 +1,54 @@
+name: PR quality
+
+on:
+  pull_request:
+    branches: [master, next-dev]
+
+permissions:
+  contents: read
+
+jobs:
+  gofmt:
+    name: Go formatting (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check Go formatting
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Checkout uses GitHub's PR merge commit. Compare what would merge
+          # to the target branch, even when the PR branch is behind that branch.
+          changed_files=$(mktemp)
+          git diff --name-only -z --diff-filter=ACMRT "$BASE_SHA" HEAD -- '*.go' > "$changed_files"
+          status=0
+          while IFS= read -r -d '' path; do
+            if [[ ! -f "$path" || -L "$path" ]]; then
+              continue
+            fi
+            if ! result=$(gofmt -l "./$path"); then
+              status=1
+            elif [[ -n "$result" ]]; then
+              printf 'Run gofmt -w on %q\n' "$path"
+              status=1
+            fi
+          done < "$changed_files"
+          exit "$status"
+
+  dependency-review:
+    name: New dependency vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high
