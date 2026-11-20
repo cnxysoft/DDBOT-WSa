@@ -1,11 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/alecthomas/kong"
 	"github.com/cnxysoft/DDBOT-WSa"
-	_ "github.com/cnxysoft/DDBOT-WSa/logging"
+	"github.com/cnxysoft/DDBOT-WSa/logging"
 	"github.com/cnxysoft/DDBOT-WSa/lsp"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
@@ -21,6 +20,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/cnxysoft/DDBOT-WSa/warn"
+	"github.com/sirupsen/logrus"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -37,10 +37,9 @@ func main() {
 	}
 	kong.Parse(&cli)
 
+	banner := logging.BannerInfo{Version: lsp.Tags, Commit: lsp.CommitId, BuildTime: lsp.BuildTime}
 	if cli.Version {
-		fmt.Printf("Tags: %v\n", lsp.Tags)
-		fmt.Printf("COMMIT_ID: %v\n", lsp.CommitId)
-		fmt.Printf("BUILD_TIME: %v\n", lsp.BuildTime)
+		logging.PrintVersion(banner)
 		os.Exit(0)
 	}
 
@@ -63,9 +62,8 @@ func main() {
 
 	if cli.SetAdmin != 0 {
 		sm := permission.NewStateManager()
-		err := sm.GrantRole(cli.SetAdmin, permission.Admin)
-		if err != nil {
-			fmt.Printf("设置Admin权限失败 %v\n", err)
+		if err := sm.GrantRole(cli.SetAdmin, permission.Admin); err != nil {
+			logrus.WithError(err).Error("设置Admin权限失败")
 		}
 		return
 	}
@@ -78,16 +76,6 @@ func main() {
 		c.SyncSub()
 		return
 	}
-
-	fmt.Println("DDBOT交流群：755612788（已满）、980848391")
-	fmt.Println("二次修改:https://github.com/Hoshinonyaruko/DDBOT-ws")
-	fmt.Println("三次修改:https://github.com/cnxysoft/DDBOT-WSa")
-	fmt.Println("文档站:https://kizunerwe.github.io/DDBOT-WSa-docs/")
-	fmt.Println("本分支版本主要以修复功能并接入OneBot协议的BOT框架为目的")
-	fmt.Println("主流框架：LLOneBot、NapCat、Lagrange")
-	fmt.Println("LLOneBot:https://llonebot.github.io/")
-	fmt.Println("NapCat:https://napneko.github.io/")
-	fmt.Println("Lagrange:https://lagrangedev.github.io/Lagrange.Doc/")
 
 	if cli.Debug {
 		lsp.Debug = true
@@ -103,7 +91,26 @@ func main() {
 		return
 	}
 
+	// 日志在这里才就位：--version / --set-admin / --sync-bilibili / --play 这些
+	// 早退路径不该凭空建出 logs 目录；重复启动时也不会和另一个实例同写一份日志文件。
 	DDBOT.SetUpLog()
+	logging.PrintBanner()
+	logStartupInfo(banner)
+	if cli.Debug {
+		logrus.WithField("module", "startup").Info("已开启 debug 模式，pprof 监听 localhost:6060")
+	}
 
 	DDBOT.Run()
+}
+
+// logStartupInfo 把启动时要说的话全部打成常规日志行，不再裸打印。
+func logStartupInfo(info logging.BannerInfo) {
+	log := logrus.WithField("module", "startup")
+	log.Info("DDBOT-WSa " + logging.VersionLine(info))
+	log.Info("基于 OneBot 协议的消息推送框架")
+	log.Info("文档站 https://kizunerwe.github.io/DDBOT-WSa-docs/")
+	log.Info("交流群 一群 755612788（已满）· 二群 980848391")
+	log.Info("二次修改 https://github.com/Hoshinonyaruko/DDBOT-ws")
+	log.Info("三次修改 https://github.com/cnxysoft/DDBOT-WSa")
+	log.Info("支持的连接方式 onebot-v11（默认）/ qqofficial / satori")
 }
