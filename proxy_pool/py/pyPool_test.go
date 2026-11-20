@@ -1,16 +1,7 @@
 package py
 
 import (
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync/atomic"
 	"testing"
-
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
 )
 
 func TestPyProxy(t *testing.T) {
@@ -29,52 +20,6 @@ func TestPyProxy(t *testing.T) {
 			t.Errorf("Expected empty string, got %s", result)
 		}
 	})
-}
-
-func TestPyProxyNormalizesBareAddressesAndPreservesSchemes(t *testing.T) {
-	for address, want := range map[string]string{
-		"": "", "127.0.0.1:8080": "http://127.0.0.1:8080", "[::1]:8080": "http://[::1]:8080",
-		"http://proxy:8080": "http://proxy:8080", "https://proxy:443": "https://proxy:443",
-		"socks5://proxy:1080": "socks5://proxy:1080", "socks5h://proxy:1080": "socks5h://proxy:1080",
-	} {
-		if got := (&PyProxy{proxy: address}).ProxyString(); got != want {
-			t.Fatalf("ProxyString(%q)=%q, want %q", address, got, want)
-		}
-	}
-}
-
-func TestRealPYServiceBareAddressSupportsStrictRequests(t *testing.T) {
-	var proxyCalls, getCalls atomic.Int32
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalls.Add(1)
-		if r.URL.Host != "account.example.invalid" {
-			t.Errorf("request did not use HTTP proxy form: %s", r.URL)
-		}
-		_, _ = io.WriteString(w, "proxied")
-	}))
-	defer proxy.Close()
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/get" {
-			getCalls.Add(1)
-			_ = json.NewEncoder(w).Encode(GetResponse{Proxy: strings.TrimPrefix(proxy.URL, "http://")})
-			return
-		}
-		_, _ = io.WriteString(w, "ready")
-	}))
-	defer service.Close()
-	pool, err := NewPYProxyPool(service.URL)
-	if err != nil {
-		t.Fatal("real service health check failed", err)
-	}
-	getter, _, abort := proxy_pool.PrepareSwap(pool)
-	defer abort()
-	var body string
-	if err := requests.Get("http://account.example.invalid/session", nil, &body, requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, getter)); err != nil || body != "proxied" {
-		t.Fatal("bare service address was not accepted by strict request", body, err)
-	}
-	if getCalls.Load() != 1 || proxyCalls.Load() != 1 {
-		t.Fatal("request did not traverse service and proxy", getCalls.Load(), proxyCalls.Load())
-	}
 }
 
 func TestProxyPoolGet(t *testing.T) {

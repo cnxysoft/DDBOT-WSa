@@ -3,10 +3,13 @@ package cfg
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ghodss/yaml"
 )
@@ -348,6 +351,47 @@ func lookupYAMLPath(root map[string]interface{}, path []string) bool {
 }
 
 // writeYAMLTextAtomic 以临时文件 + 原子替换写回配置。
+func writeYAMLTextAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".patch-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if tmpName != "" {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	const maxRenameRetries = 3
+	var renameErr error
+	for attempt := 0; attempt < maxRenameRetries; attempt++ {
+		renameErr = os.Rename(tmpName, path)
+		if renameErr == nil {
+			tmpName = ""
+			return nil
+		}
+		// Windows 上编辑器 / 杀毒软件可能瞬时占用目标文件，退避重试
+		time.Sleep(time.Duration(150*(1<<attempt)) * time.Millisecond)
+	}
+	return fmt.Errorf("原子替换配置文件失败（已重试 %d 次）: %w", maxRenameRetries, renameErr)
+}
+
 // keepYAMLCommentsOnly 只保留注释与空行。
 // 空文件 / 只有注释 / 字面 null / 空映射（{}）都没有可用的顶层键：
 // 直接在这些文本后面追加映射会得到 `null\nbot:`、`{}\nbot:` 这种非法或
@@ -363,13 +407,23 @@ func keepYAMLCommentsOnly(content string) string {
 	return joinYAMLPatchLines(out)
 }
 
-// RenderConfigPatches updates a snapshot in memory. The caller must validate
-// the candidate and persist it through the configuration transaction.
-func RenderConfigPatches(data []byte, patches []ConfigPatch) ([]byte, error) {
+// WriteConfigPatchesToPath 是显式路径版本：不持有全局写锁，
+// 串行由调用方（admin 的配置写锁）负责。
+//
+// 写入前会先解析一遍新内容，确认仍是合法 YAML 且所有补丁键都存在；
+// 任何一步失败都不会动原文件。
+func WriteConfigPatchesToPath(patches []ConfigPatch, cfgPath string) error {
 	if len(patches) == 0 {
-		return data, nil
+		return nil
 	}
-	var err error
+	data, err := os.ReadFile(cfgPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	var fileMode os.FileMode = 0o600 // 配置文件含凭据，新建时只给属主读写
+	if info, err := os.Stat(cfgPath); err == nil {
+		fileMode = info.Mode()
+	}
 	content := strings.TrimPrefix(string(data), "\ufeff")
 	cr := strings.Contains(content, "\r\n")
 
@@ -377,7 +431,7 @@ func RenderConfigPatches(data []byte, patches []ConfigPatch) ([]byte, error) {
 	var before map[string]interface{}
 	if content != "" {
 		if err := yaml.Unmarshal([]byte(content), &before); err != nil {
-			return nil, fmt.Errorf("现有配置解析失败，已拒绝写入: %w", err)
+			return fmt.Errorf("现有配置解析失败，已拒绝写入: %w", err)
 		}
 	}
 	if before == nil || len(before) == 0 {
@@ -387,38 +441,35 @@ func RenderConfigPatches(data []byte, patches []ConfigPatch) ([]byte, error) {
 	lines := splitYAMLPatchLines(content)
 	for _, patch := range patches {
 		if len(patch.Path) == 0 {
-			return nil, fmt.Errorf("配置路径不能为空")
+			return fmt.Errorf("配置路径不能为空")
 		}
 		lines, err = setYAMLInScope(lines, patch.Path, patch.Value, -1, cr)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	out := joinYAMLPatchLines(lines)
 
 	var after map[string]interface{}
 	if err := yaml.Unmarshal([]byte(out), &after); err != nil {
-		return nil, fmt.Errorf("生成的新配置不是合法 YAML，已拒绝写入: %w", err)
+		return fmt.Errorf("生成的新配置不是合法 YAML，已拒绝写入: %w", err)
 	}
 	// 整段丢失是编辑器最危险的 bug，宁可拒绝写入让用户保留旧配置。
 	for key := range before {
 		if _, ok := after[key]; !ok {
-			return nil, fmt.Errorf("内部错误：写入会丢失配置段 %q，已拒绝写入", key)
+			return fmt.Errorf("内部错误：写入会丢失配置段 %q，已拒绝写入", key)
 		}
 	}
 	for _, patch := range patches {
 		if !lookupYAMLPath(after, patch.Path) {
-			return nil, fmt.Errorf("内部错误：配置键 %s 未写入，已拒绝写入", strings.Join(patch.Path, "."))
+			return fmt.Errorf("内部错误：配置键 %s 未写入，已拒绝写入", strings.Join(patch.Path, "."))
 		}
 	}
 
-	if strings.HasPrefix(string(data), "\ufeff") {
-		out = "\ufeff" + out
-	}
-	return []byte(out), nil
+	return writeYAMLTextAtomic(cfgPath, []byte(out), fileMode)
 }
 
-// FlattenConfigPatch 把嵌套的配置补丁展开成叶子路径，供 RenderConfigPatches 使用。
+// FlattenConfigPatch 把嵌套的配置补丁展开成叶子路径，供 WriteConfigPatchesToPath 使用。
 // map 递归展开；空 map / 列表 / 标量作为叶子整体替换。
 func FlattenConfigPatch(patch map[string]interface{}) []ConfigPatch {
 	var out []ConfigPatch

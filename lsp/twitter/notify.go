@@ -88,7 +88,6 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 // TextFilterContent 返回模板中的动态文字，供 text/not_text 规则匹配。
 // 这里不调用 ToMessage，避免在 NotifyBeforeCallback 设置紧凑状态前缓存模板渲染结果。
 func (n *ConcernNewsNotify) TextFilterContent() string {
-	runtimeGen := twitterSnapshot()
 	if n == nil || n.NewsInfo == nil {
 		return ""
 	}
@@ -112,7 +111,7 @@ func (n *ConcernNewsNotify) TextFilterContent() string {
 	tweet := n.Tweet
 	appendText(tweet.Content, tweet.Url)
 	createdAt := tweet.CreatedAt
-	if runtimeGen.mode != ModeAPI && tweet.IsRetweet {
+	if TwitterMode != ModeAPI && tweet.IsRetweet {
 		createdAt = time.Now().UTC()
 	}
 	if !createdAt.IsZero() {
@@ -135,7 +134,6 @@ func (n *ConcernNewsNotify) TextFilterContent() string {
 
 // buildTwitterDynamic 构建TwitterDynamic数据
 func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
-	runtimeGen := twitterSnapshot()
 	dynamic := TwitterDynamic{}
 
 	// 基本信息
@@ -166,7 +164,7 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 
 	// 时间处理
 	var createdAt time.Time
-	if runtimeGen.mode == ModeAPI {
+	if TwitterMode == ModeAPI {
 		createdAt = n.Tweet.CreatedAt
 	} else {
 		if n.Tweet.IsRetweet {
@@ -359,7 +357,6 @@ func (n *ConcernNewsNotify) processVideoFile(url string, mediaType string) (stri
 
 // fallbackMSG 模板加载失败时的回退消息生成
 func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
-	runtimeGen := twitterSnapshot()
 	m := mmsg.NewMSG()
 	var addedUrl bool
 	if n.shouldCompact {
@@ -408,7 +405,7 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		}
 		var CreatedAt time.Time
 		if n.Tweet.RtType() == RETWEET {
-			if runtimeGen.mode == ModeAPI {
+			if TwitterMode == ModeAPI {
 				CreatedAt = n.Tweet.CreatedAt
 			} else {
 				CreatedAt = time.Now().UTC()
@@ -491,7 +488,6 @@ func NewConcernNewsNotify(groupCode int64, newsInfo *NewsInfo, c *twitterConcern
 }
 
 func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
-	runtimeGen := twitterSnapshot()
 	for _, m := range tweet.Media {
 		var err error
 		var Url *url.URL
@@ -564,8 +560,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 				addCut(message, nil)
 				opts = append(opts,
 					requests.ProxyOption(proxy_pool.PreferOversea),
-					requests.AddUAOption(runtimeGen.userAgent),
-					requests.WithCookieJar(runtimeGen.jar),
+					requests.AddUAOption(UserAgent),
+					requests.WithCookieJar(Cookie),
 				)
 				message.Append(mmsg.NewImageByUrl(fullURL.String(), opts...))
 				break
@@ -593,8 +589,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 			message.Append(
 				mmsg.NewVideoByUrl(m.Url,
 					requests.ProxyOption(proxy_pool.PreferOversea),
-					requests.AddUAOption(runtimeGen.userAgent),
-					requests.WithCookieJar(runtimeGen.jar)))
+					requests.AddUAOption(UserAgent),
+					requests.WithCookieJar(Cookie)))
 		case "gif":
 			if strings.Contains(unescape, "video.twimg.com") {
 				idx := strings.Index(unescape, "video.twimg.com")

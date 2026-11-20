@@ -3,11 +3,9 @@ package py
 import (
 	"errors"
 	"fmt"
-	"net/http"
-	"strings"
-
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	"net/http"
 )
 
 // ProxyPool is https://github.com/jhao104/proxy_pool
@@ -31,9 +29,6 @@ type PyProxy struct {
 }
 
 func (p *PyProxy) ProxyString() string {
-	if p.proxy != "" && !strings.Contains(p.proxy, "://") {
-		return "http://" + p.proxy
-	}
 	return p.proxy
 }
 
@@ -77,8 +72,7 @@ func (pool *ProxyPool) Stop() error {
 func NewPYProxyPool(host string) (*ProxyPool, error) {
 	pool := &ProxyPool{Host: host}
 	var code int
-	var body string
-	err := requests.Get(pool.Host, nil, &body, requests.HttpCodeOption(&code))
+	err := requests.Get(pool.Host, nil, requests.HttpCodeOption(&code))
 	if err != nil {
 		return nil, err
 	}

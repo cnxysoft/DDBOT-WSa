@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Sora233/MiraiGo-Template/config"
-	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -22,9 +21,7 @@ func withViperConfigFile(t *testing.T, content string) {
 		t.Fatal(err)
 	}
 	old := config.GlobalConfig
-	oldPrefixes := GetCustomCommandPrefix()
-	customCommandPrefixAtomic.Store(map[string]string{})
-	t.Cleanup(func() { config.GlobalConfig = old; customCommandPrefixAtomic.Store(oldPrefixes) })
+	t.Cleanup(func() { config.GlobalConfig = old })
 	v := viper.New()
 	v.SetConfigFile(path)
 	config.GlobalConfig = &config.Config{Viper: v}
@@ -41,13 +38,11 @@ func captureLogrus(t *testing.T) *bytes.Buffer {
 }
 
 // TestReloadConfigFileReadsNewValues 固化「Web 面板保存后热重载」这条链路：
-// 重载事务必须重新读盘，并刷新 customCommandPrefix 缓存。
+// ReloadConfigFile 必须重新读盘，并刷新 customCommandPrefix 缓存。
 func TestReloadConfigFileReadsNewValues(t *testing.T) {
 	withViperConfigFile(t, "bot:\n  commandPrefix: \"/\"\ncustomCommandPrefix:\n  签到: \"\"\n")
 
-	ConfigureReload()
-	config.GlobalConfig.OnConfigChange(func(fsnotify.Event) { ReloadCustomCommandPrefix() })
-	if err := config.GlobalConfig.ReadInConfig(); err != nil {
+	if err := ReloadConfigFile(); err != nil {
 		t.Fatalf("首次热重载失败: %v", err)
 	}
 	if got := GetCommandPrefix(); got != "/" {
@@ -62,7 +57,7 @@ func TestReloadConfigFileReadsNewValues(t *testing.T) {
 	if err := os.WriteFile(path, []byte("bot:\n  commandPrefix: \"!\"\ncustomCommandPrefix:\n  帮助: \"!\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.GlobalConfig.Reload(); err != nil {
+	if err := ReloadConfigFile(); err != nil {
 		t.Fatalf("再次热重载失败: %v", err)
 	}
 	if got := GetCommandPrefix(); got != "!" {
@@ -136,22 +131,5 @@ func TestReloadCustomCommandPrefixEmptyStringWarnsWithoutBlamingColon(t *testing
 	}
 	if strings.Contains(logged, "全角") {
 		t.Fatalf("空字符串不该赖全角冒号，实际日志：%s", logged)
-	}
-}
-
-func TestReloadCustomCommandPrefixRetainsLastGoodAndCopiesMaps(t *testing.T) {
-	withViperConfigFile(t, "customCommandPrefix:\n  Help: '#'\n")
-	ReloadCustomCommandPrefix()
-	got := GetCustomCommandPrefix()
-	got["Help"] = "mutated"
-	if GetCustomCommandPrefix()["Help"] != "#" {
-		t.Fatal("caller mutated the shared prefix cache")
-	}
-	if err := os.WriteFile(ConfigFilePath(), []byte("customCommandPrefix: invalid\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	ReloadCustomCommandPrefix()
-	if GetCustomCommandPrefix()["Help"] != "#" {
-		t.Fatal("invalid reload erased the last valid prefix")
 	}
 }

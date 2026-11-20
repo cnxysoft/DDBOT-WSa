@@ -24,16 +24,13 @@ type WeiboCookieKeyValue struct {
 
 // FreshCookieFromAPI 从外部 API 获取新的微博 Cookie
 func FreshCookieFromAPI() ([]*http.Cookie, error) {
-	return freshCookieFromAPIURL(cfg.GetWeiboCookieRefreshAPI())
-}
-
-func freshCookieFromAPIURL(apiURL string) ([]*http.Cookie, error) {
+	apiURL := cfg.GetWeiboCookieRefreshAPI()
 	if apiURL == "" {
 		return nil, fmt.Errorf("未配置微博 Cookie 刷新 API 地址")
 	}
 
 	var resp WeiboCookieResponse
-	err := requests.Get(apiURL, nil, &resp, requests.TimeoutOption(15*time.Second))
+	err := requests.Get(apiURL, nil, &resp)
 	if err != nil {
 		return nil, fmt.Errorf("请求 Cookie 刷新 API 失败：%w", err)
 	}

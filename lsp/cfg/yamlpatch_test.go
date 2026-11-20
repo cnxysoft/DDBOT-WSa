@@ -63,7 +63,7 @@ func TestWriteConfigPatchesPreservesFormat(t *testing.T) {
 		"    key: value\n"
 	path := writeFileT(t, before)
 
-	err := writeConfigPatchesForTest([]ConfigPatch{{Path: []string{"bilibili", "SESSDATA"}, Value: "new-cookie"}}, path)
+	err := WriteConfigPatchesToPath([]ConfigPatch{{Path: []string{"bilibili", "SESSDATA"}, Value: "new-cookie"}}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestWriteConfigPatchesPreservesFormat(t *testing.T) {
 func TestWriteConfigPatchesNestedScalar(t *testing.T) {
 	path := writeFileT(t, "platform:\n  bilibili:\n    enable: true\n  weibo:\n    enable: true\n")
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{{Path: []string{"platform", "bilibili", "enable"}, Value: false}}, path); err != nil {
+	if err := WriteConfigPatchesToPath([]ConfigPatch{{Path: []string{"platform", "bilibili", "enable"}, Value: false}}, path); err != nil {
 		t.Fatal(err)
 	}
 	m := parseT(t, readFileT(t, path))
@@ -95,7 +95,7 @@ func TestWriteConfigPatchesNestedScalar(t *testing.T) {
 func TestWriteConfigPatchesAddsSpaceAfterColon(t *testing.T) {
 	path := writeFileT(t, "qqofficial:\n  app-id:\n  mode: websocket\n")
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{
+	if err := WriteConfigPatchesToPath([]ConfigPatch{
 		{Path: []string{"qqofficial", "app-id"}, Value: "10293045"},
 	}, path); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestWriteConfigPatchesAddsSpaceAfterColon(t *testing.T) {
 func TestWriteConfigPatchesCreatesMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "application.yaml")
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{
+	if err := WriteConfigPatchesToPath([]ConfigPatch{
 		{Path: []string{"admin", "token"}, Value: "secret123"},
 	}, path); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestWriteConfigPatchesInsertMissingSection(t *testing.T) {
 		{Path: []string{"qqofficial", "app-id"}, Value: "10293045"},
 		{Path: []string{"qqofficial", "app-secret"}, Value: "secret"},
 	}
-	if err := writeConfigPatchesForTest(patches, path); err != nil {
+	if err := WriteConfigPatchesToPath(patches, path); err != nil {
 		t.Fatal(err)
 	}
 	after := readFileT(t, path)
@@ -149,7 +149,7 @@ func TestWriteConfigPatchesReplaceMap(t *testing.T) {
 	before := "customCommandPrefix:\n  签到: \"\"\n  帮助: \"!\"\n# 段尾注释\nbot:\n  commandPrefix: \"/\"\n"
 	path := writeFileT(t, before)
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{{
+	if err := WriteConfigPatchesToPath([]ConfigPatch{{
 		Path:  []string{"customCommandPrefix"},
 		Value: map[string]interface{}{"签到": ""},
 	}}, path); err != nil {
@@ -172,7 +172,7 @@ func TestWriteConfigPatchesReplaceMap(t *testing.T) {
 func TestWriteConfigPatchesClearMap(t *testing.T) {
 	path := writeFileT(t, "customCommandPrefix:\n  签到: \"\"\n  帮助: \"!\"\n")
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{{
+	if err := WriteConfigPatchesToPath([]ConfigPatch{{
 		Path:  []string{"customCommandPrefix"},
 		Value: map[string]interface{}{},
 	}}, path); err != nil {
@@ -189,7 +189,7 @@ func TestWriteConfigPatchesClearMap(t *testing.T) {
 func TestWriteConfigPatchesReplaceList(t *testing.T) {
 	path := writeFileT(t, "twitter:\n  baseUrl:\n    - \"https://a/\"\n    - \"https://b/\"\n  interval: 30s\n")
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{{
+	if err := WriteConfigPatchesToPath([]ConfigPatch{{
 		Path:  []string{"twitter", "baseUrl"},
 		Value: []string{"https://c/", "https://d/"},
 	}}, path); err != nil {
@@ -209,7 +209,7 @@ func TestWriteConfigPatchesPreservesCRLF(t *testing.T) {
 	before := "bilibili:\r\n  SESSDATA: \"old\"\r\n  interval: 25s\r\n"
 	path := writeFileT(t, before)
 
-	if err := writeConfigPatchesForTest([]ConfigPatch{{Path: []string{"bilibili", "SESSDATA"}, Value: "new"}}, path); err != nil {
+	if err := WriteConfigPatchesToPath([]ConfigPatch{{Path: []string{"bilibili", "SESSDATA"}, Value: "new"}}, path); err != nil {
 		t.Fatal(err)
 	}
 	after := readFileT(t, path)
@@ -225,7 +225,7 @@ func TestWriteConfigPatchesRejectsBrokenExisting(t *testing.T) {
 	const broken = "bot:\n  commandPrefix: [unclosed\n"
 	path := writeFileT(t, broken)
 
-	err := writeConfigPatchesForTest([]ConfigPatch{{Path: []string{"bot", "commandPrefix"}, Value: "!"}}, path)
+	err := WriteConfigPatchesToPath([]ConfigPatch{{Path: []string{"bot", "commandPrefix"}, Value: "!"}}, path)
 	if err == nil {
 		t.Fatal("坏配置应拒绝写入")
 	}
@@ -278,7 +278,7 @@ func TestWriteConfigPatchesOnDefaultConfig(t *testing.T) {
 		{Path: []string{"qqofficial", "app-secret"}, Value: "secret"},
 		{Path: []string{"platform", "bilibili", "enable"}, Value: false},
 	}
-	if err := writeConfigPatchesForTest(patches, path); err != nil {
+	if err := WriteConfigPatchesToPath(patches, path); err != nil {
 		t.Fatal(err)
 	}
 	after := readFileT(t, path)
@@ -311,16 +311,4 @@ func TestWriteConfigPatchesOnDefaultConfig(t *testing.T) {
 	if afterBlank < beforeBlank-2 {
 		t.Fatalf("空行被大量删除：before=%d after=%d", beforeBlank, afterBlank)
 	}
-}
-
-func writeConfigPatchesForTest(patches []ConfigPatch, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	out, err := RenderConfigPatches(data, patches)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, out, 0600)
 }

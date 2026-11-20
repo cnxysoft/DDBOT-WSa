@@ -13,10 +13,9 @@ import (
 const PathApiPersonalInfo = "/rest/app/user/personalInfo"
 
 func GetUserPersonalInfo() (*UserResponse, error) {
-	return getUserPersonalInfoWithOptions(GetGeneralOptions(true))
-}
-
-func getUserPersonalInfoWithOptions(options []requests.Option) (*UserResponse, error) {
+	if !IsVerifyGiven() {
+		return nil, ErrVerifyRequired
+	}
 	st := time.Now()
 	defer func() {
 		ed := time.Now()
@@ -29,7 +28,7 @@ func getUserPersonalInfoWithOptions(options []requests.Option) (*UserResponse, e
 	)
 
 	Url := APath(PathApiPersonalInfo)
-	opts := append([]requests.Option{}, options...)
+	opts := GetGeneralOptions(true)
 	opts = append(opts, GetEncodeOption())
 	err := requests.GetWithHeader(Url, nil, &resp, &respHeader, opts...)
 	if err != nil {
@@ -49,12 +48,12 @@ func getUserPersonalInfoWithOptions(options []requests.Option) (*UserResponse, e
 
 	err = protoJsonOpts.Unmarshal(body, result)
 	if err != nil {
-		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", getAccount().username).Errorf("解析账号信息失败：%v", err)
+		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("解析账号信息失败：%v", err)
 		return nil, err
 	}
 	if result.GetResult() != 0 {
 		err = fmt.Errorf("获取账号信息失败：result=%v host=%v", result.GetResult(), result.GetHostName())
-		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", getAccount().username).Errorf("%v", err)
+		logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("%v", err)
 		return nil, err
 	}
 

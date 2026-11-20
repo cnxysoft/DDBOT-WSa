@@ -161,11 +161,8 @@ type Messenger struct {
 	groupMu    sync.RWMutex
 	friendMu   sync.RWMutex
 
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
-	lifecycleMu sync.Mutex
-	stopOnce    sync.Once
-	stopping    bool
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 
 	eventDispatcher BotEventDispatcher
 
@@ -182,9 +179,7 @@ type Messenger struct {
 	offlineFlushScheduled atomic.Bool
 
 	// listReloadRetryActive 标记列表重载重试协程是否已启动，防止重复启动
-	listReloadRetryActive   atomic.Bool
-	listReloadRetryInterval time.Duration
-	listReloadMaxRetries    int
+	listReloadRetryActive atomic.Bool
 
 	// listLoaded 标记好友/群/群成员列表是否已完成首次加载
 	listLoaded atomic.Bool
@@ -198,20 +193,18 @@ type Messenger struct {
 
 // 列表加载重试参数
 var (
-	defaultListReloadRetryInterval = 15 * time.Second
-	defaultListReloadMaxRetries    = 10
+	listReloadRetryInterval = 15 * time.Second
+	listReloadMaxRetries    = 10
 )
 
 func NewMessenger(adapter Adapter) *Messenger {
 	m := &Messenger{
-		Adapter:                 adapter,
-		stopChan:                make(chan struct{}),
-		GroupList:               make([]*GroupInfo, 0),
-		FriendList:              make([]*FriendInfo, 0),
-		memberRefreshing:        make(map[int64]bool),
-		memberRefreshPending:    make(map[int64]bool),
-		listReloadRetryInterval: defaultListReloadRetryInterval,
-		listReloadMaxRetries:    defaultListReloadMaxRetries,
+		Adapter:              adapter,
+		stopChan:             make(chan struct{}),
+		GroupList:            make([]*GroupInfo, 0),
+		FriendList:           make([]*FriendInfo, 0),
+		memberRefreshing:     make(map[int64]bool),
+		memberRefreshPending: make(map[int64]bool),
 	}
 
 	m.registerEventHandlers()
@@ -224,8 +217,7 @@ func NewMessenger(adapter Adapter) *Messenger {
 	}
 
 	// 启动统计汇总定时器
-	m.wg.Add(1)
-	go func() { defer m.wg.Done(); m.summaryTicker() }()
+	go m.summaryTicker()
 
 	return m
 }
@@ -308,10 +300,7 @@ func (m *Messenger) Start() error {
 }
 
 func (m *Messenger) Stop() error {
-	m.lifecycleMu.Lock()
-	m.stopping = true
-	m.stopOnce.Do(func() { close(m.stopChan) })
-	m.lifecycleMu.Unlock()
+	close(m.stopChan)
 	m.wg.Wait()
 	return m.Adapter.Stop()
 }
@@ -1346,7 +1335,7 @@ func (m *Messenger) reloadLists() error {
 		messengerLogger.WithError(err).Error("unable to load friends list")
 		listErr = err
 	} else {
-		messengerLogger.Infof("已加载 %d 个好友", len(m.GetFriendListSnapshot()))
+		messengerLogger.Infof("已加载 %d 个好友", len(m.FriendList))
 	}
 
 	if err := m.ReloadGroupList(); err != nil {
@@ -1355,7 +1344,7 @@ func (m *Messenger) reloadLists() error {
 			listErr = err
 		}
 	} else {
-		messengerLogger.Infof("已加载 %d 个群组", len(m.GetGroupListSnapshot()))
+		messengerLogger.Infof("已加载 %d 个群组", len(m.GroupList))
 	}
 
 	// 好友/群列表失败时不再加载成员，避免在残缺列表上继续请求
@@ -1390,39 +1379,18 @@ func (m *Messenger) reloadLists() error {
 
 // startListReloadRetry 启动列表重载重试协程，避免加载失败后订阅系统永久无法启动
 func (m *Messenger) startListReloadRetry() {
-	m.lifecycleMu.Lock()
-	defer m.lifecycleMu.Unlock()
-	if m.stopping {
-		return
-	}
 	if !m.listReloadRetryActive.CompareAndSwap(false, true) {
 		return
 	}
-	interval, retries := m.listReloadRetryInterval, m.listReloadMaxRetries
-	if interval <= 0 {
-		interval = defaultListReloadRetryInterval
-	}
-	if retries <= 0 {
-		retries = defaultListReloadMaxRetries
-	}
-	m.wg.Add(1)
 	go func() {
-		defer m.wg.Done()
 		defer m.listReloadRetryActive.Store(false)
-		timer := time.NewTimer(interval)
-		defer timer.Stop()
-		for i := 1; i <= retries; i++ {
-			select {
-			case <-m.stopChan:
-				return
-			case <-timer.C:
-			}
+		for i := 1; i <= listReloadMaxRetries; i++ {
+			time.Sleep(listReloadRetryInterval)
 			if m.listLoaded.Load() {
 				return
 			}
 			if err := m.reloadLists(); err != nil {
-				messengerLogger.WithError(err).Warnf("列表重载重试 %d/%d 失败，保持未加载状态", i, retries)
-				timer.Reset(interval)
+				messengerLogger.WithError(err).Warnf("列表重载重试 %d/%d 失败，保持未加载状态", i, listReloadMaxRetries)
 				continue
 			}
 			m.listLoaded.Store(true)

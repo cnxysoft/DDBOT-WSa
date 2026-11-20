@@ -148,7 +148,7 @@ func newTwitterLoginExpiredAlertMessage(reason string) *mmsg.MSG {
 		"[Twitter Cookie失效预警]\n"+
 			"检测到Twitter Cookie失效：%s\n"+
 			"Twitter订阅推送已暂停，正在自动重试恢复，恢复后会再次私聊通知。\n"+
-			"如长时间未恢复，请更新application.yaml或WebUI中的twitter.auth_token和twitter.ct0，验证通过后自动应用。", reason))
+			"如长时间未恢复，请更新application.yaml中的twitter.auth_token和twitter.ct0后重启进程。", reason))
 }
 
 func newTwitterLoginRecoveredMessage(downtime time.Duration) *mmsg.MSG {

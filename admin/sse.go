@@ -122,7 +122,6 @@ func writeSSEEvent(w http.ResponseWriter, e LogInfo) {
 // 连接建立后先回放内存缓冲中的存量日志，再持续推送增量。
 // 客户端用 fetch 流式读取即可携带 Authorization 头（EventSource 不支持自定义头）。
 func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
-	revoked := s.requestStreamRevocation(r)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -147,8 +146,6 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 			writeSSEEvent(w, e)
 			flusher.Flush()
 		case <-r.Context().Done():
-			return
-		case <-revoked:
 			return
 		}
 	}

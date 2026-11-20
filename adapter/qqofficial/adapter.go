@@ -528,11 +528,10 @@ func (g *groupRegistry) ensure(openid string) int64 {
 	g.byOpenID[openid] = rec
 	g.byID[id] = rec
 	g.dirty = true
-	onNew := g.onNew
 	g.mu.Unlock()
 
-	if onNew != nil {
-		onNew(openid)
+	if g.onNew != nil {
+		g.onNew(openid)
 	}
 	return id
 }
@@ -1051,22 +1050,6 @@ func NewQQOfficialAdapter(cfg *adapter.AdapterConfig) adapter.Adapter {
 	if cfg != nil && cfg.Timeout > 0 && qc.HTTPTimeout <= 0 {
 		qc.HTTPTimeout = cfg.Timeout
 	}
-	statePath := ""
-	if StateFilePathConfigured() {
-		statePath = StateFilePath(qc.AppID)
-	}
-	return NewQQOfficialAdapterWithConfig(qc, statePath)
-}
-
-// NewQQOfficialAdapterWithConfig constructs from an immutable candidate. An empty
-// statePath uses the app-specific default and its existing legacy migration.
-// Callers must stop a previous instance before opening the same state file.
-func NewQQOfficialAdapterWithConfig(candidate *Config, statePath string) adapter.Adapter {
-	qc := &Config{}
-	if candidate != nil {
-		*qc = *candidate
-	}
-	qc.ApplyDefaults()
 
 	a := &QQOfficialAdapter{
 		cfg:                 qc,
@@ -1085,14 +1068,14 @@ func NewQQOfficialAdapterWithConfig(candidate *Config, statePath string) adapter
 		infoBlocked:         make(map[string]time.Time),
 		stateLogLimit:       newFailureLogLimiter(stateFlushLogInterval),
 	}
-	a.tm = newTokenManagerFromConfig(qc)
-	a.client = newClientFromConfig(a.tm, qc)
+	a.tm = NewTokenManager(qc.AppID, qc.AppSecret)
+	a.client = NewClient(a.tm)
 	a.uploader = NewUploader(a.client)
 
 	// 默认文件名带 appId（换机器人天然是一个干净文件）。只有在用默认路径时才做
 	// 一次性迁移；用户显式配了 qqofficial.state-file 就完全按他的路径走。
-	if statePath == "" {
-		statePath = DefaultStateFilePath(qc.AppID)
+	statePath := StateFilePath(qc.AppID)
+	if !StateFilePathConfigured() {
 		if moved, err := MigrateLegacyStateFile(LegacyStateFile, statePath, qc.AppID); err != nil {
 			logger.Warnf("%s: 旧状态文件 %s 没有迁移到 %s（%v）。本次运行按新文件从空状态开始，"+
 				"旧文件里的内部 ID 不会带过来；请按上面的原因确认后自行改名或删除该文件",
@@ -1130,7 +1113,7 @@ func NewQQOfficialAdapterWithConfig(candidate *Config, statePath string) adapter
 	}
 	a.parser = &eventParser{appID: qc.AppID, ids: a.ids, msgs: a.msgs, self: a.GetSelfID, isSelf: a.isSelfOpenID}
 	a.memberSync = newMemberSyncNotifier(a.notifyMemberListStale, memberSyncDebounce, memberSyncMinGap, memberSyncMaxPerMinute)
-	a.gateway = newGatewayFromConfig(a.tm, EventHandlerFunc(a.onDispatchEvent), qc)
+	a.gateway = NewGateway(a.tm, EventHandlerFunc(a.onDispatchEvent))
 
 	logger.Infof("%s: adapter 已装配（appID=%s，状态文件=%s，已恢复 %d 个群）",
 		ConfigKeyPrefix, qc.AppID, a.store.Path(), len(a.groups.snapshot()))
@@ -1176,7 +1159,6 @@ func (a *QQOfficialAdapter) Start() error {
 
 	if err := a.gateway.Start(ctx); err != nil {
 		cancel()
-		a.wg.Wait()
 		a.started.Store(false)
 		return err
 	}

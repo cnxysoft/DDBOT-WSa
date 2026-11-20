@@ -11,7 +11,6 @@ import (
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/ghodss/yaml"
-	"github.com/spf13/viper"
 )
 
 // withConfigFile 把 viper 的配置文件路径指到临时文件，结束后还原。
@@ -24,10 +23,9 @@ func withConfigFile(t *testing.T, content string) string {
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	prev := config.GlobalConfig
-	config.GlobalConfig = &config.Config{Viper: viper.New()}
+	prev := config.GlobalConfig.ConfigFileUsed()
 	config.GlobalConfig.SetConfigFile(path)
-	t.Cleanup(func() { config.GlobalConfig.StopWatching(); config.GlobalConfig = prev })
+	t.Cleanup(func() { config.GlobalConfig.SetConfigFile(prev) })
 	return path
 }
 

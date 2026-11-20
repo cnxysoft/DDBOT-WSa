@@ -71,18 +71,16 @@ func (t *twitterConcern) recordMirrorResult(base string, now time.Time, err erro
 // fetchMirror keeps a challenge and its retry on the same instance. Prefer the
 // last successful instance, then try every other configured instance once.
 func (t *twitterConcern) fetchMirror(id string) (*UserProfile, []*Tweet, error) {
-	runtimeGen := twitterSnapshot()
-	baseURLs := runtimeGen.baseURLs
-	if len(baseURLs) == 0 {
+	if len(BaseURL) == 0 {
 		return nil, nil, errors.New("未配置 Twitter 镜像")
 	}
-	start := int(t.mirrorNext.Load() % uint64(len(baseURLs)))
+	start := int(t.mirrorNext.Load() % uint64(len(BaseURL)))
 	var failures []error
-	for offset := 0; offset < len(baseURLs); offset++ {
-		index := (start + offset) % len(baseURLs)
-		base, err := url.Parse(strings.TrimSpace(baseURLs[index]))
+	for offset := 0; offset < len(BaseURL); offset++ {
+		index := (start + offset) % len(BaseURL)
+		base, err := url.Parse(strings.TrimSpace(BaseURL[index]))
 		if err != nil || base.Host == "" || (base.Scheme != "https" && base.Scheme != "http") {
-			failures = append(failures, fmt.Errorf("无效的 Twitter 镜像地址 %q", baseURLs[index]))
+			failures = append(failures, fmt.Errorf("无效的 Twitter 镜像地址 %q", BaseURL[index]))
 			continue
 		}
 		base.RawQuery, base.Fragment = "", ""
@@ -97,7 +95,7 @@ func (t *twitterConcern) fetchMirror(id string) (*UserProfile, []*Tweet, error) 
 		}
 		target := base.JoinPath(id)
 		started := time.Now()
-		profile, tweets, err := fetchMirrorPageWithRuntime(target, runtimeGen)
+		profile, tweets, err := fetchMirrorPage(target)
 		entry = entry.WithField("duration_ms", time.Since(started).Milliseconds())
 		if err == nil && (profile == nil || !strings.EqualFold(profile.ScreenName, id)) {
 			err = &mirrorFetchError{stage: "profile", err: errors.New("镜像未返回目标用户资料，可能是验证页或错误页")}
@@ -132,10 +130,6 @@ func (t *twitterConcern) fetchMirror(id string) (*UserProfile, []*Tweet, error) 
 }
 
 func fetchMirrorPage(target *url.URL) (resultProfile *UserProfile, resultTweets []*Tweet, resultErr error) {
-	return fetchMirrorPageWithRuntime(target, twitterSnapshot())
-}
-
-func fetchMirrorPageWithRuntime(target *url.URL, runtimeGen *twitterRuntime) (resultProfile *UserProfile, resultTweets []*Tweet, resultErr error) {
 	stage, status := "request", 0
 	defer func() {
 		if resultErr != nil {
@@ -143,7 +137,7 @@ func fetchMirrorPageWithRuntime(target *url.URL, runtimeGen *twitterRuntime) (re
 		}
 	}()
 	// Resolve the proxy once so challenge assets and the pass request use the same exit IP.
-	options := append(setRequestOptionsFor(runtimeGen), requests.RetryOption(0))
+	options := append(SetRequestOptions(), requests.RetryOption(0))
 	for attempt := 0; attempt < mirrorChallengeAttempts; attempt++ {
 		var response bytes.Buffer
 		var headers requests.RespHeader
@@ -197,7 +191,7 @@ func fetchMirrorPageWithRuntime(target *url.URL, runtimeGen *twitterRuntime) (re
 		}
 		stage = "parse"
 		parseStarted := time.Now()
-		profile, tweets, challenge, err := parseRespWithRuntime(body, target.String(), runtimeGen)
+		profile, tweets, challenge, err := ParseResp(body, target.String())
 		logger.WithFields(logrus.Fields{"Mirror": target.Host, "stage": "parse",
 			"duration_ms": time.Since(parseStarted).Milliseconds()}).Debug("Twitter 镜像页面解析完成")
 		if err != nil {

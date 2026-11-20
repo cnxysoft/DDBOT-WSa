@@ -146,22 +146,6 @@ func markBilibiliLoginRecovered(source bilibiliLoginAlertSource) {
 	}
 }
 
-func notifyBilibiliLoginExpiredForGeneration(source bilibiliLoginAlertSource, expected *VerifyInfo) {
-	credentialPublishMu.Lock()
-	defer credentialPublishMu.Unlock()
-	if getVerify() == expected {
-		notifyBilibiliLoginExpired(source)
-	}
-}
-
-func markBilibiliLoginRecoveredForGeneration(source bilibiliLoginAlertSource, expected *VerifyInfo) {
-	credentialPublishMu.Lock()
-	defer credentialPublishMu.Unlock()
-	if getVerify() == expected {
-		markBilibiliLoginRecovered(source)
-	}
-}
-
 func sendBilibiliLoginExpiredAlertToAdmin(qq int64) bool {
 	msg := newBilibiliLoginExpiredAlertMessage().ToCombineMessage(mmsg.NewPrivateTarget(qq))
 	summary := msgstringer.AdapterMsgToString(msg.Elements)
@@ -177,6 +161,6 @@ func sendBilibiliLoginExpiredAlertToAdmin(qq int64) bool {
 func newBilibiliLoginExpiredAlertMessage() *mmsg.MSG {
 	return mmsg.NewText("[B站登录失效预警]\n" +
 		"检测到B站账号未登录，动态和直播订阅推送已停止。\n" +
-		"请通过 WebUI 扫码重新登录，或更新application.yaml中的bilibili.SESSDATA和bilibili.bili_jct；" +
-		"bilibili.QRLogin 开启时，也可通过终端二维码重新登录。")
+		"请更新application.yaml中的bilibili.SESSDATA和bilibili.bili_jct后重启；" +
+		"或开启bilibili.QRLogin、清空这两项并重启，通过二维码重新登录。")
 }

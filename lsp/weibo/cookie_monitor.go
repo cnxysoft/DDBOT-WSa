@@ -3,7 +3,6 @@ package weibo
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
@@ -12,15 +11,12 @@ import (
 
 var (
 	// cookieRefreshCtx 用于控制 Cookie 刷新协程的生命周期
-	cookieRefreshMu     sync.Mutex
 	cookieRefreshCtx    context.Context
 	cookieRefreshCancel context.CancelFunc
 )
 
 // StartCookieRefreshMonitor 启动 Cookie 有效性监控和自动刷新
 func StartCookieRefreshMonitor(sub string) {
-	cookieRefreshMu.Lock()
-	defer cookieRefreshMu.Unlock()
 	// API 模式才启动监控
 	if !cfg.IsWeiboAPIMode() {
 		logger.Debug("非 API 模式，不启动 Cookie 自动刷新监控")
@@ -38,14 +34,13 @@ func StartCookieRefreshMonitor(sub string) {
 		cookieRefreshCancel()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cookieRefreshCtx, cookieRefreshCancel = ctx, cancel
+	cookieRefreshCtx, cookieRefreshCancel = context.WithCancel(context.Background())
 
 	go func() {
 		// 初始延迟，等待系统启动完成
 		select {
 		case <-time.After(5 * time.Second):
-		case <-ctx.Done():
+		case <-cookieRefreshCtx.Done():
 			return
 		}
 
@@ -57,15 +52,13 @@ func StartCookieRefreshMonitor(sub string) {
 			select {
 			case <-ticker.C:
 				logger.Debug("开始检测微博 Cookie 有效性")
-				refreshMu.Lock()
-				if ctx.Err() == nil && cfg.IsWeiboAPIMode() {
-					currentSub := getRuntimeSUB()
-					if !isCookieValid(currentSub) {
-						refreshCookieWithAPIUnlocked(currentSub)
-					}
+				if !isCookieValid(sub) {
+					logger.Info("检测到微博 Cookie 已失效，尝试从 API 刷新")
+					refreshCookieWithAPI(sub)
+				} else {
+					logger.Debug("微博 Cookie 仍然有效")
 				}
-				refreshMu.Unlock()
-			case <-ctx.Done():
+			case <-cookieRefreshCtx.Done():
 				logger.Info("微博 Cookie 监控已停止")
 				return
 			}
@@ -77,8 +70,6 @@ func StartCookieRefreshMonitor(sub string) {
 
 // StopCookieRefreshMonitor 停止 Cookie 监控
 func StopCookieRefreshMonitor() {
-	cookieRefreshMu.Lock()
-	defer cookieRefreshMu.Unlock()
 	if cookieRefreshCancel != nil {
 		cookieRefreshCancel()
 		cookieRefreshCancel = nil
@@ -110,12 +101,6 @@ func isCookieValid(sub string) bool {
 
 // refreshCookieWithAPI 使用 API 刷新 Cookie
 func refreshCookieWithAPI(sub string) {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
-	refreshCookieWithAPIUnlocked(sub)
-}
-
-func refreshCookieWithAPIUnlocked(sub string) {
 	cookies, err := FreshCookieFromAPI()
 	if err != nil {
 		logger.Errorf("从 API 刷新 Cookie 失败：%v", err)
@@ -156,7 +141,7 @@ func refreshCookieWithAPIUnlocked(sub string) {
 		}
 	}
 
-	storeCookieOptions(opt)
+	visitorCookiesOpt.Store(opt)
 	// 同步更新运行时 SUB，保持后续刷新与自动刷新协程使用一致的值
 	setRuntimeSUB(newSub)
 	logger.Infof("微博 Cookie 已成功从 API 刷新，共加载 %d 个 cookie", len(opt))

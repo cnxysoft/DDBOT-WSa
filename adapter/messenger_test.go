@@ -13,7 +13,6 @@ import (
 
 // mockAdapter implements Adapter for testing.
 type mockAdapter struct {
-	mu              sync.Mutex
 	groupList       []*GroupInfo
 	groupMemberList map[int64][]*GroupMemberInfo
 	strangerInfo    map[int64]map[string]interface{}
@@ -145,24 +144,18 @@ func (m *mockAdapter) SendPrivateForwardMessage(userID int64, nodes []map[string
 	return 1, "", nil
 }
 func (m *mockAdapter) GetGroupList() ([]*GroupInfo, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.groupListErr != nil {
 		return nil, m.groupListErr
 	}
 	return m.groupList, nil
 }
 func (m *mockAdapter) GetGroupMemberList(groupID int64) ([]*GroupMemberInfo, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.groupMemberErr != nil {
 		return nil, m.groupMemberErr
 	}
 	return m.groupMemberList[groupID], nil
 }
 func (m *mockAdapter) GetFriendList() ([]*FriendInfo, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.friendListErr != nil {
 		return nil, m.friendListErr
 	}
@@ -2128,21 +2121,22 @@ func TestMessengerRefreshList_FailureKeepsUnloaded(t *testing.T) {
 // TestMessengerRefreshList_MemberFailureKeepsUnloaded 验证群成员加载失败
 // 同样不标记 listLoaded，且后台重试成功后恢复。
 func TestMessengerRefreshList_MemberFailureKeepsUnloaded(t *testing.T) {
+	oldInterval := listReloadRetryInterval
+	listReloadRetryInterval = 10 * time.Millisecond
+	defer func() { listReloadRetryInterval = oldInterval }()
+
 	adapter := newMockAdapter()
 	adapter.groupList = []*GroupInfo{{Uin: 111, Code: 111, Name: "G1"}}
 	adapter.groupMemberErr = errors.New("member api unavailable")
 
 	messenger := NewMessenger(adapter)
-	messenger.listReloadRetryInterval = 10 * time.Millisecond
 	defer messenger.Stop()
 	err := messenger.RefreshList()
 	assert.Error(t, err, "群成员加载失败应返回错误")
 	assert.False(t, messenger.IsListLoaded(), "成员加载失败后不应标记加载完成")
 
 	// 修复成员接口后，后台重试应自动标记加载完成
-	adapter.mu.Lock()
 	adapter.groupMemberErr = nil
-	adapter.mu.Unlock()
 	assert.Eventually(t, func() bool {
 		return messenger.IsListLoaded()
 	}, 2*time.Second, 20*time.Millisecond, "后台重试应最终标记加载完成")
@@ -2351,42 +2345,23 @@ func queuedMessageText(messages []offlineQueueMsg) string {
 // TestMessengerRefreshList_RetrySucceeds 验证列表加载失败后后台重试成功，
 // 避免订阅系统因一次性失败而永久无法启动。
 func TestMessengerRefreshList_RetrySucceeds(t *testing.T) {
+	oldInterval := listReloadRetryInterval
+	listReloadRetryInterval = 10 * time.Millisecond
+	defer func() { listReloadRetryInterval = oldInterval }()
+
 	adapter := newMockAdapter()
 	adapter.friendListErr = errors.New("temporary failure")
 
 	messenger := NewMessenger(adapter)
-	messenger.listReloadRetryInterval = 10 * time.Millisecond
 	defer messenger.Stop()
 	assert.Error(t, messenger.RefreshList())
 	assert.False(t, messenger.IsListLoaded())
 
 	// 修复适配器后，后台重试应成功
 	time.Sleep(50 * time.Millisecond)
-	adapter.mu.Lock()
 	adapter.friendListErr = nil
-	adapter.mu.Unlock()
 
 	assert.Eventually(t, func() bool {
 		return messenger.IsListLoaded()
 	}, 2*time.Second, 20*time.Millisecond, "后台重试应最终标记加载完成")
-}
-
-func TestMessengerStopCancelsListReloadRetry(t *testing.T) {
-	adapter := newMockAdapter()
-	adapter.friendListErr = errors.New("temporary failure")
-	messenger := NewMessenger(adapter)
-	messenger.listReloadRetryInterval = time.Hour
-	assert.Error(t, messenger.RefreshList())
-	assert.True(t, messenger.listReloadRetryActive.Load())
-	stopped := make(chan struct{})
-	go func() { _ = messenger.Stop(); close(stopped) }()
-	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		t.Fatal("Stop did not cancel the sleeping list reload retry")
-	}
-	assert.False(t, messenger.listReloadRetryActive.Load(), "Stop must wait for the retry worker to exit")
-	messenger.startListReloadRetry()
-	assert.False(t, messenger.listReloadRetryActive.Load(), "a stopped Messenger must not start another retry worker")
-	assert.NoError(t, messenger.Stop(), "repeated shutdown should be safe")
 }

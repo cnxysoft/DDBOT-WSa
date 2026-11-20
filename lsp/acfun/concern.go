@@ -207,8 +207,13 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 func (c *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		defer t.Stop()
-
+		var interval time.Duration
+		if config.GlobalConfig != nil {
+			interval = config.GlobalConfig.GetDuration("acfun.interval")
+		}
+		if interval == 0 {
+			interval = time.Second * 20
+		}
 		for {
 			select {
 			case <-t.C:
@@ -217,7 +222,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(cfg.PollInterval("acfun", 20*time.Second))
+				t.Reset(interval)
 				continue
 			}
 			var start = time.Now()
@@ -359,7 +364,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			t.Reset(cfg.PollInterval("acfun", 20*time.Second))
+			t.Reset(interval)
 		}
 	}
 }
@@ -569,7 +574,6 @@ func (c *Concern) GroupWatchNotify(groupCode, mid int64) {
 }
 
 func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
-	generation, account := getVerify(), getAccount()
 	var start = time.Now()
 	resp, err := GetFollowFeedV2()
 	if err != nil {
@@ -580,11 +584,8 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 	if resp.GetResult() != 0 {
 		if resp.GetResult() == -401 {
 			logger.Errorf("刷新动态列表失败，可能是cookie失效，将尝试重新获取cookie: %v", resp.GetErrorMsg())
-			publishMu.Lock()
-			if atomicVerifyInfo.CompareAndSwap(generation, new(VerifyInfo)) {
-				ClearCookieInfo(account.username)
-			}
-			publishMu.Unlock()
+			ClearCookieInfo(username)
+			atomicVerifyInfo.Store(new(VerifyInfo))
 		} else {
 			logger.WithField("RespCode", resp.GetResult()).
 				WithField("RespMsg", resp.GetErrorMsg()).

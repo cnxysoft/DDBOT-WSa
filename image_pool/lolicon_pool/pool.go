@@ -2,7 +2,6 @@ package lolicon_pool
 
 import (
 	"container/list"
-	"context"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	"github.com/cnxysoft/DDBOT-WSa/image_pool"
@@ -23,14 +22,6 @@ type LoliconPool struct {
 	cache   map[R18Type]*list.List
 	cond    *sync.Cond
 	changed bool
-	lifeMu  sync.Mutex
-	stop    chan struct{}
-	wg      sync.WaitGroup
-	started bool
-	closed  bool // protected by cond.L
-	ctx     context.Context
-	cancel  context.CancelFunc
-	fetch   func(context.Context, string, R18Type, string, int) (*Response, error)
 }
 
 func KeywordOption(keyword string) image_pool.OptionFunc {
@@ -79,7 +70,7 @@ func (pool *LoliconPool) Get(options ...image_pool.OptionFunc) ([]image_pool.Ima
 	}
 	if keyword != "" {
 		logger.Debugf("request remote image")
-		resp, err := pool.fetch(pool.ctx, pool.config.ApiKey, r18, keyword, num)
+		resp, err := LoliconAppSetu(pool.config.ApiKey, r18, keyword, num)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +132,7 @@ func (pool *LoliconPool) getCache(r18 R18Type, num int) (result []image_pool.Ima
 // caller must hold the lock
 func (pool *LoliconPool) fillCacheFromRemote(r18 R18Type) error {
 	logger.WithField("r18", r18.String()).Debug("fetch from remote")
-	resp, err := pool.fetch(pool.ctx, pool.config.ApiKey, r18, "", 10)
+	resp, err := LoliconAppSetu(pool.config.ApiKey, r18, "", 10)
 	if err != nil {
 		return err
 	}
@@ -163,15 +154,15 @@ func (pool *LoliconPool) fillCacheFromRemote(r18 R18Type) error {
 }
 
 func (pool *LoliconPool) background() {
-	defer pool.wg.Done()
+	go func() {
+		for range time.Tick(time.Second * 5) {
+			pool.store()
+		}
+	}()
 	for {
 		var result = true
 		pool.cond.L.Lock()
 		for {
-			if pool.closed {
-				pool.cond.L.Unlock()
-				return
-			}
 			var checkResult = false
 			for _, v := range pool.cache {
 				if v.Len() < pool.config.CacheMin {
@@ -198,7 +189,6 @@ func (pool *LoliconPool) background() {
 						break
 					}
 					if l.Len() == before {
-						result = false
 						logger.WithField("from", "background").Warnf("远端返回 0 张图片，停止本轮填充 (r18=%v)", r18)
 						break
 					}
@@ -207,30 +197,12 @@ func (pool *LoliconPool) background() {
 		}
 		pool.cond.L.Unlock()
 		if !result {
-			select {
-			case <-pool.stop:
-				return
-			case <-time.After(time.Minute):
-			}
+			time.Sleep(time.Minute)
 		}
 	}
 }
 
 func NewLoliconPool(config *Config) (*LoliconPool, error) {
-	pool, err := PrepareLoliconPool(config)
-	if err == nil {
-		pool.Start()
-	}
-	return pool, err
-}
-
-// PrepareLoliconPool keeps the candidate idle until the transaction commits.
-func PrepareLoliconPool(config *Config) (*LoliconPool, error) {
-	if config == nil || config.CacheMin < 0 || config.CacheMax < 0 {
-		return nil, fmt.Errorf("invalid image cache limits")
-	}
-	copyConfig := *config
-	config = &copyConfig
 	// 目前不再需要apikey了
 	//if config.ApiKey == "" {
 	//	return nil, errors.New("empty api key")
@@ -249,59 +221,10 @@ func PrepareLoliconPool(config *Config) (*LoliconPool, error) {
 		cache:   make(map[R18Type]*list.List),
 		cond:    sync.NewCond(&sync.Mutex{}),
 		changed: false,
-		stop:    make(chan struct{}),
-		fetch:   LoliconAppSetuContext,
 	}
 	pool.cache[R18Off] = list.New()
 	pool.cache[R18On] = list.New()
-	pool.ctx, pool.cancel = context.WithCancel(context.Background())
-	return pool, nil
-}
-
-func (pool *LoliconPool) Start() {
-	pool.lifeMu.Lock()
-	defer pool.lifeMu.Unlock()
-	pool.cond.L.Lock()
-	closed := pool.closed
-	pool.cond.L.Unlock()
-	if pool.started || closed {
-		return
-	}
-	pool.started = true
-	// The previous generation has flushed and retired before we load its cache.
 	pool.load()
-	pool.wg.Add(2)
 	go pool.background()
-	go func() {
-		defer pool.wg.Done()
-		timer := time.NewTicker(5 * time.Second)
-		defer timer.Stop()
-		for {
-			select {
-			case <-pool.stop:
-				return
-			case <-timer.C:
-				pool.store()
-			}
-		}
-	}()
-}
-
-func (pool *LoliconPool) Close() error {
-	pool.lifeMu.Lock()
-	pool.cancel()
-	pool.cond.L.Lock()
-	if !pool.closed {
-		pool.closed = true
-		close(pool.stop)
-		pool.cond.Broadcast()
-	}
-	pool.cond.L.Unlock()
-	pool.wg.Wait()
-	if pool.started {
-		pool.store()
-		pool.started = false
-	}
-	pool.lifeMu.Unlock()
-	return nil
+	return pool, nil
 }

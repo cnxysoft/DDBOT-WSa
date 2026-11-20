@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/adapter/qqofficial"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/bilibili"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
@@ -30,12 +30,14 @@ import (
 //     AES-256-GCM 解密），拿到的是 AppID + AppSecret 这一对凭据。手填那两个键的路
 //     同样保留——扫码是便利路径，不是唯一路径。
 //
-// 落盘走的是与扫码命令同一条配置事务路径（cfg.WriteConfigKeyValuesContext），
+// 落盘走的是与扫码命令同一条路径（cfg.WriteConfigKeyValue），
 // 所以配置文件里其它内容与格式都会被保留。
 //
 // 关于权限：这三个接口挂在 withAuth 后面，和面板其它接口一样只认 admin.token，
-// 没有额外限制（用户要能正常用）。扫码与配置 API 都允许写入平台凭据，
-// 配置读取只返回脱敏状态；管理及 WebSocket token 仍禁止通过配置 API 修改。
+// 没有额外限制（用户要能正常用）。它们会把凭据写进配置，而配置 API 是禁止改
+// SESSDATA / bili_jct 的（见 isProtectedConfigKeyPath）——两者不冲突：那条限制
+// 防的是「拿到 token 的人把 bot 登到别的账号上」，而扫码登录是账号主人自己扫，
+// 本来就是凭据的正常来源。
 
 const (
 	loginPlatformBilibili   = "bilibili"
@@ -57,7 +59,6 @@ const (
 type loginSession struct {
 	id        string
 	platform  string
-	setup     bool
 	createdAt time.Time
 	cancel    chan struct{}
 
@@ -97,44 +98,10 @@ func (s *loginSession) stop() {
 	s.cancelOnce.Do(func() { close(s.cancel) })
 }
 
-// A channel-backed context exposes cancellation synchronously without a bridge
-// goroutine that could outlive a completed login or miss a queued transaction.
-type loginSessionContext struct {
-	context.Context
-	done <-chan struct{}
-}
-
-func (c loginSessionContext) Done() <-chan struct{} { return c.done }
-
-func (c loginSessionContext) Err() error {
-	select {
-	case <-c.done:
-		return context.Canceled
-	default:
-		return nil
-	}
-}
-
-func (s *loginSession) context() context.Context {
-	return loginSessionContext{Context: context.Background(), done: s.cancel}
-}
-
 type loginManager struct {
 	mu       sync.Mutex
 	sessions map[string]*loginSession
 	active   map[string]string // platform -> session id：同一平台只保留一个会话
-}
-
-// revokeAll cancels work without waiting: a canceled login may itself be waiting
-// for the configuration transaction currently rotating the management token.
-func (m *loginManager) revokeAll() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, sess := range m.sessions {
-		sess.stop()
-	}
-	m.sessions = make(map[string]*loginSession)
-	m.active = make(map[string]string)
 }
 
 func newLoginManager() *loginManager {
@@ -147,10 +114,6 @@ func newLoginManager() *loginManager {
 // start 建会话。同一平台已有会话时先停掉它——用户再点一次「扫码登录」是要换一张码，
 // 不是开第二个会话（两个会话同时扫会抢着写同一份配置）。
 func (m *loginManager) start(platform string) *loginSession {
-	return m.startScoped(platform, false)
-}
-
-func (m *loginManager) startScoped(platform string, setup bool) *loginSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -164,7 +127,6 @@ func (m *loginManager) startScoped(platform string, setup bool) *loginSession {
 	sess := &loginSession{
 		id:        newLoginID(),
 		platform:  platform,
-		setup:     setup,
 		createdAt: time.Now(),
 		cancel:    make(chan struct{}),
 		state:     loginStateWaiting,
@@ -181,31 +143,6 @@ func (m *loginManager) get(id string) *loginSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sessions[id]
-}
-
-// startLoginForRequest makes creation atomic with token revocation. An already
-// authenticated request cannot start a new task after its token was rotated.
-func (s *Server) startLoginForRequest(r *http.Request, platform string) *loginSession {
-	return s.startScopedLoginForRequest(r, platform, false)
-}
-
-func (s *Server) startScopedLoginForRequest(r *http.Request, platform string, setup bool) *loginSession {
-	s.tokenMu.Lock()
-	defer s.tokenMu.Unlock()
-	if s.authStopped || (setup && s.token != "") {
-		return nil
-	}
-	if revoked, ok := r.Context().Value(streamAuthKey{}).(<-chan struct{}); ok {
-		if revoked != s.streamsRevoked {
-			return nil
-		}
-		select {
-		case <-revoked:
-			return nil
-		default:
-		}
-	}
-	return s.loginManagerOf().startScoped(platform, setup)
 }
 
 // release 彻底移除会话（取消时用）。
@@ -305,12 +242,7 @@ func (s *Server) handleLoginQRCodePlatform(w http.ResponseWriter, r *http.Reques
 	}
 
 	mgr := s.loginManagerOf()
-	sess := s.startScopedLoginForRequest(r, platform, forcedPlatform != "")
-	if sess == nil {
-		w.Header().Set("X-DDBOT-Auth", "invalid-token")
-		writeJSONError(w, http.StatusForbidden, "登录已失效，请重新登录")
-		return
-	}
+	sess := mgr.start(platform)
 	switch platform {
 	case loginPlatformBilibili:
 		go s.runBilibiliLogin(mgr, sess)
@@ -339,32 +271,17 @@ func (s *Server) handleLoginQRCodePlatform(w http.ResponseWriter, r *http.Reques
 			writeJSONError(w, http.StatusBadGateway, message)
 			return
 		}
-		select {
-		case <-sess.cancel:
-			writeJSONError(w, http.StatusGone, "扫码会话已取消，请重新获取二维码")
-			return
-		case <-r.Context().Done():
-			sess.stop()
-			mgr.release(sess)
-			return
-		case <-time.After(200 * time.Millisecond):
-		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	sess.stop()
-	mgr.release(sess)
 	writeJSONError(w, http.StatusGatewayTimeout, "获取二维码超时，请重试")
 }
 
 // handleLoginQRCodeStatus GET /api/v1/login/qrcode/status?session=xxx
 func (s *Server) handleLoginQRCodeStatus(w http.ResponseWriter, r *http.Request) {
-	s.handleScopedLoginQRCodeStatus(w, r, false)
-}
-
-func (s *Server) handleScopedLoginQRCodeStatus(w http.ResponseWriter, r *http.Request, setup bool) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
 	sess := s.loginManagerOf().get(r.URL.Query().Get("session"))
-	if sess == nil || sess.setup != setup {
+	if sess == nil {
 		writeJSONError(w, http.StatusNotFound, "会话不存在或已结束")
 		return
 	}
@@ -385,7 +302,7 @@ func (s *Server) handleScopedLoginQRCodeStatus(w http.ResponseWriter, r *http.Re
 // 且只要 token 已设置就 404——不是常驻的匿名接口。
 
 func (s *Server) handleSetupQQOfficialQRCode(w http.ResponseWriter, r *http.Request) {
-	if s.getToken() != "" {
+	if !s.setupNeeded() {
 		writeJSONError(w, http.StatusNotFound, "setup already completed")
 		return
 	}
@@ -393,27 +310,28 @@ func (s *Server) handleSetupQQOfficialQRCode(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleSetupQQOfficialQRCodeStatus(w http.ResponseWriter, r *http.Request) {
-	if s.getToken() != "" {
+	if !s.setupNeeded() {
 		writeJSONError(w, http.StatusNotFound, "setup already completed")
 		return
 	}
-	s.handleScopedLoginQRCodeStatus(w, r, true)
+	// 只允许查询 QQ 官方会话，避免向导窗口顺带暴露其它平台的扫码状态
+	if sess := s.loginManagerOf().get(r.URL.Query().Get("session")); sess == nil || sess.platform != loginPlatformQQOfficial {
+		writeJSONError(w, http.StatusNotFound, "会话不存在或已结束")
+		return
+	}
+	s.handleLoginQRCodeStatus(w, r)
 }
 
 func (s *Server) handleSetupQQOfficialQRCodeCancel(w http.ResponseWriter, r *http.Request) {
-	if s.getToken() != "" {
+	if !s.setupNeeded() {
 		writeJSONError(w, http.StatusNotFound, "setup already completed")
 		return
 	}
-	s.handleScopedLoginQRCodeCancel(w, r, true)
+	s.handleLoginQRCodeCancel(w, r)
 }
 
 // handleLoginQRCodeCancel POST /api/v1/login/qrcode/cancel
 func (s *Server) handleLoginQRCodeCancel(w http.ResponseWriter, r *http.Request) {
-	s.handleScopedLoginQRCodeCancel(w, r, false)
-}
-
-func (s *Server) handleScopedLoginQRCodeCancel(w http.ResponseWriter, r *http.Request, setup bool) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -427,7 +345,7 @@ func (s *Server) handleScopedLoginQRCodeCancel(w http.ResponseWriter, r *http.Re
 	}
 
 	mgr := s.loginManagerOf()
-	if sess := mgr.get(req.Session); sess != nil && sess.setup == setup {
+	if sess := mgr.get(req.Session); sess != nil {
 		sess.stop()
 		mgr.release(sess)
 	}
@@ -440,9 +358,6 @@ func (s *Server) runBilibiliLogin(mgr *loginManager, sess *loginSession) {
 
 	qrSession := bilibili.NewQRLoginSession()
 	resp, err := bilibili.GetQRCodeQuiet(qrSession)
-	if sess.context().Err() != nil {
-		return
-	}
 	if err != nil {
 		sess.setState(loginStateFailed, "生成二维码失败："+err.Error())
 		return
@@ -474,9 +389,6 @@ func (s *Server) runBilibiliLogin(mgr *loginManager, sess *loginSession) {
 			return
 		case <-ticker.C:
 			check, err := bilibili.QRLoginCheck(qrSession, resp.GetData().GetQrcodeKey())
-			if sess.context().Err() != nil {
-				return
-			}
 			if err != nil {
 				// 轮询偶发失败不结束会话，等下一次
 				logrus.Debugf("B站扫码轮询失败（继续）: %v", err)
@@ -500,10 +412,6 @@ func (s *Server) runBilibiliLogin(mgr *loginManager, sess *loginSession) {
 
 // finishBilibiliLogin 校验扫码结果并落盘。
 func (s *Server) finishBilibiliLogin(sess *loginSession, qrSession *bilibili.QRLoginSession, redirectURL string) {
-	ctx := sess.context()
-	if ctx.Err() != nil {
-		return
-	}
 	cookies, err := bilibili.GetCookiesFromJar(qrSession)
 	if err != nil || cookies.SESSDATA == "" || cookies.BILI_JCT == "" {
 		// 与扫码命令同一条兜底：cookie jar 没拿到时，从轮询响应里的跳转地址解析
@@ -515,15 +423,27 @@ func (s *Server) finishBilibiliLogin(sess *loginSession, qrSession *bilibili.QRL
 		}
 	}
 
-	// The config transaction validates the candidate in an isolated client and
-	// updates the live account only after both credentials are durably saved.
-	if err := cfg.WriteConfigKeyValuesContext(ctx, map[string]string{
-		"bilibili.SESSDATA": cookies.SESSDATA,
-		"bilibili.bili_jct": cookies.BILI_JCT,
-	}); err != nil {
-		sess.setState(loginStateFailed, "登录凭据验证或保存失败，请检查网络后重试")
+	// 先验证再落盘：二维码偶尔会返回无效凭据，不能拿它覆盖原有配置
+	bilibili.SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
+	navResp, err := bilibili.XWebInterfaceNav(true)
+	if err != nil || navResp.GetCode() != 0 || !navResp.GetData().GetIsLogin() {
+		sess.setState(loginStateFailed, "扫码结果校验失败，Cookie 可能无效，请重试")
 		return
 	}
+
+	config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
+	config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
+
+	if err := cfg.WriteConfigKeyValue("bilibili.SESSDATA", cookies.SESSDATA); err != nil {
+		sess.setState(loginStateFailed, "登录成功但写入 SESSDATA 失败："+err.Error())
+		return
+	}
+	if err := cfg.WriteConfigKeyValue("bilibili.bili_jct", cookies.BILI_JCT); err != nil {
+		sess.setState(loginStateFailed, "登录成功但写入 bili_jct 失败："+err.Error())
+		return
+	}
+
+	bilibili.FreshSelfInfo()
 	invalidateAccountCache(loginPlatformBilibili)
 	sess.setState(loginStateConfirmed, "登录成功，Cookie 已写入配置")
 }
@@ -533,11 +453,19 @@ func (s *Server) finishBilibiliLogin(sess *loginSession, qrSession *bilibili.QRL
 func (s *Server) runWeiboLogin(mgr *loginManager, sess *loginSession) {
 	defer mgr.finish(sess)
 
-	ch, err := weibo.RunQRLoginForQQContext(sess.context(), loginSessionTTL)
+	ch, err := weibo.RunQRLoginForQQ(loginSessionTTL)
 	if err != nil {
 		sess.setState(loginStateFailed, "获取二维码失败："+err.Error())
 		return
 	}
+	// 不再关心结果时把 channel 排空，免得 lsp/weibo 那边的 goroutine 卡在发送上
+	defer func() {
+		go func() {
+			for range ch {
+			}
+		}()
+	}()
+
 	var first weibo.QRLoginResult
 	select {
 	case <-sess.cancel:
@@ -585,7 +513,7 @@ func (s *Server) runWeiboLogin(mgr *loginManager, sess *loginSession) {
 			}
 			invalidateAccountCache(loginPlatformWeibo)
 			if !r.RuntimeLoaded {
-				sess.setState(loginStateFailed, "凭据已保存，但运行会话未就绪；请检查登录状态后重试")
+				sess.setState(loginStateConfirmed, "登录成功并已写入配置；Cookie 加载到内存失败，建议重启 Bot")
 				return
 			}
 			sess.setState(loginStateConfirmed, "登录成功，SUB 已写入配置并生效")
@@ -601,7 +529,16 @@ func (s *Server) runWeiboLogin(mgr *loginManager, sess *loginSession) {
 func (s *Server) runQQOfficialLogin(mgr *loginManager, sess *loginSession) {
 	defer mgr.finish(sess)
 
-	ctx := sess.context()
+	// 会话被取消时，把在途的绑定请求一起掐掉
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-sess.cancel:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	qrSess, err := qqofficial.NewQRBindSession(ctx, qqofficial.DefaultQRBindOptions())
 	if err != nil {
@@ -652,30 +589,31 @@ func (s *Server) runQQOfficialLogin(mgr *loginManager, sess *loginSession) {
 	}
 }
 
-// finishQQOfficialLogin validates/reconnects the active same-identity adapter
-// through the config transaction before reporting success. Credentials saved
-// while another protocol is active remain pending for protocol migration.
+// finishQQOfficialLogin 把扫码结果落盘。
+//
+// 与 B站 那条一样先写运行时配置再落盘：两条写成功日志/失败提示各自独立。
+// 这里没有「校验凭据」这一步可做——AppSecret 刚由平台解密出来，没有任何免鉴权接口可以校验，
+// 直接以写盘结果为准。
 func (s *Server) finishQQOfficialLogin(sess *loginSession, res *qqofficial.QRBindResult) {
-	ctx := sess.context()
-	if ctx.Err() != nil {
-		return
-	}
 	if res.AppID == "" || res.Secret == "" {
 		sess.setState(loginStateFailed, "扫码成功但凭据不完整，请重试")
 		return
 	}
 
-	if err := cfg.WriteConfigKeyValuesContext(ctx, map[string]string{
-		"qqofficial.app-id": res.AppID, "qqofficial.app-secret": res.Secret,
-	}); err != nil {
-		sess.setState(loginStateFailed, "绑定凭据应用失败，配置未应用；请检查连接和机器人身份后重试")
+	config.GlobalConfig.Set("qqofficial.app-id", res.AppID)
+	config.GlobalConfig.Set("qqofficial.app-secret", res.Secret)
+
+	if err := cfg.WriteConfigKeyValue("qqofficial.app-id", res.AppID); err != nil {
+		sess.setState(loginStateFailed, "绑定成功但写入 app-id 失败："+err.Error())
 		return
 	}
+	if err := cfg.WriteConfigKeyValue("qqofficial.app-secret", res.Secret); err != nil {
+		sess.setState(loginStateFailed, "绑定成功但写入 app-secret 失败："+err.Error())
+		return
+	}
+
 	invalidateAccountCache(loginPlatformQQOfficial)
 	sess.setAccount(res.AppID)
-	if adapter.GetAdapterType() == adapter.AdapterTypeQQOfficial {
-		sess.setState(loginStateConfirmed, "绑定成功，凭据已保存并连接")
-	} else {
-		sess.setState(loginStateConfirmed, "绑定凭据已保存；当前使用其他协议，切换协议需要单独迁移运行数据")
-	}
+	// 提示里只带 AppID（不是密钥）
+	sess.setState(loginStateConfirmed, "绑定成功，AppID "+res.AppID+" 与 AppSecret 已写入配置")
 }

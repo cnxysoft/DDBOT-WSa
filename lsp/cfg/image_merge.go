@@ -39,13 +39,12 @@ func GetImageMergeConfig(site string) ImageMergeConfig {
 	if config.GlobalConfig == nil {
 		return c
 	}
-	snapshot := config.GlobalConfig.Snapshot()
 	resolve := func(option string) string {
 		for _, key := range []string{"imageMerge." + option, site + ".imageMerge." + option} {
 			if site == "" && strings.HasPrefix(key, ".") {
 				continue
 			}
-			value := strings.ToLower(strings.TrimSpace(snapshot.GetString(key)))
+			value := strings.ToLower(strings.TrimSpace(config.GlobalConfig.GetString(key)))
 			if value != "" && value != "inherit" {
 				return value
 			}
@@ -57,7 +56,7 @@ func GetImageMergeConfig(site string) ImageMergeConfig {
 		c.LegacyBilibili = false
 	}
 	if mode == "" && site == "bilibili" {
-		mode = strings.ToLower(strings.TrimSpace(snapshot.GetString("bilibili.imageMergeMode")))
+		mode = strings.ToLower(config.GlobalConfig.GetString("bilibili.imageMergeMode"))
 	}
 	switch mode {
 	case "auto", "only9", "always", "off":
@@ -88,7 +87,7 @@ func GetImageMergeConfig(site string) ImageMergeConfig {
 			if site == "" && strings.HasPrefix(prefix, ".") {
 				continue
 			}
-			value := strings.ToLower(strings.TrimSpace(snapshot.GetString(prefix + option)))
+			value := strings.ToLower(strings.TrimSpace(config.GlobalConfig.GetString(prefix + option)))
 			if value == "" || value == "0" || value == "inherit" {
 				continue
 			}

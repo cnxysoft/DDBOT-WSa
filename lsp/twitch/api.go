@@ -27,8 +27,6 @@ var validLoginRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{4,25}$`)
 // appToken 缓存的 App Access Token
 type appToken struct {
 	mu           sync.Mutex
-	refreshMu    sync.Mutex
-	generation   uint64
 	accessToken  string
 	expiresIn    int
 	fetchedAt    time.Time
@@ -45,19 +43,15 @@ var consecutiveFailures atomic.Int32
 func resetTransportIfNeeded() {
 	if consecutiveFailures.Load() >= 3 {
 		logger.Warn("Twitch API 连续多次请求超时，重置空闲连接")
-		if closer, ok := http.DefaultTransport.(interface{ CloseIdleConnections() }); ok {
-			closer.CloseIdleConnections()
-		}
+		http.DefaultTransport.(*http.Transport).CloseIdleConnections()
 		consecutiveFailures.Store(0)
 	}
 }
 
 // invalidateToken 强制清除已缓存的 Token，下次请求时重新获取
-func invalidateToken(auth apiAuth) {
+func invalidateToken() {
 	tokenStore.mu.Lock()
-	if tokenStore.generation == auth.generation {
-		tokenStore.accessToken = ""
-	}
+	tokenStore.accessToken = ""
 	tokenStore.mu.Unlock()
 	logger.Warn("Twitch Token 已失效，下次请求时将重新获取")
 }
@@ -111,93 +105,98 @@ type UsersResponse struct {
 // ErrUserNotFound Twitch用户不存在
 var ErrUserNotFound = errors.New("twitch 用户不存在")
 
-// InitToken installs a credential generation. Requests already in flight cannot
-// publish their old token into a newer generation.
+// InitToken 初始化 token 存储的凭据信息
 func InitToken(clientId, clientSecret string) {
-	tokenStore.install(&appToken{clientId: clientId, clientSecret: clientSecret})
+	tokenStore.mu.Lock()
+	defer tokenStore.mu.Unlock()
+	tokenStore.clientId = clientId
+	tokenStore.clientSecret = clientSecret
+	tokenStore.accessToken = ""
+	logger.Debug("Twitch Token 凭据已初始化")
 }
 
-type apiAuth struct {
-	token, clientID string
-	generation      uint64
+// isTokenExpired 检查token是否即将过期（60秒缓冲）
+func isTokenExpired() bool {
+	if tokenStore.accessToken == "" {
+		return true
+	}
+	elapsed := time.Since(tokenStore.fetchedAt)
+	return elapsed >= time.Duration(tokenStore.expiresIn-60)*time.Second
 }
 
-func (store *appToken) install(candidate *appToken) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	store.generation++
-	store.clientId, store.clientSecret = candidate.clientId, candidate.clientSecret
-	store.accessToken, store.expiresIn, store.fetchedAt = candidate.accessToken, candidate.expiresIn, candidate.fetchedAt
-}
+// getAccessToken 获取有效的 access token，过期时自动刷新
+// 使用 double-checked locking 避免在HTTP请求期间持有锁
+func getAccessToken() (string, error) {
+	// 第一次检查：快速路径，缓存命中时无需加锁
+	tokenStore.mu.Lock()
+	if tokenStore.accessToken != "" && !isTokenExpired() {
+		token := tokenStore.accessToken
+		tokenStore.mu.Unlock()
+		return token, nil
+	}
+	// 记录旧token以便失败时回退
+	oldToken := tokenStore.accessToken
+	tokenStore.mu.Unlock()
 
-func (store *appToken) configured() bool {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return store.clientId != "" && store.clientSecret != ""
-}
+	// 检查凭据
+	tokenStore.mu.Lock()
+	if tokenStore.clientId == "" || tokenStore.clientSecret == "" {
+		tokenStore.mu.Unlock()
+		logger.Errorf("twitch clientId 或 clientSecret 未配置")
+		return "", fmt.Errorf("twitch clientId 或 clientSecret 未配置")
+	}
+	tokenStore.mu.Unlock()
 
-func requestAppToken(clientID, secret string) (tokenResponse, error) {
-	return requestAppTokenWithProxy(clientID, secret, nil)
-}
+	logger.Debug("Twitch Token 已过期或不存在，正在刷新")
 
-func requestAppTokenWithProxy(clientID, secret string, getter proxy_pool.Getter) (tokenResponse, error) {
-	return requestAppTokenAtWithProxy(authURL, clientID, secret, getter)
-}
-
-func requestAppTokenAtWithProxy(endpoint, clientID, secret string, getter proxy_pool.Getter) (tokenResponse, error) {
+	// 在锁外执行HTTP请求
 	var resp tokenResponse
-	err := requests.PostWWWForm(endpoint, gout.H{"client_id": clientID, "client_secret": secret, "grant_type": "client_credentials"}, &resp,
-		requests.TimeoutOption(10*time.Second), requests.RetryOption(3), requests.ProxyOptionWithGetter(proxy_pool.PreferOversea, getter))
+	err := requests.PostWWWForm(authURL, gout.H{
+		"client_id":     tokenStore.clientId,
+		"client_secret": tokenStore.clientSecret,
+		"grant_type":    "client_credentials",
+	}, &resp,
+		requests.TimeoutOption(time.Second*10),
+		requests.RetryOption(3),
+		requests.ProxyOption(proxy_pool.PreferOversea),
+	)
 	if err != nil {
-		return tokenResponse{}, fmt.Errorf("Twitch API 认证请求失败")
+		logger.Errorf("获取 Twitch App Token 失败: %v", err)
+		// 失败时返回旧token（如果存在）
+		if oldToken != "" {
+			logger.Warn("Token刷新失败，使用旧Token")
+			return oldToken, nil
+		}
+		return "", fmt.Errorf("获取 Twitch App Token 失败: %w", err)
 	}
-	if resp.AccessToken == "" || resp.ExpiresIn <= 0 {
-		return tokenResponse{}, fmt.Errorf("Twitch API 未返回有效令牌")
+	if resp.AccessToken == "" {
+		logger.Errorf("获取 Twitch App Token 失败: 响应为空")
+		if oldToken != "" {
+			return oldToken, nil
+		}
+		return "", fmt.Errorf("获取 Twitch App Token 失败: 响应为空")
 	}
-	return resp, nil
+
+	// 更新token（持有锁）
+	tokenStore.mu.Lock()
+	tokenStore.accessToken = resp.AccessToken
+	tokenStore.expiresIn = resp.ExpiresIn
+	tokenStore.fetchedAt = time.Now()
+	tokenStore.mu.Unlock()
+
+	logger.WithField("expiresIn", resp.ExpiresIn).Debug("Twitch Token 刷新成功")
+
+	return resp.AccessToken, nil
 }
 
-func (store *appToken) auth(fetch func(string, string) (tokenResponse, error)) (apiAuth, error) {
-	store.refreshMu.Lock()
-	defer store.refreshMu.Unlock()
-	for {
-		store.mu.Lock()
-		generation, clientID, secret := store.generation, store.clientId, store.clientSecret
-		oldToken := store.accessToken
-		if oldToken != "" && time.Since(store.fetchedAt) < time.Duration(store.expiresIn-60)*time.Second {
-			store.mu.Unlock()
-			return apiAuth{oldToken, clientID, generation}, nil
-		}
-		store.mu.Unlock()
-		if clientID == "" || secret == "" {
-			return apiAuth{}, fmt.Errorf("twitch.clientId 和 twitch.clientSecret 未配置")
-		}
-		resp, err := fetch(clientID, secret)
-		store.mu.Lock()
-		if generation != store.generation {
-			store.mu.Unlock()
-			continue
-		}
-		if err != nil {
-			store.mu.Unlock()
-			if oldToken != "" {
-				return apiAuth{oldToken, clientID, generation}, nil
-			}
-			return apiAuth{}, err
-		}
-		store.accessToken, store.expiresIn, store.fetchedAt = resp.AccessToken, resp.ExpiresIn, time.Now()
-		store.mu.Unlock()
-		return apiAuth{resp.AccessToken, clientID, generation}, nil
-	}
-}
-
-func getAPIAuth() (apiAuth, error)    { return tokenStore.auth(requestAppToken) }
-func getAccessToken() (string, error) { auth, err := getAPIAuth(); return auth.token, err }
-
-func apiOptions(auth apiAuth) []requests.Option {
+// apiOptions 返回 Twitch API 请求的通用选项
+func apiOptions(token string) []requests.Option {
 	return []requests.Option{
-		requests.HeaderOption("Client-Id", auth.clientID), requests.HeaderOption("Authorization", "Bearer "+auth.token),
-		requests.TimeoutOption(10 * time.Second), requests.RetryOption(3), requests.ProxyOption(proxy_pool.PreferOversea),
+		requests.HeaderOption("Client-Id", tokenStore.clientId),
+		requests.HeaderOption("Authorization", "Bearer "+token),
+		requests.TimeoutOption(time.Second * 10),
+		requests.RetryOption(3),
+		requests.ProxyOption(proxy_pool.PreferOversea),
 	}
 }
 
@@ -237,7 +236,7 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 	// 如果之前连续失败多次，先重置连接池再发请求
 	resetTransportIfNeeded()
 
-	auth, err := getAPIAuth()
+	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +251,7 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 		}
 		batch := logins[i:end]
 
-		streams, err := getStreamsBatch(auth, batch)
+		streams, err := getStreamsBatch(token, batch)
 		if err != nil {
 			consecutiveFailures.Add(1)
 			logger.Errorf("批量查询 Twitch 直播状态失败: %v", err)
@@ -269,17 +268,17 @@ func GetStreamsByLogins(logins []string) ([]*StreamData, error) {
 }
 
 // getStreamsBatch 批量查询一批用户的直播状态
-func getStreamsBatch(auth apiAuth, logins []string) ([]StreamData, error) {
+func getStreamsBatch(token string, logins []string) ([]StreamData, error) {
 	query := buildUserLoginQuery(logins)
 	urlStr := fmt.Sprintf("%s/streams?%s", apiBase, query)
 
 	var resp StreamsResponse
 	var httpCode int
-	opts := append(apiOptions(auth), requests.HttpCodeOption(&httpCode))
+	opts := append(apiOptions(token), requests.HttpCodeOption(&httpCode))
 	err := requests.Get(urlStr, nil, &resp, opts...)
 	if err != nil {
 		if httpCode == http.StatusUnauthorized {
-			invalidateToken(auth)
+			invalidateToken()
 		}
 		logger.WithField("logins", logins).Errorf("查询 Twitch 直播状态失败: %v", err)
 		return nil, fmt.Errorf("查询 Twitch 直播状态失败: %w", err)
@@ -297,7 +296,7 @@ func GetStreamByLogin(login string) (*StreamData, error) {
 		return nil, fmt.Errorf("无效的 Twitch 用户名: %s", login)
 	}
 
-	auth, err := getAPIAuth()
+	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +305,7 @@ func GetStreamByLogin(login string) (*StreamData, error) {
 	urlStr := fmt.Sprintf("%s/streams?%s", apiBase, query)
 
 	var resp StreamsResponse
-	err = requests.Get(urlStr, nil, &resp, apiOptions(auth)...)
+	err = requests.Get(urlStr, nil, &resp, apiOptions(token)...)
 	if err != nil {
 		logger.WithField("login", login).Errorf("查询 Twitch 直播状态失败: %v", err)
 		return nil, fmt.Errorf("查询 Twitch 直播状态失败 [%s]: %w", login, err)
@@ -327,7 +326,7 @@ func GetUserByLogin(login string) (*UserData, error) {
 		return nil, fmt.Errorf("无效的 Twitch 用户名: %s", login)
 	}
 
-	auth, err := getAPIAuth()
+	token, err := getAccessToken()
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +335,7 @@ func GetUserByLogin(login string) (*UserData, error) {
 	urlStr := fmt.Sprintf("%s/users?%s", apiBase, query)
 
 	var resp UsersResponse
-	err = requests.Get(urlStr, nil, &resp, apiOptions(auth)...)
+	err = requests.Get(urlStr, nil, &resp, apiOptions(token)...)
 	if err != nil {
 		logger.WithField("login", login).Errorf("查询 Twitch 用户信息失败: %v", err)
 		return nil, fmt.Errorf("查询 Twitch 用户信息失败 [%s]: %w", login, err)

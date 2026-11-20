@@ -64,13 +64,3 @@ func TestProxyPool(t *testing.T) {
 	pool.Delete(proxy.ProxyString())
 	pool.Stop()
 }
-
-func TestMissingProxyRouteExplicitlySelectsDirectConnection(t *testing.T) {
-	for _, pool := range []*Pool{NewLocalPool(nil), NewLocalPool([]*Proxy{{Proxy: "mainland", Type: proxy_pool.PreferMainland}})} {
-		for _, prefer := range []proxy_pool.Prefer{proxy_pool.PreferOversea, proxy_pool.PreferNone} {
-			p, err := pool.Get(prefer)
-			assert.Nil(t, p)
-			assert.ErrorIs(t, err, proxy_pool.ErrNil)
-		}
-	}
-}

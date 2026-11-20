@@ -19,6 +19,9 @@ import (
 // and routes them into existing I* handlers (watch/unwatch/list/enable/disable...).
 // It respects configuration under `telegram.commands.*`.
 func (l *Lsp) StartTelegramCommands() {
+	if !config.GlobalConfig.GetBool("telegram.enable") {
+		return
+	}
 	// Commands are enabled by default when telegram is enabled
 
 	// Start receiving text messages from Telegram

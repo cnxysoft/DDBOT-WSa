@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/lsp/xhs/crypto"
@@ -44,7 +43,7 @@ type Client struct {
 	config          *crypto.CryptoConfig
 	crypto          *crypto.CryptoProcessor
 	session         *crypto.SessionManager
-	cookies         atomic.Pointer[cookieGeneration]
+	cookies         map[string]string
 	logger          *logrus.Logger
 	baseURL         string
 	liveRoomBaseURL string
@@ -53,15 +52,14 @@ type Client struct {
 	httpTransport   *http.Transport
 }
 
-type cookieGeneration struct{ values map[string]string }
-
 // NewClient creates a new XHS client
 func NewClient(cookies map[string]string) *Client {
 	config := crypto.DefaultCryptoConfig()
-	client := &Client{
+	return &Client{
 		config:          config,
 		crypto:          crypto.NewCryptoProcessor(config),
 		session:         crypto.NewSessionManager(config),
+		cookies:         cookies,
 		logger:          logrus.New(),
 		baseURL:         BaseURL,
 		liveRoomBaseURL: LiveRoomBaseURL,
@@ -70,24 +68,11 @@ func NewClient(cookies map[string]string) *Client {
 			requests.TimeoutOption(30 * time.Second),
 		},
 	}
-	client.SetCookies(cookies)
-	return client
 }
 
 // SetCookies sets the cookies for the client
 func (c *Client) SetCookies(cookies map[string]string) {
-	generation := &cookieGeneration{values: make(map[string]string, len(cookies))}
-	for key, value := range cookies {
-		generation.values[key] = value
-	}
-	c.cookies.Store(generation)
-}
-
-func (c *Client) cookieSnapshot() map[string]string {
-	if generation := c.cookies.Load(); generation != nil {
-		return generation.values
-	}
-	return nil
+	c.cookies = cookies
 }
 
 // SetTransport sets the HTTP transport for the client (used in tests)
@@ -305,13 +290,12 @@ type FeedVideoCapa struct {
 }
 
 func (c *Client) SearchUserOnebox(keyword string) (*SearchOneboxResponse, error) {
-	cookies := c.cookieSnapshot()
 	keyword = strings.TrimSpace(keyword)
 	if keyword == "" {
 		return nil, fmt.Errorf("keyword is required")
 	}
 
-	a1Value := cookies["a1"]
+	a1Value := c.cookies["a1"]
 	if a1Value == "" {
 		return nil, fmt.Errorf("a1 cookie is required")
 	}
@@ -344,10 +328,10 @@ func (c *Client) SearchUserOnebox(keyword string) (*SearchOneboxResponse, error)
 		return nil, fmt.Errorf("failed to build signature: %w", err)
 	}
 
-	headers := c.buildSignedHeaders(timestamp, xT, true, cookies)
+	headers := c.buildSignedHeaders(timestamp, xT, true)
 	headers["x-s"] = signature
 	fullURL := c.baseURL + uri
-	decodedBody, err := c.doRequest(http.MethodPost, fullURL, headers, body, cookies)
+	decodedBody, err := c.doSignedRequest(http.MethodPost, fullURL, headers, body)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +345,6 @@ func (c *Client) SearchUserOnebox(keyword string) (*SearchOneboxResponse, error)
 }
 
 func (c *Client) GetFeedNote(sourceNoteID string, xsecToken string, xsecSource string) (*FeedResponse, error) {
-	cookies := c.cookieSnapshot()
 	sourceNoteID = strings.TrimSpace(sourceNoteID)
 	xsecToken = strings.TrimSpace(xsecToken)
 	xsecSource = strings.TrimSpace(xsecSource)
@@ -375,7 +358,7 @@ func (c *Client) GetFeedNote(sourceNoteID string, xsecToken string, xsecSource s
 		xsecSource = "pc_user"
 	}
 
-	a1Value := cookies["a1"]
+	a1Value := c.cookies["a1"]
 	if a1Value == "" {
 		return nil, fmt.Errorf("a1 cookie is required")
 	}
@@ -401,10 +384,10 @@ func (c *Client) GetFeedNote(sourceNoteID string, xsecToken string, xsecSource s
 		return nil, fmt.Errorf("failed to build signature: %w", err)
 	}
 
-	headers := c.buildSignedHeaders(timestamp, xT, true, cookies)
+	headers := c.buildSignedHeaders(timestamp, xT, true)
 	headers["x-s"] = signature
 	fullURL := c.baseURL + FeedAPI
-	decodedBody, err := c.doRequest(http.MethodPost, fullURL, headers, body, cookies)
+	decodedBody, err := c.doSignedRequest(http.MethodPost, fullURL, headers, body)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +400,6 @@ func (c *Client) GetFeedNote(sourceNoteID string, xsecToken string, xsecSource s
 }
 
 func (c *Client) GetCurrentRoomInfo(roomID string, requestUserID string) (*CurrentRoomInfoResponse, error) {
-	cookies := c.cookieSnapshot()
 	roomID = strings.TrimSpace(roomID)
 	requestUserID = strings.TrimSpace(requestUserID)
 	if roomID == "" {
@@ -427,7 +409,7 @@ func (c *Client) GetCurrentRoomInfo(roomID string, requestUserID string) (*Curre
 		return nil, fmt.Errorf("request_user_id is required")
 	}
 
-	a1Value := cookies["a1"]
+	a1Value := c.cookies["a1"]
 	if a1Value == "" {
 		return nil, fmt.Errorf("a1 cookie is required")
 	}
@@ -446,10 +428,10 @@ func (c *Client) GetCurrentRoomInfo(roomID string, requestUserID string) (*Curre
 		return nil, fmt.Errorf("failed to build signature: %w", err)
 	}
 
-	headers := c.buildSignedHeaders(timestamp, xT, false, cookies)
+	headers := c.buildSignedHeaders(timestamp, xT, false)
 	headers["x-s"] = signature
 	fullURL := c.liveRoomBaseURL + CurrentRoomInfoAPI + "?" + buildOrderedQueryString(params)
-	decodedBody, err := c.doRequest(http.MethodGet, fullURL, headers, nil, cookies)
+	decodedBody, err := c.doSignedRequest(http.MethodGet, fullURL, headers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +445,6 @@ func (c *Client) GetCurrentRoomInfo(roomID string, requestUserID string) (*Curre
 }
 
 func (c *Client) GetUserProfile(userID string) (*UserProfilePageUser, error) {
-	cookies := c.cookieSnapshot()
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return nil, fmt.Errorf("user_id is required")
@@ -471,7 +452,7 @@ func (c *Client) GetUserProfile(userID string) (*UserProfilePageUser, error) {
 
 	headers := c.buildWebHeaders("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	fullURL := c.webBaseURL + "/user/profile/" + url.PathEscape(userID)
-	body, err := c.doRequest(http.MethodGet, fullURL, headers, nil, cookies)
+	body, err := c.doRequest(http.MethodGet, fullURL, headers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,13 +473,9 @@ func (c *Client) GetUserProfile(userID string) (*UserProfilePageUser, error) {
 	return state.User, nil
 }
 
-func (c *Client) buildSignedHeaders(timestamp float64, xT int64, includeJSONContentType bool, cookieSets ...map[string]string) map[string]string {
-	cookies := c.cookieSnapshot()
-	if len(cookieSets) > 0 {
-		cookies = cookieSets[0]
-	}
+func (c *Client) buildSignedHeaders(timestamp float64, xT int64, includeJSONContentType bool) map[string]string {
 	headers := map[string]string{
-		"x-s-common":         c.crypto.SignXSCommon(cookies["a1"], cookies, timestamp),
+		"x-s-common":         c.crypto.SignXSCommon(c.cookies["a1"], c.cookies, timestamp),
 		"x-t":                fmt.Sprintf("%d", xT),
 		"x-b3-traceid":       c.crypto.GenerateB3TraceID(),
 		"x-xray-traceid":     c.crypto.GenerateXrayTraceID(xT, 0),
@@ -545,11 +522,7 @@ func (c *Client) doSignedRequest(method string, fullURL string, headers map[stri
 	return c.doRequest(method, fullURL, headers, body)
 }
 
-func (c *Client) doRequest(method string, fullURL string, headers map[string]string, body []byte, cookieSets ...map[string]string) ([]byte, error) {
-	cookies := c.cookieSnapshot()
-	if len(cookieSets) > 0 {
-		cookies = cookieSets[0]
-	}
+func (c *Client) doRequest(method string, fullURL string, headers map[string]string, body []byte) ([]byte, error) {
 	var respBody []byte
 	var respHeader requests.RespHeader
 	options := append([]requests.Option{}, c.requestOptions...)
@@ -559,7 +532,7 @@ func (c *Client) doRequest(method string, fullURL string, headers map[string]str
 	for key, value := range headers {
 		options = append(options, requests.HeaderOption(key, value))
 	}
-	for key, value := range cookies {
+	for key, value := range c.cookies {
 		options = append(options, requests.CookieOption(key, value))
 	}
 

@@ -2,10 +2,8 @@ package lsp
 
 import (
 	"fmt"
-	"reflect"
 	"sync"
 
-	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -57,23 +55,19 @@ func (c *cronjobRun) Run() {
 }
 
 func (l *Lsp) CronjobReload() {
-	l.cronMu.Lock()
-	defer l.cronMu.Unlock()
-	jobs, schedules, err := cfg.ParseCronJobs(config.GlobalConfig.Snapshot())
-	if err != nil {
-		cronLog.WithError(err).Error("定时任务配置无效，保留现有任务")
-		return
-	}
-	if l.cronConfigured && reflect.DeepEqual(l.cronConfig, jobs) {
-		return
-	}
 	for _, entry := range l.cron.Entries() {
 		l.cron.Remove(entry.ID)
 	}
-	for i, entry := range jobs {
-		l.cron.Schedule(schedules[i], &cronjobRun{entry, l})
+	cronjobs := cfg.GetCronJob()
+	for _, entry := range cronjobs {
+		if _, err := l.cron.AddJob(entry.Cron, &cronjobRun{entry, l}); err != nil {
+			cronLog.WithField("cron_exp", entry.Cron).
+				WithField("template_name", entry.TemplateName).
+				WithField("target_group", entry.Target.Group).
+				WithField("target_private", entry.Target.Private).
+				Errorf("添加定时任务失败：%v", err)
+		}
 	}
-	l.cronConfig, l.cronConfigured = jobs, true
 }
 
 func (l *Lsp) CronStart() {

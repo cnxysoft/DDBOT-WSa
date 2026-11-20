@@ -2,10 +2,8 @@ package admin
 
 import (
 	"bytes"
-	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -107,18 +105,14 @@ type LogInfo struct {
 }
 
 type Server struct {
-	addr       string
-	runtimeMu  sync.Mutex
-	listener   net.Listener
-	httpServer *http.Server
-	handler    http.Handler
-	retired    sync.WaitGroup
+	addr string
 
 	// token 支持运行期热更新（初始化向导设置密码后无需重启即可登录），读写加锁
-	tokenMu        sync.RWMutex
-	authStopped    bool // protected by tokenMu; final Stop rejects new authorized work
-	token          string
-	streamsRevoked chan struct{}
+	tokenMu sync.RWMutex
+	token   string
+	// tokenDefault 表示当前 token 是「admin.token 未配置」时的默认密码 520。
+	// 首次使用时初始化向导保持可用；向导写完 admin.token 后置 false。
+	tokenDefault bool
 
 	startedAt time.Time
 	online    *atomic.Bool
@@ -136,37 +130,32 @@ func (s *Server) getToken() string {
 
 func (s *Server) setToken(t string) {
 	s.tokenMu.Lock()
-	if s.token != t {
-		s.revokeStreamsLocked()
-		s.loginManagerOf().revokeAll()
-	}
 	s.token = t
 	s.tokenMu.Unlock()
 }
 
-func (s *Server) revokeStreamsLocked() {
-	if s.streamsRevoked != nil {
-		close(s.streamsRevoked)
-	}
-	s.streamsRevoked = make(chan struct{})
+func (s *Server) isTokenDefault() bool {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	return s.tokenDefault
 }
 
-func (s *Server) streamRevocation() <-chan struct{} {
+func (s *Server) setTokenDefault(v bool) {
 	s.tokenMu.Lock()
-	defer s.tokenMu.Unlock()
-	if s.streamsRevoked == nil {
-		s.streamsRevoked = make(chan struct{})
-	}
-	return s.streamsRevoked
+	s.tokenDefault = v
+	s.tokenMu.Unlock()
 }
 
-type streamAuthKey struct{}
-
-func (s *Server) requestStreamRevocation(r *http.Request) <-chan struct{} {
-	if revoked, ok := r.Context().Value(streamAuthKey{}).(<-chan struct{}); ok {
-		return revoked
+// setupNeeded 判断是否仍处于「首次使用」窗口。
+//
+// 配置里没写 admin.token 时，进程会使用默认密码 520（tokenDefault=true），
+// 此时向导保持可用，让用户先选协议端、扫码/填凭据、再设密码；
+// 向导完成后 tokenDefault 置 false，匿名 setup 接口立即 404。
+func (s *Server) setupNeeded() bool {
+	if s.isTokenDefault() {
+		return true
 	}
-	return s.streamRevocation()
+	return s.getToken() == ""
 }
 
 type SubSummary struct {
@@ -188,6 +177,9 @@ type Health struct {
 const (
 	// defaultAdminAddr 与示例配置保持一致：默认只监听本机，不把面板暴露到局域网。
 	defaultAdminAddr = "127.0.0.1:15631"
+	// defaultAdminToken 是 admin.token 未配置时的默认登录密码。
+	// 用户明确要求默认 520；首次打开会进入初始化向导，可在这里改成更长的密码。
+	defaultAdminToken = "520"
 	// docsWebUI 面板说明文档。面板默认关闭，未启用时若不给出入口，用户升级后
 	// 完全无从发现这个功能（老 application.yaml 里通常没有 admin 段）。
 	docsWebUI = "https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/"
@@ -207,8 +199,10 @@ func panelURL(addr string) string {
 }
 
 // adminTokenHint 说明本次启动的鉴权状态，免得用户打开面板后对着 401 发懵。
-func adminTokenHint(addr, token string) string {
+func adminTokenHint(addr, token string, tokenDefault bool) string {
 	switch {
+	case tokenDefault:
+		return "admin.token 未配置，默认登录密码为 520；本机首次打开会进入初始化向导"
 	case token != "":
 		return "登录密码为配置里的 admin.token"
 	case !isLoopbackAddr(addr):
@@ -219,27 +213,30 @@ func adminTokenHint(addr, token string) string {
 }
 
 func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
-	s := newServer(online)
-	activeServerMu.Lock()
-	activeServer = s
-	activeServerMu.Unlock()
-	if !config.GlobalConfig.GetBool("admin.enable") {
-		logrus.Infof("Web 管理面板未启用；可修改 admin.enable 自动启用，说明见 %s", docsWebUI)
+	enable := config.GlobalConfig.GetBool("admin.enable")
+	if !enable {
+		// 面板默认关闭，关闭时没有其它任何日志。这一行是用户发现自己有这个功能的
+		// 唯一线索，别删。
+		logrus.Infof("Web 管理面板未启用（admin.enable 未开启）；如需在浏览器里管理，请在 application.yaml 中设置 admin.enable: true 后重启，说明见 %s", docsWebUI)
 		return nil, nil
 	}
-	addr := configuredAdminAddr(config.GlobalConfig.Snapshot())
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("Web 管理面板监听失败: %w", err)
+	addr := config.GlobalConfig.GetString("admin.addr")
+	if addr == "" {
+		addr = defaultAdminAddr
 	}
-	s.addr = addr
-	s.serve(ln)
-	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, s.getToken()))
-	return s, nil
-}
+	configuredToken := config.GlobalConfig.GetString("admin.token")
+	token := configuredToken
+	tokenDefault := false
+	if token == "" {
+		// 用户要求默认密码 520。默认密码只用于本机首次进入；面板默认只监听回环地址，
+		// 首次打开会进入初始化向导，写入新的 admin.token 后即失效。
+		token = defaultAdminToken
+		tokenDefault = true
+		logrus.Warn("admin.token 未配置，Web 管理面板使用默认密码 520；首次打开会进入初始化向导，建议设置新的管理密码")
+	}
 
-func newServer(online *atomic.Bool) *Server {
-	s := &Server{token: config.GlobalConfig.GetString("admin.token"), startedAt: time.Now(), online: online}
+	s := &Server{addr: addr, token: token, tokenDefault: tokenDefault, startedAt: time.Now(), online: online}
+
 	// 推送记录收集器（eventbus → 内存环形缓冲，供 REST/SSE 读取）
 	installPushCollector()
 
@@ -266,7 +263,6 @@ func newServer(online *atomic.Bool) *Server {
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
-	mux.HandleFunc("/api/v1/config/status", s.withAuth(s.handleConfigStatus))
 	mux.HandleFunc("/api/v1/config/reload", s.withAuth(s.handleConfigReload))
 
 	// WebUI 外观（背景图 / 字体颜色）：登录页也要显示背景，GET 允许匿名；
@@ -319,8 +315,21 @@ func newServer(online *atomic.Bool) *Server {
 	// ServeMux 最长匹配保证 /api/* 不会被这里吞掉。静态资源见 static.go 的说明）
 	mux.Handle("/", http.HandlerFunc(serveWebFile))
 
-	s.handler = mux
-	return s
+	// 先同步绑定端口，再把 Serve 丢到后台：端口被占用之类的问题必须当场可见，
+	// 否则用户只会看到「面板没起来」，日志里却一个字都没有。
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logrus.Errorf("Web 管理面板启动失败(addr=%s)：%v；请检查端口是否被占用，或修改 admin.addr", addr, err)
+		return nil, err
+	}
+	server := &http.Server{Handler: mux}
+	go func() {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logrus.Errorf("admin server 异常退出(addr=%s): %v", addr, err)
+		}
+	}()
+	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, token, tokenDefault))
+	return s, nil
 }
 
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -335,19 +344,7 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// 安全：token 为空时一律拒绝，不允许无鉴权访问（对应配置 admin.token 为空的默认情况）
-		s.tokenMu.Lock()
-		if s.authStopped {
-			s.tokenMu.Unlock()
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		token := s.token
-		if s.streamsRevoked == nil {
-			s.streamsRevoked = make(chan struct{})
-		}
-		revoked := (<-chan struct{})(s.streamsRevoked)
-		s.tokenMu.Unlock()
-		if token == "" {
+		if s.getToken() == "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"admin token not configured"}`))
 			return
@@ -358,15 +355,12 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		// 常量时间比较，防时序攻击
-		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(token)) != 1 {
-			// Distinguish expired authentication from an authenticated operation
-			// rejected by policy, which also uses HTTP 403.
-			w.Header().Set("X-DDBOT-Auth", "invalid-token")
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))), []byte(s.getToken())) != 1 {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		next(w, r.WithContext(context.WithValue(r.Context(), streamAuthKey{}, revoked)))
+		next(w, r)
 	}
 }
 
@@ -793,25 +787,24 @@ var sensitiveConfigLeafPaths = map[string]bool{
 	"websocket.token":          true,
 	"telegram.token":           true,
 	"qqofficial.app-secret":    true,
-	"qqofficial.appsecret":     true,
+	"qqofficial.appSecret":     true,
 	"qqofficial.secret":        true,
-	"bilibili.sessdata":        true,
+	"bilibili.SESSDATA":        true,
 	"bilibili.bili_jct":        true,
-	"bilibili.password":        true,
 	"acfun.password":           true,
-	"acfun.authkey":            true,
-	"acfun.acpasstoken":        true,
+	"acfun.authKey":            true,
+	"acfun.acPassToken":        true,
 	"twitter.auth_token":       true,
 	"twitter.ct0":              true,
-	"twitter.bearertoken":      true,
-	"douyin.acsignature":       true,
-	"douyin.acnonce":           true,
-	"douyin.sessionid":         true,
+	"twitter.bearerToken":      true,
+	"douyin.acSignature":       true,
+	"douyin.acNonce":           true,
+	"douyin.sessionId":         true,
 	"weibo.sub":                true,
-	"twitch.clientsecret":      true,
-	"twitcasting.clientsecret": true,
+	"twitch.clientSecret":      true,
+	"twitcasting.clientSecret": true,
 	"heybox.x_xhh_tokenid":     true,
-	"loliconpool.apikey":       true,
+	"loliconPool.apikey":       true,
 }
 
 // sensitiveConfigSubtreePaths：这些路径下的所有叶子都视为凭据（保留嵌套结构，逐叶替换）。
@@ -829,7 +822,6 @@ func joinConfigPath(prefix, key string) string {
 }
 
 func isSensitiveSubtreePath(path string) bool {
-	path = strings.ToLower(path)
 	for _, p := range sensitiveConfigSubtreePaths {
 		if path == p || strings.HasPrefix(path, p+".") {
 			return true
@@ -847,7 +839,7 @@ func maskSensitiveConfig(cfg map[string]interface{}) {
 func maskConfigMap(cfg map[string]interface{}, prefix string) {
 	for k, v := range cfg {
 		path := joinConfigPath(prefix, k)
-		if sensitiveConfigLeafPaths[strings.ToLower(path)] {
+		if sensitiveConfigLeafPaths[path] {
 			cfg[k] = maskedConfigValue(v)
 			continue
 		}
@@ -888,30 +880,6 @@ func maskedConfigValue(v interface{}) interface{} {
 		return v
 	}
 	return redactedPlaceholder
-}
-
-// mergeConfig 将 newCfg 合并到 baseCfg（new 优先）；值为脱敏占位符的键跳过，保留 base 原值
-func mergeConfig(baseCfg, newCfg map[string]interface{}) {
-	mergeConfigAtPath(baseCfg, newCfg, "")
-}
-
-func mergeConfigAtPath(baseCfg, newCfg map[string]interface{}, prefix string) {
-	for k, v := range newCfg {
-		if s, ok := v.(string); ok && s == redactedPlaceholder {
-			continue
-		}
-		actual := k
-		if !literalConfigMap(prefix) {
-			actual, _ = configMapKey(baseCfg, k)
-		}
-		if nm, ok := v.(map[string]interface{}); ok {
-			if bm, ok2 := baseCfg[actual].(map[string]interface{}); ok2 {
-				mergeConfigAtPath(bm, nm, joinConfigPath(prefix, actual))
-				continue
-			}
-		}
-		baseCfg[actual] = v
-	}
 }
 
 // writeFileAtomic 以「临时文件 + rename」方式写入配置文件。
@@ -981,15 +949,11 @@ func configValueUnset(v interface{}) bool {
 //   - 非受保护路径若用标量/nil 整体替换掉含受保护键的现有子树，按被删掉的受保护键记违规；
 //   - 受保护键的叶子值按「占位符代表未修改」「新旧语义相等代表未修改」判断。
 func collectConfigWriteViolations(existing, updated map[string]interface{}, prefix string) []string {
-	if literalConfigMap(prefix) {
-		return nil
-	}
 	var violations []string
 	for k, newVal := range updated {
 		key := joinConfigPath(prefix, k)
 		newMap, newIsMap := newVal.(map[string]interface{})
-		actual, _ := configMapKey(existing, k)
-		oldVal, oldPresent := existing[actual]
+		oldVal, oldPresent := existing[k]
 		oldMap, oldIsMap := oldVal.(map[string]interface{})
 
 		if newIsMap {
@@ -1035,9 +999,6 @@ func collectConfigWriteViolations(existing, updated map[string]interface{}, pref
 
 // protectedPathsInSubtree 返回 cfg 子树中所有受保护键的完整路径（用于检测父键被整体替换/删除）。
 func protectedPathsInSubtree(cfg map[string]interface{}, prefix string) []string {
-	if literalConfigMap(prefix) {
-		return nil
-	}
 	var paths []string
 	for k, v := range cfg {
 		path := joinConfigPath(prefix, k)
@@ -1074,7 +1035,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			config = make(map[string]interface{})
 		}
 		maskSensitiveConfig(config)
-		w.Header().Set("ETag", cfg.ConfigETag(data))
 		_ = json.NewEncoder(w).Encode(config)
 
 	case http.MethodPost:
@@ -1085,55 +1045,45 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 			return
 		}
+		// 接入方式是「跑错通道可能收发不到消息」的配置：面板写入时先校验，
+		// 别让一个笔误只能靠重启后的 Warn 发现（adapter 侧仍保留回落兜底）。
+		if err := validateAdapterModePatch(req.Config); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 
 		// 与其他写配置的地方（初始化向导 / 微博 cookie 回写）共用同一把写锁：
 		// 这里是「读整份 -> 改 -> 写整份」，不持锁与后台回写并发时会互相覆盖。
 		cfgMu := cfg.GetConfigWriteMutex()
 		cfgMu.Lock()
 		defer cfgMu.Unlock()
+		cfg.MarkConfigWriteStart()
+		defer cfg.MarkConfigWriteEnd()
 
 		existing := make(map[string]interface{})
+		var oldData []byte
 		cfgPath := cfg.ConfigFilePath()
-		version, err := cfg.ReadConfigFileVersion(cfgPath)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "Failed to read config file")
-			return
-		}
-		if ifMatch := r.Header.Values("If-Match"); ifMatch != nil && !version.MatchesETag(strings.Join(ifMatch, ",")) {
-			writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
-			return
-		}
-		if version.Exists() {
-			data := version.Bytes()
+		if data, err := os.ReadFile(cfgPath); err == nil {
+			oldData = data
 			if uerr := yaml.Unmarshal(data, &existing); uerr != nil {
 				// 解析失败时 existing 停在空 map，merge 后整份写回 = 把用户配置清空。
 				// 宁可拒绝写入，让用户先修好 YAML。
 				w.WriteHeader(http.StatusInternalServerError)
 				_ = json.NewEncoder(w).Encode(map[string]string{
-					"error": "现有配置解析失败，已拒绝写入以免覆盖；请检查 YAML 格式",
+					"error": "现有配置解析失败，已拒绝写入以免覆盖: " + uerr.Error(),
 				})
 				return
 			}
-			if uerr := validateConfigDocument(data); uerr != nil {
-				writeErr(w, http.StatusBadRequest, "现有配置字段重复或格式无效，已拒绝写入；请检查 YAML 格式")
-				return
-			}
+		} else if !os.IsNotExist(err) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to read config file"})
+			return
 		}
 		if existing == nil {
 			// ghodss/yaml 对空内容 / 纯注释 / 字面 null 不报错，却会把目标 map 置成 nil，
-			// 后面 mergeConfig 往 nil map 写会 panic（handler 里就是连接被直接掐断）。
+			// 后面展开补丁往 nil map 写会 panic（handler 里就是连接被直接掐断）。
 			existing = make(map[string]interface{})
-		}
-		var identityErr error
-		existing, identityErr = normalizeConfigPaths(existing)
-		if identityErr != nil {
-			writeErr(w, http.StatusBadRequest, "现有配置字段存在歧义，已拒绝写入："+identityErr.Error())
-			return
-		}
-		req.Config, identityErr = normalizeConfigPaths(req.Config)
-		if identityErr != nil {
-			writeErr(w, http.StatusBadRequest, identityErr.Error())
-			return
 		}
 
 		// 安全：整体写挡掉受保护键（admin.token、websocket.token），
@@ -1147,65 +1097,60 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := validateAdapterModePatch(req.Config); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
-		// mergeConfig 是递归合并，用户删掉的命令会继续留在配置里，改不动。
-		if key, ok := configMapKey(req.Config, "customCommandPrefix"); ok {
-			actual, _ := configMapKey(existing, key)
-			existing[actual] = req.Config[key]
-			delete(req.Config, key)
-		}
-
-		mergeConfig(existing, req.Config)
-
-		if err := validateQQOfficialConfig(existing); err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		data, err := renderConfigCandidate(version.Bytes(), existing)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
-			return
-		}
-
-		if err := config.GlobalConfig.Validate(data); err != nil {
+		// 接入方式为 QQ 开放平台时，AppID / AppSecret 必须齐全；否则重启后
+		// qqofficial adapter 会直接 Fatal（「缺少 qqofficial.app-id」）。
+		// 允许在同一次保存里同时填凭据（配置页常见操作）。
+		if err := validateQQOfficialCredentialsPatch(existing, req.Config); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		navigation := s.prepareConfigNavigation(data)
 
-		reloadStatus, err := config.GlobalConfig.SaveAndStatus(data, func() error {
-			return version.Persist(data, 0600, true)
-		})
-		if err != nil {
-			var rejected *config.PrepareError
-			if errors.Is(err, cfg.ErrConfigConflict) {
-				writeErr(w, http.StatusConflict, cfg.ErrConfigConflict.Error())
-			} else if errors.As(err, &rejected) {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": rejected.Error()})
-			} else {
-				w.WriteHeader(http.StatusInternalServerError)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
+		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
+		// 递归展开成叶子路径会把用户删掉的命令继续留在配置里，改不动。
+		var patches []cfg.ConfigPatch
+		if v, ok := req.Config["customCommandPrefix"]; ok {
+			patches = append(patches, cfg.ConfigPatch{Path: []string{"customCommandPrefix"}, Value: v})
+			delete(req.Config, "customCommandPrefix")
+		}
+		patches = append(patches, cfg.FlattenConfigPatch(req.Config)...)
+
+		// 脱敏占位符代表「未修改」：高级页整份 JSON 回传时不能把占位符写进配置。
+		filtered := patches[:0]
+		for _, patch := range patches {
+			if s, ok := patch.Value.(string); ok && s == redactedPlaceholder {
+				continue
 			}
+			filtered = append(filtered, patch)
+		}
+		patches = filtered
+
+		if len(patches) == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 			return
 		}
 
-		w.Header().Set("ETag", cfg.ConfigETag(data))
-		response := map[string]interface{}{
-			"status": "success", "reload": reloadStatus,
+		// 写入前备份原配置
+		if len(oldData) > 0 {
+			if err := os.WriteFile(cfgPath+".bak", oldData, 0600); err != nil {
+				logrus.Warnf("配置备份失败: %v", err)
+			}
 		}
-		if destination := navigation(); destination != nil {
-			response["navigation"] = destination
+
+		// 只改补丁里的值行：默认生成的 application.yaml 的注释、空行、缩进、
+		// 行内注释都原样保留（整份 yaml.Marshal 会把它们全部吃掉）。
+		if err := cfg.WriteConfigPatchesToPath(patches, cfgPath); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "写入配置失败: " + err.Error()})
+			return
 		}
-		_ = json.NewEncoder(w).Encode(response)
+		// 写入后主动热重载：viper 的 WatchConfig 事件会被写配置窗口忽略，
+		// 不主动读一次的话，日志等级 / 定时任务等要等到下次文件变动才生效。
+		if err := cfg.ReloadConfigFile(); err != nil {
+			logrus.Warnf("配置已写入，但热重载失败（重启后生效）: %v", err)
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1213,43 +1158,32 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleConfigStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(config.GlobalConfig.Status())
-}
-
-// Manual reload uses the same validated transaction as the file watcher.
+// handleConfigReload POST /api/v1/config/reload —— 手动热重载配置文件。
+// 用于用户直接编辑 application.yaml 后，不想重启 Bot 的场景。
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
 		return
 	}
+	// 与写配置共用同一把锁，避免读到写了一半的文件
 	cfgMu := cfg.GetConfigWriteMutex()
 	cfgMu.Lock()
 	defer cfgMu.Unlock()
-	s.runtimeMu.Lock()
-	previous := s.listener
-	s.runtimeMu.Unlock()
-	if err := config.GlobalConfig.Reload(); err != nil {
-		writeErr(w, http.StatusBadRequest, config.GlobalConfig.Status().LastError)
+	if err := cfg.ReloadConfigFile(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "热重载失败: " + err.Error()})
 		return
 	}
-	response := map[string]interface{}{"reload": config.GlobalConfig.Status()}
-	s.runtimeMu.Lock()
-	if current := s.listener; current != previous {
-		destination := configNavigation{Enabled: current != nil}
-		if current != nil {
-			destination.Addr = current.Addr().String()
-		}
-		response["navigation"] = destination
+	// admin.token 也是配置的一部分：外部改了之后热重载应立刻生效。
+	// 空值保持当前 token，避免把面板弄成「无密码」。
+	if newToken := strings.TrimSpace(config.GlobalConfig.GetString("admin.token")); newToken != "" {
+		s.setToken(newToken)
+		s.setTokenDefault(false)
 	}
-	s.runtimeMu.Unlock()
-	_ = json.NewEncoder(w).Encode(response)
+	logrus.Info("配置已热重载（接入方式/连接类修改仍需重启 Bot）")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // protectedConfigKeys 禁止通过 API 修改的配置键（防止改 token 提权或持久化后门）
@@ -1284,18 +1218,51 @@ func validateAdapterModePatch(patch map[string]interface{}) error {
 	}
 }
 
-// Check effective credentials after merge so masked placeholders are ignored.
-func validateQQOfficialConfig(candidate map[string]interface{}) error {
-	if nestedConfigString(candidate, "adapter", "mode") != "qqofficial" {
+// configPatchString 取补丁里的值；补丁没带这个键时回退到现有配置。
+// 第二个返回值表示补丁里是否显式出现了该键（显式清空时不能回退）。
+func configPatchString(existing, patch map[string]interface{}, top string, keys ...string) (string, bool) {
+	if sub, ok := patch[top].(map[string]interface{}); ok {
+		for _, key := range keys {
+			if v, exists := sub[key]; exists {
+				return configValueString(v), true
+			}
+		}
+	}
+	return nestedConfigString(existing, top, keys...), false
+}
+
+// validateQQOfficialCredentialsPatch 阻止「接入方式切到 QQ 开放平台，但凭据是空的」
+// 这种重启必挂的配置落盘。
+//
+// 判定基于「补丁合入后的有效值」：补丁里带 qqofficial.app-id/app-secret 就用补丁的，
+// 否则用现有配置。这样「先在配置页填凭据，再切接入方式」和「同一次保存里一起填」
+// 都能通过；只有确实缺凭据时才拒绝。
+func validateQQOfficialCredentialsPatch(existing, patch map[string]interface{}) error {
+	mode := ""
+	if sub, ok := patch["adapter"].(map[string]interface{}); ok {
+		if v, exists := sub["mode"]; exists {
+			mode = strings.TrimSpace(configValueString(v))
+		}
+	}
+	if mode == "" {
+		if sub, ok := existing["adapter"].(map[string]interface{}); ok {
+			mode = strings.TrimSpace(configValueString(sub["mode"]))
+		}
+	}
+	if mode == "" {
+		mode = "onebot-v11"
+	}
+	if mode != "qqofficial" {
 		return nil
 	}
-	appID := nestedConfigString(candidate, "qqofficial", "app-id", "appId")
-	secret := nestedConfigString(candidate, "qqofficial", "app-secret", "appSecret", "secret")
+
+	appID, _ := configPatchString(existing, patch, "qqofficial", "app-id", "appId")
+	appSecret, _ := configPatchString(existing, patch, "qqofficial", "app-secret", "appSecret", "secret")
 	if appID == "" {
-		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-id（AppID）")
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-id（AppID），或改回 OneBot 11")
 	}
-	if secret == "" {
-		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-secret（AppSecret）")
+	if appSecret == "" {
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-secret（AppSecret），或改回 OneBot 11")
 	}
 	if !isNumericAppID(appID) {
 		return fmt.Errorf("AppID 必须是纯数字，请到 QQ 开放平台机器人管理端核对")
@@ -1307,7 +1274,6 @@ func validateQQOfficialConfig(candidate map[string]interface{}) error {
 // 精确匹配顶层路径（websocket.token），或任意嵌套层级的同名末段（a.b.websocket.token），
 // 防止把受保护键藏进嵌套结构绕过校验。
 func isProtectedConfigKeyPath(path string) bool {
-	path = strings.ToLower(path)
 	if protectedConfigKeys[path] {
 		return true
 	}

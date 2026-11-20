@@ -100,12 +100,6 @@ func init() {
 }
 
 func freshCookieOpt(sub string) error {
-	refreshMu.Lock()
-	defer refreshMu.Unlock()
-	return freshCookieOptUnlocked(sub)
-}
-
-func freshCookieOptUnlocked(sub string) error {
 	// API 模式不需要刷新 Cookie，直接从外部 API 获取数据
 	if cfg.IsWeiboAPIMode() {
 		return nil
@@ -113,13 +107,12 @@ func freshCookieOptUnlocked(sub string) error {
 
 	var cookies []*http.Cookie
 	var err error
-	ua := requests.RandomUA(requests.Chrome)
 
 	localutils.Retry(3, time.Second, func() bool {
 		if isGuestMode() {
-			cookies, err = freshCookieGuestWithUA(ua)
+			cookies, err = FreshCookieGuest()
 		} else {
-			cookies, err = freshCookieLoginWithUA(ua)
+			cookies, err = FreshCookieLogin()
 		}
 		return err == nil
 	})
@@ -175,7 +168,7 @@ func freshCookieOptUnlocked(sub string) error {
 		}
 	}
 
-	storeCookieOptions(opt, ua)
+	visitorCookiesOpt.Store(opt)
 	if isGuestMode() {
 		logger.Infof("微博 Guest Cookie 已加载，共 %d 个", len(opt))
 	} else {

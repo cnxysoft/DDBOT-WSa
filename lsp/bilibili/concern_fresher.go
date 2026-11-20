@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Sora233/MiraiGo-Template/bot"
+	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
@@ -21,8 +22,13 @@ import (
 func (c *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
 		t := time.NewTimer(time.Second * 3)
-		defer t.Stop()
-
+		var interval time.Duration
+		if config.GlobalConfig != nil {
+			interval = config.GlobalConfig.GetDuration("bilibili.interval")
+		}
+		if interval == 0 {
+			interval = time.Second * 20
+		}
 		var freshCount atomic.Int32
 		if !cfg.GetBilibiliOnlyOnlineNotify() {
 			freshCount.Store(1000)
@@ -35,7 +41,7 @@ func (c *Concern) fresh() concern.FreshFunc {
 			}
 			if cfg.IsPlatformDisabled(Site) {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				t.Reset(cfg.PollInterval("bilibili", 20*time.Second))
+				t.Reset(interval)
 				continue
 			}
 			if bot.Instance == nil || bot.Instance.Messenger == nil || bot.Instance.Adapter == nil ||
@@ -271,20 +277,19 @@ func (c *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			t.Reset(cfg.PollInterval("bilibili", 20*time.Second))
+			t.Reset(interval)
 		}
 	}
 }
 
 func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
-	generation := getVerify()
 	var start = time.Now()
 	// 旧的 dynamic_new / dynamic_history 已被 B 站下线（HTTP 404），
 	// 改用网页新版动态接口 feed/all，返回的 items 再由 polymerItemsToCards 转换回旧的 Card 结构
 	resp, err := WebDynamicFeedAll("")
 	if err != nil {
 		if errors.Is(err, ErrVerifyRequired) {
-			notifyBilibiliLoginExpiredForGeneration(bilibiliLoginSourceDynamic, generation)
+			notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
 		}
 		logger.Errorf("WebDynamicFeedAll error %v", err)
 		return nil, err
@@ -292,7 +297,7 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 	var newsMap = make(map[int64][]*Card)
 	if resp.GetCode() != 0 {
 		if isBilibiliLoginInvalidResponse(resp.GetCode(), resp.GetMessage()) {
-			notifyBilibiliLoginExpiredForGeneration(bilibiliLoginSourceDynamic, generation)
+			notifyBilibiliLoginExpired(bilibiliLoginSourceDynamic)
 		}
 		logger.WithField("RespCode", resp.GetCode()).
 			WithField("RespMsg", resp.GetMessage()).
@@ -336,7 +341,7 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 		_ = c.MarkLatestActive(news.Mid, news.Timestamp)
 		_ = c.AddUserInfo(&news.UserInfo)
 	}
-	markBilibiliLoginRecoveredForGeneration(bilibiliLoginSourceDynamic, generation)
+	markBilibiliLoginRecovered(bilibiliLoginSourceDynamic)
 	logger.WithField("cost", time.Now().Sub(start)).
 		WithField("NewsInfo Size", len(result)).
 		Trace("freshDynamicNew done")
@@ -345,7 +350,6 @@ func (c *Concern) freshDynamicNew() ([]*NewsInfo, error) {
 
 // return all LiveInfo in LiveStatus_Living
 func (c *Concern) freshLive() ([]*LiveInfo, error) {
-	generation, account := getVerify(), getAccount()
 	var start = time.Now()
 	var liveInfo []*LiveInfo
 	var infoSet = make(map[int64]bool)
@@ -356,19 +360,16 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 		resp, err := FeedList(FeedPageOpt(page))
 		if err != nil {
 			if errors.Is(err, ErrVerifyRequired) {
-				notifyBilibiliLoginExpiredForGeneration(bilibiliLoginSourceLive, generation)
+				notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
 			}
 			logger.Errorf("freshLive FeedList error %v", err)
 			return nil, err
 		} else if resp.GetCode() != 0 {
 			if isBilibiliLoginInvalidResponse(resp.GetCode(), resp.GetMessage()) {
+				notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
 				logger.Errorf("刷新直播列表失败，可能是cookie失效，将尝试重新获取cookie")
-				credentialPublishMu.Lock()
-				if atomicVerifyInfo.CompareAndSwap(generation, new(VerifyInfo)) {
-					notifyBilibiliLoginExpired(bilibiliLoginSourceLive)
-					ClearCookieInfo(account.username)
-				}
-				credentialPublishMu.Unlock()
+				ClearCookieInfo(username)
+				atomicVerifyInfo.Store(new(VerifyInfo))
 			} else if resp.GetCode() == -400 {
 				logger.Errorf("刷新直播列表失败，可能是自动登陆失败，请查看文档尝试手动设置b站cookie")
 			} else {
@@ -464,7 +465,7 @@ func (c *Concern) freshLive() ([]*LiveInfo, error) {
 	for _, info := range liveInfo {
 		_ = c.MarkLatestActive(info.Mid, ts)
 	}
-	markBilibiliLoginRecoveredForGeneration(bilibiliLoginSourceLive, generation)
+	markBilibiliLoginRecovered(bilibiliLoginSourceLive)
 	logger.WithFields(logrus.Fields{
 		"cost":          time.Since(start),
 		"Page":          page,

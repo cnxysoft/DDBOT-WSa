@@ -3,6 +3,7 @@ package bilibili
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,8 +67,8 @@ var (
 	atomicVerifyInfo  atomic.Pointer[VerifyInfo]
 
 	mux                  = new(sync.Mutex)
-	credentialPublishMu  sync.Mutex
-	atomicAccount        atomic.Pointer[accountCredentials]
+	username             string
+	password             string
 	accountUid           atomic.Int64
 	wbi                  atomic.Pointer[WebInterfaceNavResponse_Data_WbiImg]
 	delete412ProxyOption = func() requests.Option {
@@ -101,9 +102,6 @@ func Init() {
 		logger.Info("B站扫码登陆已开启")
 		go func() {
 			for {
-				if IsCookieGiven() {
-					return
-				}
 				// 创建扫码会话，预访问 bilibili.com 获取 buvid3/buvid4
 				session := NewQRLoginSession()
 				GetQRResp, err := GetQRCode(session)
@@ -115,9 +113,6 @@ func Init() {
 				logger.Info("已生成二维码，请扫码登陆~")
 				for {
 					time.Sleep(time.Second * 5)
-					if IsCookieGiven() {
-						return
-					}
 					CheckResp, err := QRLoginCheck(session, GetQRResp.Data.QrcodeKey)
 					if err != nil {
 						logger.Errorf("轮询扫码状态失败 - %v", err)
@@ -135,28 +130,31 @@ func Init() {
 								continue
 							}
 						}
-						if cookies.SESSDATA == "" || cookies.BILI_JCT == "" {
-							continue
-						}
-						prepared, err := PrepareCredentials(cookies.SESSDATA, cookies.BILI_JCT)
+						// 先用临时凭据验证登录状态，确认 isLogin=true 后再提交内存与配置文件，
+						// 避免二维码返回无效 Cookie 时覆盖原有有效配置
+						SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
+						navResp, err := XWebInterfaceNav(true)
 						if err != nil {
-							logger.Errorf("扫码登录验证失败: %v", err)
+							logger.Errorf("验证扫码登录结果失败，token 可能无效: %v", err)
 							continue
 						}
-						if err := cfg.WriteConfigKeyValues(map[string]string{
-							"bilibili.SESSDATA": cookies.SESSDATA, "bilibili.bili_jct": cookies.BILI_JCT,
-						}); err != nil {
-							logger.Errorf("保存 B站登录凭据失败: %v", err)
+						if navResp.GetCode() != 0 || !navResp.GetData().GetIsLogin() {
+							logger.Errorf("扫码登录验证失败，token 无效: code=%d isLogin=%v", navResp.GetCode(), navResp.GetData().GetIsLogin())
 							continue
 						}
-						// During startup the transactional reload participant may not yet
-						// be registered. Applying the already verified candidate is safe.
-						if !transactionalReloadEnabled.Load() {
-							prepared.Apply()
-							config.GlobalConfig.MarkApplied("bilibili.SESSDATA", "bilibili.bili_jct")
+						config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
+						config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
+						if err := cfg.WriteConfigKeyValue("bilibili.SESSDATA", cookies.SESSDATA); err != nil {
+							logger.Errorf("保存 SESSDATA 到配置文件失败 - %v", err)
 						}
-						logger.Info("B站扫码登录成功，已在当前进程生效")
-						return
+						if err := cfg.WriteConfigKeyValue("bilibili.bili_jct", cookies.BILI_JCT); err != nil {
+							logger.Errorf("保存 bili_jct 到配置文件失败 - %v", err)
+						}
+						FreshSelfInfo()
+						logger.Info("B站扫码登陆成功，请重启DDBOT-WSa")
+						logger.Info("正在退出...")
+						time.Sleep(time.Second * 5)
+						os.Exit(0)
 					case QRPollExpired:
 						logger.Warn("二维码已失效，重新生成二维码")
 						goto regenerate
@@ -193,8 +191,6 @@ func DynamicUrl(dynamicIdStr string) string {
 }
 
 func SetVerify(_SESSDATA string, _biliJct string) {
-	credentialPublishMu.Lock()
-	defer credentialPublishMu.Unlock()
 	atomicVerifyInfo.Store(&VerifyInfo{
 		SESSDATA:   _SESSDATA,
 		BiliJct:    _biliJct,
@@ -206,17 +202,9 @@ func getVerify() *VerifyInfo {
 	return atomicVerifyInfo.Load()
 }
 
-type accountCredentials struct{ username, password string }
-
-func getAccount() *accountCredentials {
-	if value := atomicAccount.Load(); value != nil {
-		return value
-	}
-	return new(accountCredentials)
-}
-
-func SetAccount(username, password string) {
-	atomicAccount.Store(&accountCredentials{username: username, password: password})
+func SetAccount(_username string, _password string) {
+	username = _username
+	password = _password
 }
 
 func GetVerifyOption() []requests.Option {
@@ -286,15 +274,14 @@ func GetVerifyInfo() *VerifyInfo {
 					// 尝试cookie过期之后自动刷新
 					// 但是登陆方法有效期应该比cookie有效期短
 					// 这样做真的值得吗
-					expiringGeneration := getVerify()
 					t := time.Until(time.Unix(expire, 0))
 					if t <= 0 {
 						logger.Info("当前Cookie已过期，即将自动刷新")
-						atomicVerifyInfo.CompareAndSwap(expiringGeneration, new(VerifyInfo))
+						atomicVerifyInfo.Store(new(VerifyInfo))
 					} else {
 						logger.Infof("当前Cookie还有 %v 时间过期，过期后会自动刷新", t)
 						time.AfterFunc(t, func() {
-							atomicVerifyInfo.CompareAndSwap(expiringGeneration, new(VerifyInfo))
+							atomicVerifyInfo.Store(new(VerifyInfo))
 						})
 					}
 				}
@@ -309,13 +296,7 @@ func GetVerifyInfo() *VerifyInfo {
 }
 
 func FreshSelfInfo() {
-	generation := getVerify()
 	navResp, err := XWebInterfaceNav(true)
-	credentialPublishMu.Lock()
-	defer credentialPublishMu.Unlock()
-	if getVerify() != generation {
-		return
-	}
 	if err != nil {
 		logger.Errorf("获取个人信息失败 - %v，b站功能可能无法使用", err)
 	} else {
@@ -374,7 +355,7 @@ func IsCookieGiven() bool {
 }
 
 func IsAccountGiven() bool {
-	if getAccount().username == "" {
+	if username == "" {
 		return false
 	}
 	return true
@@ -387,17 +368,16 @@ func ParseUid(s string) (int64, error) {
 }
 
 func freshAccountCookieInfo() (*LoginResponse_Data_CookieInfo, error) {
-	account := getAccount()
 	logger.Debug("freshAccountCookieInfo")
 	if !IsAccountGiven() {
 		return nil, errors.New("未设置帐号")
 	}
-	if ci, err := GetCookieInfo(account.username); err == nil {
+	if ci, err := GetCookieInfo(username); err == nil {
 		logger.Debug("GetCookieInfo from db ok")
 		return ci, nil
 	}
 	logger.Debug("login to fresh cookie")
-	resp, err := Login(account.username, account.password)
+	resp, err := Login(username, password)
 	if err != nil {
 		logger.Errorf("Login error %v", err)
 		return nil, err
@@ -411,7 +391,7 @@ func freshAccountCookieInfo() (*LoginResponse_Data_CookieInfo, error) {
 		return nil, fmt.Errorf("login status error %v - %v", resp.GetData().GetStatus(), resp.GetData().GetMessage())
 	}
 	logger.Debug("login success")
-	if err = SetCookieInfo(account.username, resp.GetData().GetCookieInfo()); err != nil {
+	if err = SetCookieInfo(username, resp.GetData().GetCookieInfo()); err != nil {
 		logger.Errorf("SetCookieInfo error %v", err)
 	} else {
 		logger.Debug("SetCookieInfo ok")

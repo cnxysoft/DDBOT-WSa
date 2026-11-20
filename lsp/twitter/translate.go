@@ -177,8 +177,6 @@ func TranslateTweet(ctx context.Context, tweetID, content string) *TranslationRe
 
 // translateWithXAPI uses X's official translation API (api.x.com/2/grok/translation.json)
 func translateWithXAPI(ctx context.Context, tweetID string) *TranslationResult {
-	runtimeGen := twitterSnapshot()
-	twitterAPI := runtimeGen.api
 	if twitterAPI == nil || !twitterAPI.IsEnabled() {
 		return nil
 	}
@@ -212,7 +210,7 @@ func translateWithXAPI(ctx context.Context, tweetID string) *TranslationResult {
 	opts := []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferOversea),
 		requests.TimeoutOption(time.Second * 10),
-		requests.AddUAOption(runtimeGen.userAgent),
+		requests.AddUAOption(UserAgent),
 		requests.HeaderOption("authorization", "Bearer "+bearerToken),
 		requests.HeaderOption("x-csrf-token", ct0),
 		requests.HeaderOption("content-type", "text/plain;charset=UTF-8"),
@@ -340,7 +338,6 @@ func translateWithGoogle(text, sourceLang, targetLang string) *TranslationResult
 // googleTranslateRequest 请求单个 Google 翻译端点
 // 使用 POST 表单提交文本，避免推文全文进入 URL（超长 URL 会被拒且内容会泄露到代理/访问日志）。
 func googleTranslateRequest(endpoint, text, sourceLang, targetLang string) *TranslationResult {
-	runtimeGen := twitterSnapshot()
 	// Google 单次翻译长度上限约 5000 字符，超长按 rune 截断（按字节截断会把
 	// 多字节字符切成非法 UTF-8，导致请求内容乱码），避免请求被整体拒绝
 	const maxTextLen = 5000
@@ -357,7 +354,7 @@ func googleTranslateRequest(endpoint, text, sourceLang, targetLang string) *Tran
 	opts := []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferOversea),
 		requests.TimeoutOption(time.Second * 10),
-		requests.AddUAOption(runtimeGen.userAgent),
+		requests.AddUAOption(UserAgent),
 		requests.HeaderOption("content-type", "application/x-www-form-urlencoded"),
 		requests.HeaderOption("Accept", "*/*"),
 		requests.HeaderOption("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8"),

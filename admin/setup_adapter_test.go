@@ -159,7 +159,7 @@ func TestHandleSetupStatusScopesQQInfoToLoopback(t *testing.T) {
 	s := &Server{}
 	read := func(remote string) SetupStatus {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "http://localhost/api/v1/setup/status", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
 		req.RemoteAddr = remote
 		rec := httptest.NewRecorder()
 		s.handleSetupStatus(rec, req)
@@ -305,17 +305,4 @@ func TestHandleConfigRejectsSavingBrokenQQConfig(t *testing.T) {
 	rec := postConfig(t, `{"config":{"logLevel":"debug"}}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "AppID")
-}
-
-func TestSetupCanSetPasswordWithoutSwitchingSatori(t *testing.T) {
-	path := withConfigFile(t, "adapter:\n  mode: satori\nwebsocket:\n  ws-reverse: ws://localhost:3001\n")
-	s := &Server{}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(`{"token":"sample-pass","adapterMode":""}`))
-	rec := httptest.NewRecorder()
-	s.handleSetup(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	got := readConfigMap(t, path)
-	assert.Equal(t, "satori", nestedConfigString(got, "adapter", "mode"))
-	assert.Equal(t, "ws://localhost:3001", nestedConfigString(got, "websocket", "ws-reverse"))
-	assert.Equal(t, "sample-pass", s.getToken())
 }

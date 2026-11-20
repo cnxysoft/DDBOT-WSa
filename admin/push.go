@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cnxysoft/DDBOT-WSa/lsp"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	"github.com/sirupsen/logrus"
 	"github.com/tidwall/buntdb"
@@ -206,6 +206,7 @@ func backfillPushRing() {
 	logrus.Warn("推送记录回填失败：数据库长时间未就绪，仅实时流可用")
 }
 
+
 // handlePushes GET /api/v1/pushes?limit=&site=&status=
 // 返回推送记录（时间倒序，最新在前），可选按平台/状态过滤。查询走持久层（30 天）。
 func (s *Server) handlePushes(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +241,6 @@ func (s *Server) handlePushes(w http.ResponseWriter, r *http.Request) {
 // handlePushesStream GET /api/v1/pushes/stream
 // SSE：先回放缓冲内全部记录（正序），再实时推送新记录。
 func (s *Server) handlePushesStream(w http.ResponseWriter, r *http.Request) {
-	revoked := s.requestStreamRevocation(r)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
@@ -269,8 +269,6 @@ func (s *Server) handlePushesStream(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, ": ping\n\n")
 			flusher.Flush()
 		case <-r.Context().Done():
-			return
-		case <-revoked:
 			return
 		}
 	}

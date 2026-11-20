@@ -1,12 +1,9 @@
 package requests
 
 import (
-	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -49,10 +46,6 @@ type option struct {
 	NotIgnoreEmpty      bool
 	Transport           *http.Transport
 	HTTP2               bool
-	proxyConfigured     bool
-	proxyError          error
-	requestTransport    *http.Transport
-	selectedProxy       *url.URL
 }
 
 func (o *option) getGout() *gout.Client {
@@ -62,37 +55,13 @@ func (o *option) getGout() *gout.Client {
 	} else {
 		goutOpts = append(goutOpts, gout.WithTimeout(time.Second*15))
 	}
-	if o.HTTP2 || o.CookieJar != nil || o.Transport != nil || o.proxyConfigured || o.InsecureSkipVerify {
+	if o.InsecureSkipVerify {
+		goutOpts = append(goutOpts, gout.WithInsecureSkipVerify())
+	}
+	if o.HTTP2 || o.CookieJar != nil || o.Transport != nil {
 		tr := o.Transport
-		if o.proxyConfigured || o.HTTP2 || o.InsecureSkipVerify {
-			if tr != nil {
-				tr = tr.Clone()
-			} else if base, ok := http.DefaultTransport.(*http.Transport); ok {
-				tr = base.Clone()
-			} else {
-				tr = &http.Transport{}
-			}
-			o.requestTransport = tr
-		}
-		if o.proxyConfigured {
-			// Candidate off means direct, even if the environment or a supplied
-			// transport has a proxy. Native ProxyURL also preserves SOCKS routing
-			// with DialContext, which gout's legacy SetSOCKS5 does not override.
-			tr.Proxy = nil
-			if o.selectedProxy != nil {
-				tr.Proxy = http.ProxyURL(o.selectedProxy)
-			}
-		}
-		if o.HTTP2 {
-			tr.ForceAttemptHTTP2 = true
-		}
-		if o.InsecureSkipVerify {
-			if tr.TLSClientConfig == nil {
-				tr.TLSClientConfig = &tls.Config{}
-			} else {
-				tr.TLSClientConfig = tr.TLSClientConfig.Clone()
-			}
-			tr.TLSClientConfig.InsecureSkipVerify = true
+		if o.HTTP2 && tr == nil {
+			tr = &http.Transport{ForceAttemptHTTP2: true}
 		}
 		client := &http.Client{Jar: o.CookieJar}
 		if tr != nil {
@@ -166,38 +135,6 @@ func ProxyOption(prefer proxy_pool.Prefer) Option {
 	} else {
 		return func(o *option) {
 			o.Proxy = proxy.ProxyString()
-		}
-	}
-}
-
-// ProxyOptionWithGetter resolves the selection when a request starts, so an
-// option retained by a client follows the getter's commit and abort lifecycle.
-// A nil getter uses the running pool with the legacy fallback behavior.
-// An injected getter fails closed on errors other than explicit direct ErrNil.
-func ProxyOptionWithGetter(prefer proxy_pool.Prefer, getter proxy_pool.Getter) Option {
-	if getter == nil {
-		return func(o *option) { ProxyOption(prefer)(o) }
-	}
-	return func(o *option) {
-		o.Proxy, o.proxyError, o.proxyConfigured = "", nil, true
-		proxy, err := getter(prefer)
-		if err != nil {
-			if errors.Is(err, proxy_pool.ErrNil) {
-				return
-			}
-			o.proxyError = fmt.Errorf("proxy selection failed: %w", err)
-			return
-		}
-		if proxy == nil {
-			o.proxyError = errors.New("proxy selector returned no proxy")
-			return
-		}
-		if prefer == proxy_pool.PreferNone {
-			return
-		}
-		o.Proxy = proxy.ProxyString()
-		if o.Proxy == "" {
-			o.proxyError = errors.New("proxy selector returned an empty address")
 		}
 	}
 }
@@ -316,26 +253,12 @@ func Do(f func(*gout.Client) *dataflow.DataFlow, out interface{}, options ...Opt
 	for _, o := range options {
 		o(opt)
 	}
-	if opt.proxyError != nil {
-		return opt.proxyError
-	}
-	if opt.proxyConfigured && opt.Proxy != "" {
-		parsed, err := url.Parse(opt.Proxy)
-		if err != nil || parsed.Hostname() == "" ||
-			(parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "socks5" && parsed.Scheme != "socks5h") {
-			return errors.New("proxy selector returned an invalid address")
-		}
-		opt.selectedProxy = parsed
-	}
 	if opt.ProxyCallbackOption != nil && len(opt.Proxy) > 0 {
 		defer func() {
 			opt.ProxyCallbackOption(out, opt.Proxy)
 		}()
 	}
 	var df = f(opt.getGout())
-	if opt.requestTransport != nil {
-		defer opt.requestTransport.CloseIdleConnections()
-	}
 	if opt.Debug {
 		df.Debug(true)
 	}
@@ -357,7 +280,7 @@ func Do(f func(*gout.Client) *dataflow.DataFlow, out interface{}, options ...Opt
 	if len(opt.Header) > 0 {
 		df.SetHeader(opt.Header)
 	}
-	if len(opt.Proxy) > 0 && !opt.proxyConfigured {
+	if len(opt.Proxy) > 0 {
 		if strings.HasPrefix(opt.Proxy, "socks5://") {
 			df.SetSOCKS5(strings.TrimPrefix(opt.Proxy, "socks5://"))
 		} else {

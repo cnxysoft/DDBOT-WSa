@@ -1,13 +1,11 @@
 package weibo
 
 import (
-	"sync"
-	stdatomic "sync/atomic"
-
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	jsoniter "github.com/json-iterator/go"
 	"go.uber.org/atomic"
+	"sync"
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -17,23 +15,6 @@ const (
 	// CookieAlert 是内部使用的告警类型，用于 Cookie 失效时向群发送通知
 	CookieAlert concern_type.Type = "cookie_alert"
 )
-
-var sessionGeneration stdatomic.Uint64
-var cookieStateMu sync.Mutex
-
-func storeCookieOptions(options []requests.Option, ua ...string) {
-	cookieStateMu.Lock()
-	defer cookieStateMu.Unlock()
-	storeCookieOptionsUnlocked(options)
-	if len(ua) > 0 {
-		visitorUA.Store(ua[0])
-	}
-}
-
-func storeCookieOptionsUnlocked(options []requests.Option) {
-	sessionGeneration.Add(1)
-	visitorCookiesOpt.Store(options)
-}
 
 var (
 	visitorCookiesOpt atomic.Value
