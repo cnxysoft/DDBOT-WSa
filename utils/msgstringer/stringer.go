@@ -12,7 +12,7 @@ import (
 func AdapterMsgToString(elements []adapter.IMessageElement) string {
 	var res strings.Builder
 	for i, elem := range elements {
-		if elem == nil {
+		if adapter.IsNilMessageElement(elem) {
 			continue
 		}
 		logger.Debugf(`Element %d is of type %T\n`, i, elem)

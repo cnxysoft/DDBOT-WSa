@@ -66,7 +66,7 @@ func TestAdminTokenRotationAbortsPreparedQRCredentials(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			state, _, _ := sess.snapshot()
+			state, _, _, _ := sess.snapshot()
 			if !bytes.Equal(after, []byte(initial)) || c.Status().Revision != 1 || committed != 0 || aborted != 1 || state == loginStateConfirmed {
 				t.Fatalf("revoked QR credentials were published: revision=%d committed=%d aborted=%d state=%s disk=%q", c.Status().Revision, committed, aborted, state, after)
 			}

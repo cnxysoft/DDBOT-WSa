@@ -248,6 +248,11 @@ func newServer(online *atomic.Bool) *Server {
 	// guardSetup 把可达来源限制为本机回环 + 同源，堵住跨站页面/局域网主机在首次部署窗口夺权（见审查报告 H2）。
 	mux.HandleFunc("/api/v1/setup", s.guardSetup(s.handleSetup))
 	mux.HandleFunc("/api/v1/setup/status", s.handleSetupStatus)
+	// 初始化向导里的「QQ 开放平台扫码绑定」：与 /api/v1/setup 同一套本机同源限制，
+	// 且 admin.token 一旦设置就 404。首次部署还没 token 时也能走扫码这条主路径。
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode", s.guardSetup(s.handleSetupQQOfficialQRCode))
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode/status", s.guardSetup(s.handleSetupQQOfficialQRCodeStatus))
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode/cancel", s.guardSetup(s.handleSetupQQOfficialQRCodeCancel))
 	// 基础 API
 	mux.HandleFunc("/api/v1/health", s.withAuth(s.handleHealth))
 	mux.HandleFunc("/api/v1/onebot/status", s.withAuth(s.handleOneBotStatus))
@@ -262,6 +267,12 @@ func newServer(online *atomic.Bool) *Server {
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
 	mux.HandleFunc("/api/v1/config/status", s.withAuth(s.handleConfigStatus))
+	mux.HandleFunc("/api/v1/config/reload", s.withAuth(s.handleConfigReload))
+
+	// WebUI 外观（背景图 / 字体颜色）：登录页也要显示背景，GET 允许匿名；
+	// 保存接口本机匿名可用（首次登录前也能改），远端必须带 admin.token。
+	mux.HandleFunc("/api/v1/ui", s.handleUIGet)
+	mux.HandleFunc("/api/v1/ui/save", s.guardLocalOrAuth(s.handleUISave))
 
 	// 平台登录态（扫码登录开着时替换掉凭据输入框）
 	mux.HandleFunc("/api/v1/platform/account", s.withAuth(s.handlePlatformAccount))
@@ -408,6 +419,33 @@ func isLoopbackAddr(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	return ip != nil && ip.IsLoopback()
+}
+
+// guardLocalOrAuth 允许「本机匿名」或「远端带 admin.token」两种访问。
+// 用于登录页也要能修改的 WebUI 外观设置：本机走 guardSetup 的同源/回环校验，
+// 远端走标准 Bearer 鉴权，避免把匿名写接口暴露到局域网。
+func (s *Server) guardLocalOrAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 本机 + 回环 Host + 同源：允许匿名（登录页也能改外观）。
+		// 其余一律走 Bearer 鉴权，避免把匿名写接口暴露到局域网/跨站页面。
+		if isLoopbackAddr(r.RemoteAddr) && isLoopbackHost(r.Host) && sameOriginRequest(r) {
+			next(w, r)
+			return
+		}
+		s.withAuth(next)(w, r)
+	}
+}
+
+// sameOriginRequest 判断带 Origin / Referer 的请求是否与当前 Host 同源。
+// 两者都缺失（本机 curl）时返回 true，由调用方的回环校验兜底。
+func sameOriginRequest(r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return sameOriginHost(origin, r.Host)
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		return sameOriginHost(referer, r.Host)
+	}
+	return true
 }
 
 // isLoopbackHost 判断请求 Host 头是否指向本机（回环 IP 或 localhost）。
@@ -1109,6 +1147,11 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if err := validateAdapterModePatch(req.Config); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
 		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
 		// mergeConfig 是递归合并，用户删掉的命令会继续留在配置里，改不动。
 		if key, ok := configMapKey(req.Config, "customCommandPrefix"); ok {
@@ -1119,7 +1162,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		mergeConfig(existing, req.Config)
 
-		data, err := yaml.Marshal(existing)
+		if err := validateQQOfficialConfig(existing); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		data, err := renderConfigCandidate(version.Bytes(), existing)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
@@ -1174,10 +1222,85 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(config.GlobalConfig.Status())
 }
 
+// Manual reload uses the same validated transaction as the file watcher.
+func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cfgMu := cfg.GetConfigWriteMutex()
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+	s.runtimeMu.Lock()
+	previous := s.listener
+	s.runtimeMu.Unlock()
+	if err := config.GlobalConfig.Reload(); err != nil {
+		writeErr(w, http.StatusBadRequest, config.GlobalConfig.Status().LastError)
+		return
+	}
+	response := map[string]interface{}{"reload": config.GlobalConfig.Status()}
+	s.runtimeMu.Lock()
+	if current := s.listener; current != previous {
+		destination := configNavigation{Enabled: current != nil}
+		if current != nil {
+			destination.Addr = current.Addr().String()
+		}
+		response["navigation"] = destination
+	}
+	s.runtimeMu.Unlock()
+	_ = json.NewEncoder(w).Encode(response)
+}
+
 // protectedConfigKeys 禁止通过 API 修改的配置键（防止改 token 提权或持久化后门）
 var protectedConfigKeys = map[string]bool{
 	"admin.token":     true,
 	"websocket.token": true,
+}
+
+// validateAdapterModePatch 校验配置补丁里的 adapter.mode。
+// 只拦「显式写了不认识的取值」；没带 adapter 段 / 没带 mode 时原样放行。
+// 支持列表与 adapter.resolveAdapterType 保持一致。
+func validateAdapterModePatch(patch map[string]interface{}) error {
+	raw, exists := patch["adapter"]
+	if !exists {
+		return nil
+	}
+	adapterCfg, ok := raw.(map[string]interface{})
+	if !ok {
+		// {"adapter": null} 这类整体替换不是受保护键，交给 mergeConfig 处理
+		return nil
+	}
+	modeRaw, exists := adapterCfg["mode"]
+	if !exists {
+		return nil
+	}
+	mode := strings.TrimSpace(configValueString(modeRaw))
+	switch mode {
+	case "", "onebot-v11", "satori", "qqofficial":
+		return nil
+	default:
+		return fmt.Errorf("adapter.mode 只支持 onebot-v11 / satori / qqofficial，收到 %q", mode)
+	}
+}
+
+// Check effective credentials after merge so masked placeholders are ignored.
+func validateQQOfficialConfig(candidate map[string]interface{}) error {
+	if nestedConfigString(candidate, "adapter", "mode") != "qqofficial" {
+		return nil
+	}
+	appID := nestedConfigString(candidate, "qqofficial", "app-id", "appId")
+	secret := nestedConfigString(candidate, "qqofficial", "app-secret", "appSecret", "secret")
+	if appID == "" {
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-id（AppID）")
+	}
+	if secret == "" {
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-secret（AppSecret）")
+	}
+	if !isNumericAppID(appID) {
+		return fmt.Errorf("AppID 必须是纯数字，请到 QQ 开放平台机器人管理端核对")
+	}
+	return nil
 }
 
 // isProtectedConfigKeyPath 判断完整键路径是否命中受保护键：
@@ -1204,6 +1327,7 @@ type DetailedStatus struct {
 	Online              bool            `json:"online"`
 	Uptime              time.Duration   `json:"uptime"`
 	Version             string          `json:"version"`
+	AdapterMode         string          `json:"adapterMode"`
 	Subscriptions       int             `json:"subscriptions"`
 	SubscriptionsBySite map[string]int  `json:"subscriptionsBySite"`
 	ConcernsStatus      map[string]bool `json:"concernsStatus"`
@@ -1243,6 +1367,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Online:              online,
 		Uptime:              uptime,
 		Version:             "", // 版本信息需要从其他地方获取
+		AdapterMode:         string(adapter.GetAdapterType()),
 		Subscriptions:       subscriptions,
 		SubscriptionsBySite: subscriptionsBySite,
 		ConcernsStatus:      concernsStatus,

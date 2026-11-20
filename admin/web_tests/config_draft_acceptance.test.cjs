@@ -11,7 +11,7 @@ const decode = (text) => text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").rep
 // replacing the renderer would miss drafts lost while controls are recreated.
 class Element {
   constructor(tag = 'div') {
-    this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.style = {};
+    this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.style = { setProperty(name, value) { this[name] = value; } };
     this.value = ''; this.checked = false; this.disabled = false; this.className = ''; this.id = '';
     this.listeners = {}; this.textContent = ''; this.parentElement = null;
     this.classList = {

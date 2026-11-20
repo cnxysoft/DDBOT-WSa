@@ -71,7 +71,7 @@ func (m *MSG) Append(elems ...adapter.IMessageElement) *MSG {
 		return m
 	}
 	for _, e := range elems {
-		if e == nil {
+		if adapter.IsNilMessageElement(e) {
 			continue
 		}
 		if textE, ok := e.(*adapter.TextSegment); ok {

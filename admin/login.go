@@ -57,6 +57,7 @@ const (
 type loginSession struct {
 	id        string
 	platform  string
+	setup     bool
 	createdAt time.Time
 	cancel    chan struct{}
 
@@ -64,6 +65,7 @@ type loginSession struct {
 	mu         sync.Mutex
 	state      string
 	message    string
+	account    string // QQ 官方：绑定成功的 AppID（非密钥）；其它平台为空
 	qrPNG      []byte
 }
 
@@ -79,10 +81,16 @@ func (s *loginSession) setQR(png []byte) {
 	s.qrPNG = png
 }
 
-func (s *loginSession) snapshot() (state, message string, qrPNG []byte) {
+func (s *loginSession) setAccount(account string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state, s.message, s.qrPNG
+	s.account = account
+}
+
+func (s *loginSession) snapshot() (state, message, account string, qrPNG []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, s.message, s.account, s.qrPNG
 }
 
 func (s *loginSession) stop() {
@@ -139,6 +147,10 @@ func newLoginManager() *loginManager {
 // start 建会话。同一平台已有会话时先停掉它——用户再点一次「扫码登录」是要换一张码，
 // 不是开第二个会话（两个会话同时扫会抢着写同一份配置）。
 func (m *loginManager) start(platform string) *loginSession {
+	return m.startScoped(platform, false)
+}
+
+func (m *loginManager) startScoped(platform string, setup bool) *loginSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -152,6 +164,7 @@ func (m *loginManager) start(platform string) *loginSession {
 	sess := &loginSession{
 		id:        newLoginID(),
 		platform:  platform,
+		setup:     setup,
 		createdAt: time.Now(),
 		cancel:    make(chan struct{}),
 		state:     loginStateWaiting,
@@ -173,9 +186,13 @@ func (m *loginManager) get(id string) *loginSession {
 // startLoginForRequest makes creation atomic with token revocation. An already
 // authenticated request cannot start a new task after its token was rotated.
 func (s *Server) startLoginForRequest(r *http.Request, platform string) *loginSession {
+	return s.startScopedLoginForRequest(r, platform, false)
+}
+
+func (s *Server) startScopedLoginForRequest(r *http.Request, platform string, setup bool) *loginSession {
 	s.tokenMu.Lock()
 	defer s.tokenMu.Unlock()
-	if s.authStopped {
+	if s.authStopped || (setup && s.token != "") {
 		return nil
 	}
 	if revoked, ok := r.Context().Value(streamAuthKey{}).(<-chan struct{}); ok {
@@ -188,7 +205,7 @@ func (s *Server) startLoginForRequest(r *http.Request, platform string) *loginSe
 		default:
 		}
 	}
-	return s.loginManagerOf().start(platform)
+	return s.loginManagerOf().startScoped(platform, setup)
 }
 
 // release 彻底移除会话（取消时用）。
@@ -248,7 +265,8 @@ type loginQRCodeResponse struct {
 	Platform string `json:"platform"`
 	State    string `json:"state"`
 	Message  string `json:"message"`
-	Image    string `json:"image"` // data:image/png;base64,...
+	Name     string `json:"name,omitempty"` // QQ 官方：绑定成功的 AppID（非密钥）
+	Image    string `json:"image"`          // data:image/png;base64,...
 }
 
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
@@ -258,6 +276,12 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 
 // handleLoginQRCode POST /api/v1/login/qrcode —— 开一个扫码会话并返回二维码。
 func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
+	s.handleLoginQRCodePlatform(w, r, "")
+}
+
+// handleLoginQRCodePlatform 是扫码会话的共用实现。forcedPlatform 非空时忽略请求体里的
+// platform（初始化向导的 QQ 绑定接口用它把入口钉死在 qqofficial 上）。
+func (s *Server) handleLoginQRCodePlatform(w http.ResponseWriter, r *http.Request, forcedPlatform string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -269,21 +293,25 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	switch req.Platform {
+	platform := req.Platform
+	if forcedPlatform != "" {
+		platform = forcedPlatform
+	}
+	switch platform {
 	case loginPlatformBilibili, loginPlatformWeibo, loginPlatformQQOfficial:
 	default:
-		writeJSONError(w, http.StatusBadRequest, "unsupported platform: "+req.Platform)
+		writeJSONError(w, http.StatusBadRequest, "unsupported platform: "+platform)
 		return
 	}
 
 	mgr := s.loginManagerOf()
-	sess := s.startLoginForRequest(r, req.Platform)
+	sess := s.startScopedLoginForRequest(r, platform, forcedPlatform != "")
 	if sess == nil {
 		w.Header().Set("X-DDBOT-Auth", "invalid-token")
 		writeJSONError(w, http.StatusForbidden, "登录已失效，请重新登录")
 		return
 	}
-	switch req.Platform {
+	switch platform {
 	case loginPlatformBilibili:
 		go s.runBilibiliLogin(mgr, sess)
 	case loginPlatformWeibo:
@@ -295,13 +323,14 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 	// 等出码。B站/微博都是秒级返回，网络差时最多等 loginQRWait。
 	deadline := time.Now().Add(loginQRWait)
 	for time.Now().Before(deadline) {
-		state, message, png := sess.snapshot()
+		state, message, account, png := sess.snapshot()
 		if len(png) > 0 {
 			_ = json.NewEncoder(w).Encode(loginQRCodeResponse{
 				Session:  sess.id,
 				Platform: sess.platform,
 				State:    state,
 				Message:  message,
+				Name:     account,
 				Image:    "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
 			})
 			return
@@ -328,24 +357,63 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 
 // handleLoginQRCodeStatus GET /api/v1/login/qrcode/status?session=xxx
 func (s *Server) handleLoginQRCodeStatus(w http.ResponseWriter, r *http.Request) {
+	s.handleScopedLoginQRCodeStatus(w, r, false)
+}
+
+func (s *Server) handleScopedLoginQRCodeStatus(w http.ResponseWriter, r *http.Request, setup bool) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
 	sess := s.loginManagerOf().get(r.URL.Query().Get("session"))
-	if sess == nil {
+	if sess == nil || sess.setup != setup {
 		writeJSONError(w, http.StatusNotFound, "会话不存在或已结束")
 		return
 	}
-	state, message, _ := sess.snapshot()
+	state, message, account, _ := sess.snapshot()
 	_ = json.NewEncoder(w).Encode(loginQRCodeResponse{
 		Session:  sess.id,
 		Platform: sess.platform,
 		State:    state,
 		Message:  message,
+		Name:     account,
 	})
+}
+
+// ---- 初始化向导专用的 QQ 官方扫码绑定 ----
+//
+// 首次部署向导出现在 admin.token 设置之前，而 /api/v1/login/qrcode 走 withAuth，
+// 那时还拿不到 token。这三个入口与 /api/v1/setup 一样由 guardSetup 限制在本机同源，
+// 且只要 token 已设置就 404——不是常驻的匿名接口。
+
+func (s *Server) handleSetupQQOfficialQRCode(w http.ResponseWriter, r *http.Request) {
+	if s.getToken() != "" {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	s.handleLoginQRCodePlatform(w, r, loginPlatformQQOfficial)
+}
+
+func (s *Server) handleSetupQQOfficialQRCodeStatus(w http.ResponseWriter, r *http.Request) {
+	if s.getToken() != "" {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	s.handleScopedLoginQRCodeStatus(w, r, true)
+}
+
+func (s *Server) handleSetupQQOfficialQRCodeCancel(w http.ResponseWriter, r *http.Request) {
+	if s.getToken() != "" {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	s.handleScopedLoginQRCodeCancel(w, r, true)
 }
 
 // handleLoginQRCodeCancel POST /api/v1/login/qrcode/cancel
 func (s *Server) handleLoginQRCodeCancel(w http.ResponseWriter, r *http.Request) {
+	s.handleScopedLoginQRCodeCancel(w, r, false)
+}
+
+func (s *Server) handleScopedLoginQRCodeCancel(w http.ResponseWriter, r *http.Request, setup bool) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -359,7 +427,7 @@ func (s *Server) handleLoginQRCodeCancel(w http.ResponseWriter, r *http.Request)
 	}
 
 	mgr := s.loginManagerOf()
-	if sess := mgr.get(req.Session); sess != nil {
+	if sess := mgr.get(req.Session); sess != nil && sess.setup == setup {
 		sess.stop()
 		mgr.release(sess)
 	}
@@ -604,6 +672,7 @@ func (s *Server) finishQQOfficialLogin(sess *loginSession, res *qqofficial.QRBin
 		return
 	}
 	invalidateAccountCache(loginPlatformQQOfficial)
+	sess.setAccount(res.AppID)
 	if adapter.GetAdapterType() == adapter.AdapterTypeQQOfficial {
 		sess.setState(loginStateConfirmed, "绑定成功，凭据已保存并连接")
 	} else {

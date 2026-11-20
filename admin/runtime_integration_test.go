@@ -152,7 +152,7 @@ func TestLoginFinishUsesOneAcceptedCredentialPair(t *testing.T) {
 				} else {
 					s.finishQQOfficialLogin(session, &qqofficial.QRBindResult{AppID: value1, Secret: value2})
 				}
-				state, message, _ := session.snapshot()
+				state, message, _, _ := session.snapshot()
 				if strings.Contains(message, "secret-password") || strings.Contains(message, "secret-user") {
 					t.Fatal("login error leaked remote details", message)
 				}

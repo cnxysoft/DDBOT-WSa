@@ -41,13 +41,28 @@ func isSectionHeader(line, section string) bool {
 
 // keepInlineComment 从原来的「值」里捞出末尾的行内注释。
 // 官方文档的示例就写着 SESSDATA: # 你的b站cookie，整段丢掉会把用户的注释吃掉。
-// 带引号的值里 # 可能是值的一部分，那种情况不猜。
+// 带引号的值只有在引号完整闭合、且闭合后才是注释时才保留 —— 默认配置里
+// `commandPrefix: "/" # 命令前缀` 这种写法很常见，不能因为第一个字符是引号就丢掉注释。
 func keepInlineComment(oldValue string) string {
 	v := strings.TrimRight(oldValue, " \t")
 	if v == "" {
 		return ""
 	}
-	if strings.HasPrefix(v, "\"") || strings.HasPrefix(v, "'") {
+	if v[0] == '"' || v[0] == '\'' {
+		quote := v[0]
+		for i := 1; i < len(v); i++ {
+			if v[i] == '\\' {
+				i++ // 跳过转义字符
+				continue
+			}
+			if v[i] == quote {
+				rest := strings.TrimSpace(v[i+1:])
+				if strings.HasPrefix(rest, "#") {
+					return " " + rest
+				}
+				return ""
+			}
+		}
 		return ""
 	}
 	if strings.HasPrefix(v, "#") {

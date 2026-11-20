@@ -1535,7 +1535,7 @@ func (l *Lsp) sendPrivateMessage(uin int64, msg *adapter.SendingMessage) (res *a
 		return &adapter.PrivateMessage{ID: -1, UserID: uin, Elements: msg.Elements}
 	}
 	msg.Elements = localutils.AdapterMessageFilter(msg.Elements, func(element adapter.IMessageElement) bool {
-		return element != nil
+		return !adapter.IsNilMessageElement(element)
 	})
 	if len(msg.Elements) == 0 {
 		logger.WithFields(localutils.FriendLogFields(uin)).Debug("send with empty private message")
@@ -1559,19 +1559,13 @@ func (l *Lsp) sendPrivateMessage(uin int64, msg *adapter.SendingMessage) (res *a
 func (l *Lsp) sendGroupMessage(groupCode int64, msg *adapter.SendingMessage, recovered ...bool) (res *adapter.GroupMessage) {
 	defer func() {
 		if e := recover(); e != nil {
-			content := ""
-			if msg != nil {
-				content = msgstringer.AdapterMsgToString(msg.Elements)
-			}
+			// 不重新格式化消息：消息元素可能正是 panic 的来源。
+			entry := logger.WithField("GroupCode", groupCode).WithField("stack", string(debug.Stack()))
 			if len(recovered) == 0 {
-				logger.WithField("content", content).
-					WithField("stack", string(debug.Stack())).
-					Errorf("sendGroupMessage panic recovered")
+				entry.Errorf("sendGroupMessage panic recovered: %v", e)
 				res = l.sendGroupMessage(groupCode, msg, true)
 			} else {
-				logger.WithField("content", content).
-					WithField("stack", string(debug.Stack())).
-					Errorf("sendGroupMessage panic recovered but panic again %v", e)
+				entry.Errorf("sendGroupMessage panic recovered but panic again: %v", e)
 				elements := []adapter.IMessageElement(nil)
 				if msg != nil {
 					elements = msg.Elements
@@ -1596,7 +1590,7 @@ func (l *Lsp) sendGroupMessage(groupCode int64, msg *adapter.SendingMessage, rec
 		return &adapter.GroupMessage{ID: -1, GroupCode: groupCode, Elements: msg.Elements}
 	}
 	msg.Elements = localutils.AdapterMessageFilter(msg.Elements, func(element adapter.IMessageElement) bool {
-		return element != nil
+		return !adapter.IsNilMessageElement(element)
 	})
 	if len(msg.Elements) == 0 {
 		logger.WithFields(localutils.GroupLogFields(groupCode)).Debug("send with empty group message")
