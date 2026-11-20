@@ -66,6 +66,7 @@ type loginSession struct {
 	mu         sync.Mutex
 	state      string
 	message    string
+	account    string // QQ 官方：绑定成功的 AppID（非密钥）；其它平台为空
 	qrPNG      []byte
 }
 
@@ -81,10 +82,16 @@ func (s *loginSession) setQR(png []byte) {
 	s.qrPNG = png
 }
 
-func (s *loginSession) snapshot() (state, message string, qrPNG []byte) {
+func (s *loginSession) setAccount(account string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state, s.message, s.qrPNG
+	s.account = account
+}
+
+func (s *loginSession) snapshot() (state, message, account string, qrPNG []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, s.message, s.account, s.qrPNG
 }
 
 func (s *loginSession) stop() {
@@ -195,7 +202,8 @@ type loginQRCodeResponse struct {
 	Platform string `json:"platform"`
 	State    string `json:"state"`
 	Message  string `json:"message"`
-	Image    string `json:"image"` // data:image/png;base64,...
+	Name     string `json:"name,omitempty"` // QQ 官方：绑定成功的 AppID（非密钥）
+	Image    string `json:"image"`          // data:image/png;base64,...
 }
 
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
@@ -205,6 +213,12 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 
 // handleLoginQRCode POST /api/v1/login/qrcode —— 开一个扫码会话并返回二维码。
 func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
+	s.handleLoginQRCodePlatform(w, r, "")
+}
+
+// handleLoginQRCodePlatform 是扫码会话的共用实现。forcedPlatform 非空时忽略请求体里的
+// platform（初始化向导的 QQ 绑定接口用它把入口钉死在 qqofficial 上）。
+func (s *Server) handleLoginQRCodePlatform(w http.ResponseWriter, r *http.Request, forcedPlatform string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if r.Method != http.MethodPost {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -216,16 +230,20 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	switch req.Platform {
+	platform := req.Platform
+	if forcedPlatform != "" {
+		platform = forcedPlatform
+	}
+	switch platform {
 	case loginPlatformBilibili, loginPlatformWeibo, loginPlatformQQOfficial:
 	default:
-		writeJSONError(w, http.StatusBadRequest, "unsupported platform: "+req.Platform)
+		writeJSONError(w, http.StatusBadRequest, "unsupported platform: "+platform)
 		return
 	}
 
 	mgr := s.loginManagerOf()
-	sess := mgr.start(req.Platform)
-	switch req.Platform {
+	sess := mgr.start(platform)
+	switch platform {
 	case loginPlatformBilibili:
 		go s.runBilibiliLogin(mgr, sess)
 	case loginPlatformWeibo:
@@ -237,13 +255,14 @@ func (s *Server) handleLoginQRCode(w http.ResponseWriter, r *http.Request) {
 	// 等出码。B站/微博都是秒级返回，网络差时最多等 loginQRWait。
 	deadline := time.Now().Add(loginQRWait)
 	for time.Now().Before(deadline) {
-		state, message, png := sess.snapshot()
+		state, message, account, png := sess.snapshot()
 		if len(png) > 0 {
 			_ = json.NewEncoder(w).Encode(loginQRCodeResponse{
 				Session:  sess.id,
 				Platform: sess.platform,
 				State:    state,
 				Message:  message,
+				Name:     account,
 				Image:    "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
 			})
 			return
@@ -266,13 +285,49 @@ func (s *Server) handleLoginQRCodeStatus(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusNotFound, "会话不存在或已结束")
 		return
 	}
-	state, message, _ := sess.snapshot()
+	state, message, account, _ := sess.snapshot()
 	_ = json.NewEncoder(w).Encode(loginQRCodeResponse{
 		Session:  sess.id,
 		Platform: sess.platform,
 		State:    state,
 		Message:  message,
+		Name:     account,
 	})
+}
+
+// ---- 初始化向导专用的 QQ 官方扫码绑定 ----
+//
+// 首次部署向导出现在 admin.token 设置之前，而 /api/v1/login/qrcode 走 withAuth，
+// 那时还拿不到 token。这三个入口与 /api/v1/setup 一样由 guardSetup 限制在本机同源，
+// 且只要 token 已设置就 404——不是常驻的匿名接口。
+
+func (s *Server) handleSetupQQOfficialQRCode(w http.ResponseWriter, r *http.Request) {
+	if !s.setupNeeded() {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	s.handleLoginQRCodePlatform(w, r, loginPlatformQQOfficial)
+}
+
+func (s *Server) handleSetupQQOfficialQRCodeStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.setupNeeded() {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	// 只允许查询 QQ 官方会话，避免向导窗口顺带暴露其它平台的扫码状态
+	if sess := s.loginManagerOf().get(r.URL.Query().Get("session")); sess == nil || sess.platform != loginPlatformQQOfficial {
+		writeJSONError(w, http.StatusNotFound, "会话不存在或已结束")
+		return
+	}
+	s.handleLoginQRCodeStatus(w, r)
+}
+
+func (s *Server) handleSetupQQOfficialQRCodeCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.setupNeeded() {
+		writeJSONError(w, http.StatusNotFound, "setup already completed")
+		return
+	}
+	s.handleLoginQRCodeCancel(w, r)
 }
 
 // handleLoginQRCodeCancel POST /api/v1/login/qrcode/cancel
@@ -558,6 +613,7 @@ func (s *Server) finishQQOfficialLogin(sess *loginSession, res *qqofficial.QRBin
 	}
 
 	invalidateAccountCache(loginPlatformQQOfficial)
+	sess.setAccount(res.AppID)
 	// 提示里只带 AppID（不是密钥）
 	sess.setState(loginStateConfirmed, "绑定成功，AppID "+res.AppID+" 与 AppSecret 已写入配置")
 }

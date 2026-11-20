@@ -7,6 +7,10 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+  <!-- 自定义背景层（支持图床直链；登录页/面板共用） -->
+  <div id="bg-layer" class="bg-layer hidden" aria-hidden="true">
+    <img id="bg-image" alt="" referrerpolicy="no-referrer">
+  </div>
   <!-- 内联 SVG 图标库 -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
     <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 12l3.5-3.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></symbol>
@@ -41,46 +45,108 @@
   <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12.5" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M20 13.5A8.5 8.5 0 1110.5 4 6.8 6.8 0 0020 13.5z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"/><path d="M6.5 8h11v3.5a5.5 5.5 0 01-11 0V8z"/><path d="M12 17v4"/></symbol>
+  <symbol id="i-robot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="17" height="12" rx="4.5"/><path d="M12 3v4"/><path d="M8 20.5v1M16 20.5v1"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><path d="M9.6 15.4h4.8"/></symbol>
+  <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8l2 6.2 6.2 2-6.2 2-2 6.2-2-6.2-6.2-2 6.2-2z"/><path d="M19 16.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" fill="currentColor" stroke="none" opacity=".55"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.5l5 5 10-11"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15l-4.5-4.5L7 20"/></symbol>
+  <symbol id="i-mascot" viewBox="0 0 120 120">
+    <defs>
+      <linearGradient id="mascotBody" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ffb6d5"/><stop offset=".55" stop-color="#ff9ec7"/><stop offset="1" stop-color="#b6a6ff"/>
+      </linearGradient>
+    </defs>
+    <ellipse cx="60" cy="111" rx="28" ry="5" fill="currentColor" opacity=".14"/>
+    <path d="M33 48c0-17 12-30 27-30s27 13 27 30v20c0 17-12 30-27 30S33 85 33 68z" fill="url(#mascotBody)"/>
+    <path d="M45 38c1-8 7-13 15-13s14 5 15 13" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+    <ellipse cx="48" cy="64" rx="4.4" ry="5.8" fill="#3d2b45"/>
+    <ellipse cx="72" cy="64" rx="4.4" ry="5.8" fill="#3d2b45"/>
+    <circle cx="49.6" cy="61.6" r="1.6" fill="#fff"/>
+    <circle cx="73.6" cy="61.6" r="1.6" fill="#fff"/>
+    <ellipse cx="40.5" cy="77" rx="6" ry="3.2" fill="#ff6fa5" opacity=".45"/>
+    <ellipse cx="79.5" cy="77" rx="6" ry="3.2" fill="#ff6fa5" opacity=".45"/>
+    <path d="M55 76c2 3.2 8 3.2 10 0" fill="none" stroke="#3d2b45" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M60 18V9" stroke="#b6a6ff" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="60" cy="6.5" r="4" fill="#ff9dc7"/>
+    <path d="M24 44l2.2-4.8L31 37l-4.8-2.2L24 30l-2.2 4.8L17 37l4.8 2.2z" fill="#ffd479" opacity=".9"/>
+    <path d="M97 64l1.6-3.4 3.4-1.6-3.4-1.6L97 54l-1.6 3.4-3.4 1.6 3.4 1.6z" fill="#7ee0c2" opacity=".8"/>
+  </symbol>
   </svg>
   <!-- 初始化向导层（仅首次部署 admin.token 未设置时出现） -->
   <div id="setup-overlay" class="login-overlay hidden">
     <div class="login-card setup-card">
-      <div class="login-badge"><svg class="btn-ic" style="width:26px;height:26px"><use href="#i-sliders"/></svg></div>
+      <div class="login-mascot" aria-hidden="true"><svg><use href="#i-mascot"/></svg></div>
       <div class="login-logo">DDBOT<span>-WSa</span></div>
-      <p class="login-sub">检测到首次部署，几步就能用起来</p>
+      <p class="login-sub">第一次见面，先把小家布置好 ✨</p>
 
       <div class="setup-steps" id="setup-steps">
-        <span class="setup-step active" data-step="1"><b>1</b><small>密码</small></span>
-        <i></i><span class="setup-step" data-step="2"><b>2</b><small>OneBot</small></span>
+        <span class="setup-step active" data-step="1"><b>1</b><small>协议端</small></span>
+        <i></i><span class="setup-step" data-step="2"><b>2</b><small>密码</small></span>
         <i></i><span class="setup-step" data-step="3"><b>3</b><small>主题</small></span>
         <i></i><span class="setup-step" data-step="4"><b>4</b><small>确认</small></span>
       </div>
+      <button type="button" id="setup-skip" class="setup-skip">先用默认密码 520 进入 →</button>
 
-      <!-- 步骤 1：管理密码 -->
+      <!-- 步骤 1：协议端（OneBot 11 / QQ 开放平台） -->
       <div class="setup-pane" id="setup-pane-1">
-        <div class="setup-hero"><svg class="btn-ic"><use href="#i-key"/></svg></div>
-        <h3 class="setup-title">欢迎！先设一个管理密码</h3>
-        <p class="setup-desc">这是登录这个管理后台的钥匙，请至少 6 位。忘了的话去 application.yaml 里改 admin.token。</p>
-        <div class="pass-wrap">
-          <input type="password" id="setup-pass" class="input" placeholder="管理密码" autocomplete="new-password">
-          <button type="button" class="pass-eye" data-eye="setup-pass" aria-label="显示密码"><svg class="btn-ic"><use href="#i-eye"/></svg></button>
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-switch"/></svg></div>
+        <h3 class="setup-title">首次使用：选择协议端</h3>
+        <p class="setup-desc">决定 Bot 用什么协议连 QQ。两种配置会分别保留，之后也能在「配置 → 网络」里随时切换（切换后需要重启 Bot）。</p>
+
+        <div class="adapter-grid" id="setup-adapter">
+          <button type="button" class="adapter-card active" data-adapter="onebot-v11">
+            <span class="adapter-emoji adapter-emoji-onebot"><svg class="btn-ic"><use href="#i-plug"/></svg></span>
+            <span class="adapter-name">OneBot 11</span>
+            <span class="adapter-desc">NapCat / LLOneBot / Lagrange 等实现端</span>
+            <span class="adapter-check"><svg class="btn-ic"><use href="#i-check"/></svg></span>
+          </button>
+          <button type="button" class="adapter-card" data-adapter="qqofficial">
+            <span class="adapter-emoji adapter-emoji-qq"><svg class="btn-ic"><use href="#i-robot"/></svg></span>
+            <span class="adapter-name">QQ 开放平台</span>
+            <span class="adapter-desc">官方机器人 · 扫码绑定 AppID / AppSecret</span>
+            <span class="adapter-check"><svg class="btn-ic"><use href="#i-check"/></svg></span>
+          </button>
         </div>
-        <input type="password" id="setup-pass2" class="input" placeholder="再输一次，确认没打错" autocomplete="new-password">
+
+        <!-- OneBot 11 连接 -->
+        <div class="setup-sub" id="setup-onebot">
+          <div class="setup-sub-title"><svg class="btn-ic"><use href="#i-plug"/></svg>OneBot 11 连接</div>
+          <div class="setup-mode" id="setup-mode">
+            <button type="button" class="setup-mode-btn active" data-mode="ws-server"><b>正向连接</b><small>Bot 开端口等 OneBot 来连</small></button>
+            <button type="button" class="setup-mode-btn" data-mode="ws-reverse"><b>反向连接</b><small>Bot 主动去连 OneBot</small></button>
+          </div>
+          <input type="text" id="setup-ob-addr" class="input" placeholder="127.0.0.1:15630">
+          <input type="password" id="setup-ob-token" class="input" placeholder="Access Token（两边没设就留空）" autocomplete="off">
+        </div>
+
+        <!-- QQ 开放平台 -->
+        <div class="setup-sub hidden" id="setup-qq">
+          <div class="setup-sub-title"><svg class="btn-ic"><use href="#i-robot"/></svg>QQ 开放平台机器人</div>
+          <div class="setup-qq-bind">
+            <div class="setup-qq-status" id="setup-qq-status">还没有绑定机器人</div>
+            <button type="button" class="btn ghost sm" id="setup-qq-scan"><svg class="btn-ic"><use href="#i-sparkle"/></svg>扫码绑定</button>
+          </div>
+          <input type="text" id="setup-qq-appid" class="input" placeholder="AppID（纯数字，扫码后自动填入）" inputmode="numeric" autocomplete="off">
+          <input type="password" id="setup-qq-secret" class="input" placeholder="AppSecret（扫码后自动写入，留空即可）" autocomplete="new-password">
+          <p class="field-hint">凭据在 <a class="link" href="https://q.qq.com/" target="_blank" rel="noopener">q.qq.com</a> 的机器人管理端获取；扫码绑定会自动写入配置文件，不需要手动复制。</p>
+        </div>
+
         <p id="setup-err-1" class="login-error hidden"></p>
-        <button class="btn primary setup-next" data-goto="2">下一步：连接 OneBot</button>
+        <div class="setup-btn-row">
+          <button class="btn primary setup-next" data-goto="2">下一步：设置管理密码</button>
+        </div>
       </div>
 
-      <!-- 步骤 2：OneBot 连接 -->
+      <!-- 步骤 2：管理密码 -->
       <div class="setup-pane hidden" id="setup-pane-2">
-        <div class="setup-hero"><svg class="btn-ic"><use href="#i-switch"/></svg></div>
-        <h3 class="setup-title">让 Bot 连上你的 QQ</h3>
-        <p class="setup-desc">Bot 通过 OneBot 11 收发 QQ 消息（NapCat / Lagrange / LLOneBot 等实现端）。不确定怎么填可以跳过，稍后在「配置 → 网络」里弄。</p>
-        <div class="setup-mode" id="setup-mode">
-          <button type="button" class="setup-mode-btn active" data-mode="ws-server"><b>正向连接</b><small>Bot 开端口等 OneBot 来连</small></button>
-          <button type="button" class="setup-mode-btn" data-mode="ws-reverse"><b>反向连接</b><small>Bot 主动去连 OneBot</small></button>
+        <div class="setup-hero"><svg class="btn-ic"><use href="#i-key"/></svg></div>
+        <h3 class="setup-title">给管理面板上把锁</h3>
+        <p class="setup-desc">默认密码是 <b>520</b>，已经帮你填好；想更安全可以改成更长的密码。忘了的话去 application.yaml 里改 admin.token。</p>
+        <div class="pass-wrap">
+          <input type="password" id="setup-pass" class="input" value="520" placeholder="管理密码" autocomplete="new-password">
+          <button type="button" class="pass-eye" data-eye="setup-pass" aria-label="显示密码"><svg class="btn-ic"><use href="#i-eye"/></svg></button>
         </div>
-        <input type="text" id="setup-ob-addr" class="input" placeholder="127.0.0.1:15630">
-        <input type="password" id="setup-ob-token" class="input" placeholder="Access Token（两边没设就留空）" autocomplete="off">
+        <input type="password" id="setup-pass2" class="input" value="520" placeholder="再输一次，确认没打错" autocomplete="new-password">
         <p id="setup-err-2" class="login-error hidden"></p>
         <div class="setup-btn-row">
           <button class="btn ghost setup-prev" data-goto="1">上一步</button>
@@ -122,11 +188,15 @@
         <h3 class="setup-title">一切就绪</h3>
         <p class="setup-desc">配置已写入 application.yaml。</p>
         <div class="setup-next-steps">
-          <div class="ns-row"><svg class="btn-ic"><use href="#i-dash"/></svg><span>OneBot 连接需<b>重启 Bot</b>生效，之后到<b>仪表盘</b>看连接状态</span></div>
+          <div class="ns-row"><svg class="btn-ic"><use href="#i-dash"/></svg><span>接入配置需<b>重启 Bot</b>生效，之后到<b>仪表盘</b>看连接状态</span></div>
           <div class="ns-row"><svg class="btn-ic"><use href="#i-list"/></svg><span>去<b>订阅管理</b>添加第一个订阅</span></div>
           <div class="ns-row"><svg class="btn-ic"><use href="#i-doc"/></svg><span>遇到问题，右上角<b>文档</b>有答案</span></div>
         </div>
         <button type="button" id="setup-enter" class="btn primary">进入管理面板</button>
+      </div>
+
+      <div class="setup-bg-row">
+        <button type="button" class="login-bg-btn" data-bg-toggle><svg class="btn-ic"><use href="#i-image"/></svg>自定义背景</button>
       </div>
     </div>
   </div>
@@ -134,7 +204,7 @@
   <!-- 登录层 -->
   <div id="login-overlay" class="login-overlay hidden">
     <div class="login-card">
-      <div class="login-badge"><svg class="btn-ic" style="width:26px;height:26px"><use href="#i-dash"/></svg></div>
+      <div class="login-mascot" aria-hidden="true"><svg><use href="#i-mascot"/></svg></div>
       <div class="login-logo">DDBOT<span>-WSa</span></div>
       <p class="login-sub">输入管理后台 Token 以继续</p>
       <form id="login-form">
@@ -142,12 +212,15 @@
         <button type="submit" id="login-btn" class="btn primary">登 录</button>
       </form>
       <p id="login-error" class="login-error hidden"></p>
-      <p class="login-hint">Token 配置于 application.yaml 的 admin.token</p>
+      <p class="login-hint">默认密码 <b>520</b>；以 application.yaml 的 admin.token 为准</p>
+      <div class="login-footer">
+        <button type="button" class="login-bg-btn" data-bg-toggle><svg class="btn-ic"><use href="#i-image"/></svg>自定义背景</button>
+      </div>
     </div>
   </div>
 
   <!-- 主应用 -->
-  <div id="app" class="app">
+  <div id="app" class="app" style="visibility:hidden">
     <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
     <aside class="sidebar" id="sidebar">
       <div class="logo">DDBOT<span>-WSa</span></div>
@@ -173,6 +246,8 @@
       <header class="topbar">
         <button id="menu-toggle" class="menu-toggle" title="菜单"><svg class="btn-ic"><use href="#i-menu"/></svg></button>
         <h1 id="page-title">仪表盘</h1>
+        <span id="adapter-badge" class="badge adapter-badge">OneBot 11</span>
+        <button id="bg-toggle" class="btn ghost sm icon-only" data-bg-toggle title="自定义背景" aria-label="自定义背景"><svg class="btn-ic"><use href="#i-image"/></svg></button>
         <a class="btn ghost sm" href="https://kizunerwe.github.io/DDBOT-WSa-docs/" target="_blank" rel="noopener" title="打开文档站"><svg class="btn-ic"><use href="#i-doc"/></svg>文档</a>
         <span id="conn-badge" class="badge off">连接中…</span>
       </header>
@@ -181,7 +256,7 @@
       <section id="page-dashboard" class="page active">
         <div class="cards-grid">
           <div class="card stat-card">
-            <div class="stat-label">OneBot 连接</div>
+            <div class="stat-label" id="ob-label">OneBot 连接</div>
             <div class="stat-value"><span id="ob-status" class="dot off"></span><span id="ob-text">检测中</span></div>
             <div class="stat-sub" id="ob-sub">—</div>
           </div>
@@ -272,7 +347,8 @@
         <div class="config-toolbar">
           <div class="config-tabs" id="config-tabs"></div>
           <div class="config-toolbar-right">
-            <span id="config-hint" class="config-hint">修改合并写入并热生效；凭据类字段仅可在配置文件中修改</span>
+            <span id="config-hint" class="config-hint">保存后热生效；接入方式与连接类配置需重启 Bot</span>
+            <button id="config-reload" class="btn ghost sm" title="重新读取 application.yaml（接入方式/连接类修改仍需重启）">热重载</button>
             <button id="config-save" class="btn primary sm">保存当前分区</button>
           </div>
         </div>
@@ -311,6 +387,70 @@
         <button class="modal-close" id="template-modal-close" aria-label="关闭"><svg class="btn-ic"><use href="#i-close"/></svg></button>
       </div>
       <div class="modal-body" id="template-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- 自定义背景弹层（图床直链） -->
+  <div id="bg-modal" class="modal hidden">
+    <div class="modal-card bg-card">
+      <div class="modal-head">
+        <h3>自定义背景</h3>
+        <button class="modal-close" id="bg-modal-close" aria-label="关闭"><svg class="btn-ic"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="bg-preview" id="bg-preview"><span>背景预览</span></div>
+        <div class="form-group">
+          <div class="form-row set-row">
+            <div class="label-col"><label>图片直链（图床）</label><div class="field-hint">支持 https:// 图床直链；<b>保存到服务器 ui.json（与 application.yaml 同目录）</b>，不写入 application.yaml 或日志。</div></div>
+            <input id="bg-url" class="input" placeholder="https://example.com/background.jpg" autocomplete="off">
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>本地图片</label><div class="field-hint">压缩后保存到 ui.json，不上传到第三方。</div></div>
+            <div class="bg-file-box">
+              <input type="file" id="bg-file" accept="image/*" class="hidden">
+              <label for="bg-file" class="btn ghost sm">选择本地图片</label>
+              <span id="bg-file-name" class="bg-file-name"></span>
+            </div>
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>背景位置</label><div class="field-hint">裁剪时保留图片的哪个位置</div></div>
+            <select id="bg-position" class="input">
+              <option value="center">居中</option>
+              <option value="top">顶部对齐</option>
+              <option value="bottom">底部对齐</option>
+              <option value="left">左侧对齐</option>
+              <option value="right">右侧对齐</option>
+            </select>
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>字体颜色</label><div class="field-hint">默认跟随亮/暗主题；勾选「自定义」后覆盖主文字颜色，并和背景一起保存到 ui.json。</div></div>
+            <div class="bg-color-box">
+              <input type="color" id="fg-color" value="#f7f2ff" aria-label="字体颜色">
+              <label class="switch-label"><input type="checkbox" id="fg-custom"> 自定义</label>
+              <button type="button" class="btn ghost sm" id="fg-reset">跟随主题</button>
+            </div>
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>模糊</label><div class="field-hint">0 = 清晰，数值越大越朦胧</div></div>
+            <input id="bg-blur" type="range" min="0" max="24" step="1" value="0" class="range">
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>不透明度</label></div>
+            <input id="bg-opacity" type="range" min="20" max="100" step="1" value="85" class="range">
+          </div>
+          <div class="form-row set-row">
+            <div class="label-col"><label>暗色遮罩</label><div class="field-hint">让前景文字更清楚</div></div>
+            <input id="bg-mask" type="range" min="0" max="80" step="1" value="35" class="range">
+          </div>
+        </div>
+        <p class="config-note">外观设置保存在服务器 <code>ui.json</code>（与 application.yaml 同目录），所有管理员共享；不会写入 application.yaml 或日志。</p>
+        <p id="bg-error" class="login-error hidden"></p>
+        <div class="modal-actions">
+          <button class="btn" id="bg-reset">恢复默认</button>
+          <button class="btn" id="bg-cancel">取消</button>
+          <button class="btn primary" id="bg-save">应用背景</button>
+        </div>
+      </div>
     </div>
   </div>
 

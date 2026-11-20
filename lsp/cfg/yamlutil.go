@@ -182,8 +182,14 @@ func writeConfigKeyValueToPath(key, value, cfgPath string) error {
 				}
 				inSection = false
 			} else if m := keyRe.FindStringSubmatch(lineBody); m != nil && strings.EqualFold(m[3], keyName) {
-				// 只换值：缩进、键名大小写、冒号两侧写法、行内注释、行尾都按原样保留
-				out = append(out, m[1]+m[2]+m[3]+m[4]+m[5]+":"+m[6]+quoted+keepInlineComment(m[7])+lineEOL)
+				// 只换值：缩进、键名大小写、冒号两侧写法、行内注释、行尾都按原样保留。
+				// 例外：`key:` 后面本来没空格时必须补一个，否则 `key:"value"`
+				// 会被 YAML 当成普通标量而不是映射，配置项静默失效。
+				sep := m[6]
+				if sep == "" {
+					sep = " "
+				}
+				out = append(out, m[1]+m[2]+m[3]+m[4]+m[5]+":"+sep+quoted+keepInlineComment(m[7])+lineEOL)
 				inserted = true
 				continue
 			} else if childIndent == "" && len(trim) > 0 && !strings.HasPrefix(trim, "#") {

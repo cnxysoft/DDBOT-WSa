@@ -119,6 +119,22 @@ func TestWriteConfigKeyValueQuotesValue(t *testing.T) {
 	}
 }
 
+// `SESSDATA:` 后面本来没有空格时，写入必须补一个空格：
+// `SESSDATA:"cookie"` 会被 YAML 当成普通标量，整个配置项静默失效。
+func TestWriteConfigKeyValueAddsSpaceAfterColon(t *testing.T) {
+	path := writeTempConfig(t, "bilibili:\n  SESSDATA:\n  interval: 25s\n")
+
+	if err := writeConfigKeyValueToPath("bilibili.SESSDATA", "cookie", path); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+	after := readTempConfig(t, path)
+	m := mustParseYAML(t, after)
+	bili, _ := m["bilibili"].(map[string]interface{})
+	if bili == nil || bili["SESSDATA"] != "cookie" {
+		t.Fatalf("SESSDATA 应成为映射键，got %v\n%s", bili, after)
+	}
+}
+
 // 段不存在时追加新段，原有内容不能丢。
 func TestWriteConfigKeyValueAppendsSection(t *testing.T) {
 	path := writeTempConfig(t, "bot:\n  qq: 123456\n")

@@ -37,6 +37,37 @@ func captureLogrus(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
+// TestReloadConfigFileReadsNewValues 固化「Web 面板保存后热重载」这条链路：
+// ReloadConfigFile 必须重新读盘，并刷新 customCommandPrefix 缓存。
+func TestReloadConfigFileReadsNewValues(t *testing.T) {
+	withViperConfigFile(t, "bot:\n  commandPrefix: \"/\"\ncustomCommandPrefix:\n  签到: \"\"\n")
+
+	if err := ReloadConfigFile(); err != nil {
+		t.Fatalf("首次热重载失败: %v", err)
+	}
+	if got := GetCommandPrefix(); got != "/" {
+		t.Fatalf("commandPrefix = %q, want /", got)
+	}
+	if got := GetCustomCommandPrefix(); got["签到"] != "" {
+		t.Fatalf("customCommandPrefix 未加载: %v", got)
+	}
+
+	// 直接改文件（等价于用户手工编辑 application.yaml 后点「热重载」）
+	path := config.GlobalConfig.ConfigFileUsed()
+	if err := os.WriteFile(path, []byte("bot:\n  commandPrefix: \"!\"\ncustomCommandPrefix:\n  帮助: \"!\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReloadConfigFile(); err != nil {
+		t.Fatalf("再次热重载失败: %v", err)
+	}
+	if got := GetCommandPrefix(); got != "!" {
+		t.Fatalf("commandPrefix 未热更新，got %q", got)
+	}
+	if got := GetCustomCommandPrefix(); got["帮助"] != "!" {
+		t.Fatalf("customCommandPrefix 未热更新: %v", got)
+	}
+}
+
 // 正常写法：半角冒号 → 读到映射，且读的是 viper 实际加载的那个文件。
 func TestReloadCustomCommandPrefixReadsViperFile(t *testing.T) {
 	withViperConfigFile(t, "customCommandPrefix:\n  签到: \"\"\n  帮助: \"!\"\n")

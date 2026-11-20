@@ -4,6 +4,8 @@
 /* ===== 状态 ===== */
 const TOKEN_KEY = 'ddbot_admin_token';
 const THEME_KEY = 'ddbot_theme';
+// 与后端 admin.defaultAdminToken 保持一致：admin.token 未配置时的默认密码
+const DEFAULT_ADMIN_TOKEN = '520';
 let token = localStorage.getItem(TOKEN_KEY) || '';
 let sseConnected = false;
 let logPaused = false;
@@ -83,6 +85,10 @@ async function apiJSON(path, opts) {
 function showLogin() {
   localStorage.removeItem(TOKEN_KEY);
   token = '';
+  // 登录页只显示背景图 + 登录卡片：把登录后的主界面整体隐藏，
+  // 避免玻璃模式下仪表盘/侧边栏从背景里透出来。
+  const app = document.querySelector('#app');
+  if (app) app.style.visibility = 'hidden';
   const ov = $('#login-overlay');
   ov.style.opacity = '';
   ov.style.transition = '';
@@ -94,6 +100,9 @@ function hideLogin() {
   const ov = $('#login-overlay');
   ov.style.transition = 'opacity .25s';
   ov.style.opacity = '0';
+  // 登录成功后立刻恢复主界面，让淡出过程自然揭晓
+  const app = document.querySelector('#app');
+  if (app) app.style.visibility = '';
   setTimeout(() => {
     ov.classList.add('hidden');
     ov.style.opacity = '';
@@ -177,6 +186,288 @@ themeMedia.addEventListener('change', () => {
   if ((localStorage.getItem(THEME_KEY) || 'auto') === 'auto') applyTheme('auto');
 });
 
+/* ===== 自定义背景（ui.json 服务端持久化） ===== */
+const UI_API = '/api/v1/ui';
+const UI_SAVE_API = '/api/v1/ui/save';
+const DEFAULT_UI = {
+  backgroundUrl: '',
+  backgroundBlur: 0,
+  backgroundOpacity: 85,
+  backgroundMask: 35,
+  backgroundPosition: 'center',
+  fontCustom: false,
+  fontColor: '',
+};
+// 当前生效的 UI 外观（来自 ui.json；保存后同步更新）
+let uiSettings = { ...DEFAULT_UI };
+// 弹层里新选择的本地图片（压缩后的 data URL）；保存前只存在内存
+let pendingBgData = '';
+
+function uiInt(value, def, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
+// 旧版本把背景/字体写进了 localStorage；迁移到 ui.json 后清掉旧键。
+function cleanupLegacyUI() {
+  [
+    'ddbot_bg_url', 'ddbot_bg_blur', 'ddbot_bg_opacity', 'ddbot_bg_mask',
+    'ddbot_bg_position', 'ddbot_bg_remember', 'ddbot_fg_custom', 'ddbot_fg_color',
+  ].forEach((k) => {
+    localStorage.removeItem(k);
+    sessionStorage.removeItem(k);
+  });
+}
+
+// 登录页也要显示背景，所以 GET 允许匿名；保存失败时由调用方提示。
+async function loadUISettings() {
+  try {
+    const resp = await fetch(UI_API, { cache: 'no-store' });
+    if (resp.ok) {
+      const data = await resp.json();
+      uiSettings = { ...DEFAULT_UI, ...data };
+    }
+  } catch (e) { /* 使用默认值 */ }
+  applyBackground();
+  applyAppearance();
+}
+
+async function saveUISettings(settings) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const resp = await fetch(UI_SAVE_API, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(settings),
+  });
+  if (!resp.ok) {
+    let msg = 'HTTP ' + resp.status;
+    if (resp.status === 401 || resp.status === 403) {
+      msg = '请先登录（远端修改外观需要 admin.token）';
+    } else {
+      try { const e = await resp.json(); if (e.error) msg = e.error; } catch { /* 无 JSON 错误体 */ }
+    }
+    throw new Error(msg);
+  }
+  return resp.json().catch(() => ({}));
+}
+
+function applyBackground() {
+  const layer = $('#bg-layer');
+  const img = $('#bg-image');
+  if (!layer || !img) return;
+  const url = (uiSettings.backgroundUrl || '').trim();
+  const blur = uiInt(uiSettings.backgroundBlur, 0, 0, 24);
+  const opacity = uiInt(uiSettings.backgroundOpacity, 85, 20, 100);
+  const mask = uiInt(uiSettings.backgroundMask, 35, 0, 80);
+  const position = uiSettings.backgroundPosition || 'center';
+  if (!url) {
+    layer.classList.add('hidden');
+    document.body.classList.remove('has-custom-bg');
+    img.removeAttribute('src');
+    return;
+  }
+  layer.style.setProperty('--bg-blur', blur + 'px');
+  layer.style.setProperty('--bg-opacity', String(opacity / 100));
+  layer.style.setProperty('--bg-mask', String(mask / 100));
+  img.style.objectPosition = position;
+  img.src = url;
+  layer.classList.remove('hidden');
+  document.body.classList.add('has-custom-bg');
+}
+
+// 字体颜色：未自定义时完全交还给主题变量。
+function applyAppearance() {
+  const root = document.documentElement;
+  const custom = !!uiSettings.fontCustom;
+  const color = (uiSettings.fontColor || '').trim();
+  if (custom && color) {
+    root.style.setProperty('--text', color);
+    root.style.setProperty('--muted', `color-mix(in srgb, ${color} 62%, transparent)`);
+  } else {
+    root.style.removeProperty('--text');
+    root.style.removeProperty('--muted');
+  }
+}
+
+function bgShowError(msg) {
+  const el = $('#bg-error');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// 弹层里当前要预览的地址：本地图片优先，其次是图床输入框
+function bgPreviewURL() {
+  return pendingBgData || ($('#bg-url')?.value || '').trim();
+}
+
+function syncBgPreview() {
+  const preview = $('#bg-preview');
+  const url = bgPreviewURL();
+  if (preview) {
+    preview.style.backgroundImage = url ? 'url(' + JSON.stringify(url) + ')' : '';
+    preview.style.backgroundPosition = $('#bg-position')?.value || 'center';
+    preview.classList.toggle('has-image', !!url);
+  }
+  bgShowError('');
+}
+
+function openBgModal() {
+  if (!$('#bg-modal')) return;
+  const stored = (uiSettings.backgroundUrl || '').trim();
+  // 已保存的是本地压缩图时，不把它塞进 URL 输入框（那串 base64 太长）
+  pendingBgData = stored.startsWith('data:image/') ? stored : '';
+  $('#bg-url').value = pendingBgData ? '' : stored;
+  $('#bg-file').value = '';
+  $('#bg-file-name').textContent = pendingBgData ? '当前使用本地上传图片' : '';
+  $('#bg-blur').value = String(uiInt(uiSettings.backgroundBlur, 0, 0, 24));
+  $('#bg-opacity').value = String(uiInt(uiSettings.backgroundOpacity, 85, 20, 100));
+  $('#bg-mask').value = String(uiInt(uiSettings.backgroundMask, 35, 0, 80));
+  $('#bg-position').value = uiSettings.backgroundPosition || 'center';
+  const customFg = !!uiSettings.fontCustom;
+  $('#fg-custom').checked = customFg;
+  $('#fg-color').value = (uiSettings.fontColor || '').trim()
+    || (document.documentElement.getAttribute('data-theme') === 'light' ? '#3f2b4a' : '#f7f2ff');
+  syncBgPreview();
+  $('#bg-modal').classList.remove('hidden');
+}
+
+function closeBgModal() {
+  $('#bg-modal')?.classList.add('hidden');
+}
+
+// 图床直链校验：先看协议，再实际加载一次图片，避免保存一个永远显示不出来的地址。
+function testBgImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    const timer = setTimeout(() => {
+      img.onload = img.onerror = null;
+      img.src = '';
+      reject(new Error('图片加载超时，请检查图床直链是否可访问'));
+    }, 8000);
+    img.onload = () => { clearTimeout(timer); resolve(); };
+    img.onerror = () => { clearTimeout(timer); reject(new Error('图片加载失败：请确认是可直接访问的图床直链')); };
+    img.src = url;
+  });
+}
+
+// 本地图片压缩：最长边 1920，优先 webp，再退 jpeg。
+// 背景图存 localStorage，超过几 MB 会触发配额错误，所以这里主动压小。
+function compressImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) { reject(new Error('请选择图片文件')); return; }
+    if (file.size > 12 * 1024 * 1024) { reject(new Error('图片太大（最大 12MB）')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取本地图片失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('图片格式不支持'));
+      img.onload = () => {
+        const max = 1920;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        // 透明图转 jpeg 时用白底，避免变黑
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        let data = canvas.toDataURL('image/webp', 0.85);
+        if (!data.startsWith('data:image/webp')) data = canvas.toDataURL('image/jpeg', 0.85);
+        if (data.length > 3_800_000) data = canvas.toDataURL('image/jpeg', 0.62);
+        if (data.length > 4_500_000) { reject(new Error('图片压缩后仍然过大，请换一张小一点的图片')); return; }
+        resolve(data);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function saveBackground() {
+  const url = bgPreviewURL();
+  const saveBtn = $('#bg-save');
+  if (url && !url.startsWith('data:image/')) {
+    let parsed;
+    try { parsed = new URL(url); } catch { bgShowError('请输入合法的图片 URL（https://...）'); return; }
+    if (!/^https?:$/.test(parsed.protocol)) { bgShowError('只支持 http / https 图床直链'); return; }
+    saveBtn.disabled = true;
+    saveBtn.textContent = '加载中…';
+    try {
+      await testBgImage(url);
+    } catch (e) {
+      bgShowError(e.message);
+      return;
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '应用背景';
+    }
+  }
+
+  const payload = {
+    backgroundUrl: url,
+    backgroundBlur: uiInt($('#bg-blur').value, 0, 0, 24),
+    backgroundOpacity: uiInt($('#bg-opacity').value, 85, 20, 100),
+    backgroundMask: uiInt($('#bg-mask').value, 35, 0, 80),
+    backgroundPosition: $('#bg-position').value || 'center',
+    fontCustom: !!$('#fg-custom').checked,
+    fontColor: ($('#fg-color').value || '').trim(),
+  };
+  saveBtn.disabled = true;
+  saveBtn.textContent = '保存中…';
+  try {
+    await saveUISettings(payload);
+  } catch (e) {
+    bgShowError('保存到 ui.json 失败：' + e.message);
+    return;
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = '应用背景';
+  }
+  uiSettings = { ...DEFAULT_UI, ...payload };
+  pendingBgData = '';
+  applyBackground();
+  applyAppearance();
+  closeBgModal();
+  toast('外观已保存到 ui.json');
+}
+
+async function resetBackground() {
+  const resetBtn = $('#bg-reset');
+  if (resetBtn) resetBtn.disabled = true;
+  try {
+    await saveUISettings({ ...DEFAULT_UI });
+  } catch (e) {
+    bgShowError('恢复默认失败：' + e.message);
+    return;
+  } finally {
+    if (resetBtn) resetBtn.disabled = false;
+  }
+  uiSettings = { ...DEFAULT_UI };
+  pendingBgData = '';
+  if ($('#bg-url')) $('#bg-url').value = '';
+  if ($('#bg-file')) $('#bg-file').value = '';
+  if ($('#bg-file-name')) $('#bg-file-name').textContent = '';
+  if ($('#bg-blur')) $('#bg-blur').value = '0';
+  if ($('#bg-opacity')) $('#bg-opacity').value = '85';
+  if ($('#bg-mask')) $('#bg-mask').value = '35';
+  if ($('#bg-position')) $('#bg-position').value = 'center';
+  if ($('#fg-custom')) $('#fg-custom').checked = false;
+  if ($('#fg-color')) $('#fg-color').value = document.documentElement.getAttribute('data-theme') === 'light' ? '#3f2b4a' : '#f7f2ff';
+  syncBgPreview();
+  applyBackground();
+  applyAppearance();
+  closeBgModal();
+  toast('已恢复默认外观并写回 ui.json');
+}
+
 /* ===== 仪表盘 ===== */
 const numAnimState = {}; // 数字滚动补间的当前值缓存
 
@@ -209,6 +500,12 @@ async function refreshDashboard() {
     ]);
     $('#ob-status').className = 'dot ' + (ob.online ? 'on' : 'off');
     $('#ob-text').textContent = ob.online ? '在线' : '离线';
+    // 接入方式由后端 adapter.mode 决定：同一份面板可以跑 OneBot / QQ 开放平台 / Satori
+    const adapterName = st.adapterMode === 'qqofficial' ? 'QQ 开放平台'
+      : st.adapterMode === 'satori' ? 'Satori' : 'OneBot 11';
+    $('#ob-label').textContent = adapterName + ' 连接';
+    const adapterBadge = $('#adapter-badge');
+    if (adapterBadge) adapterBadge.textContent = adapterName;
     $('#ob-sub').textContent = (st.concernsStatus ? Object.keys(st.concernsStatus).length : 0) + ' 个平台已加载';
     unskeleton('#uptime');
     $('#uptime').textContent = fmtDuration(st.uptime / 1e9);
@@ -533,11 +830,29 @@ const CONFIG_SCHEMA = [
     imageMergeGroup(),
   ]},
   { id: 'network', label: '网络', groups: [
-    { title: 'OneBot WebSocket', fields: [
-      { path: 'websocket.mode', label: '模式', type: 'select', options: ['ws-server','ws-reverse'], def: 'ws-server' },
+    { title: '接入方式', fields: [
+      { path: 'adapter.mode', label: '接入方式', type: 'select',
+        options: ['onebot-v11', 'qqofficial', 'satori'], def: 'onebot-v11',
+        optionLabels: {
+          'onebot-v11': 'OneBot 11（NapCat / LLOneBot / Lagrange）',
+          qqofficial: 'QQ 开放平台（官方机器人）',
+          satori: 'Satori（兼容实现端）',
+        },
+        hint: '决定 Bot 用什么协议连 IM。切换后需重启 Bot 生效；两套连接配置会分别保留，可以随时切回来。' },
+    ]},
+    { title: 'OneBot 11 / Satori 连接', fields: [
+      { path: 'websocket.mode', label: '连接方向', type: 'select', options: ['ws-server','ws-reverse'], def: 'ws-server',
+        optionLabels: { 'ws-server': '正向连接（Bot 监听）', 'ws-reverse': '反向连接（Bot 主动连）' } },
       { path: 'websocket.ws-server', label: '正向监听地址', type: 'text', def: '127.0.0.1:15630' },
       { path: 'websocket.ws-reverse', label: '反向连接地址', type: 'text', def: 'ws://localhost:3001' },
-      { path: 'websocket.token', label: 'Access Token', type: 'credential' },
+      { path: 'websocket.token', label: 'Access Token', type: 'credential', hint: '正向监听非回环地址时必须配置，否则 Bot 会拒绝启动' },
+    ]},
+    { title: 'QQ 开放平台', qqofficial: true, fields: [
+      { path: 'qqofficial.app-id', label: 'AppID', type: 'text', def: '', hint: '机器人管理端（q.qq.com）的 AppID，纯数字' },
+      { path: 'qqofficial.app-secret', label: 'AppSecret', type: 'credential', hint: '等同凭据：读取时脱敏，留空保持不变；扫码绑定会自动写入' },
+      { path: 'qqofficial.mode', label: '连接方式', type: 'select', options: ['websocket'], def: 'websocket',
+        optionLabels: { websocket: 'WebSocket 长连接（当前唯一实现）' }, hint: 'webhook 尚未实现，不要手改成 webhook' },
+      { path: 'qqofficial.qrlogin', label: '显示扫码绑定', type: 'bool', def: true, hint: '关掉后只保留手动填写凭据' },
     ]},
     { title: '代理', fields: [
       { path: 'proxy.type', label: '代理方式', type: 'select', options: ['systemProxy','localProxyPool','pyProxyPool','off'], def: 'systemProxy' },
@@ -670,6 +985,18 @@ const SCHEMA_FIELDS = {};
 for (const t of CONFIG_SCHEMA) {
   if (!t.groups) continue;
   for (const g of t.groups) for (const f of g.fields) SCHEMA_FIELDS[f.path] = f;
+}
+
+// 接入方式展示名：配置页顶部提示条与仪表盘徽章共用
+const ADAPTER_NAMES = { 'onebot-v11': 'OneBot 11', qqofficial: 'QQ 开放平台', satori: 'Satori' };
+
+function adapterBannerHTML(mode) {
+  const key = String(mode || 'onebot-v11');
+  const name = ADAPTER_NAMES[key] || key;
+  const icon = key === 'qqofficial' ? 'i-robot' : 'i-plug';
+  return `<span class="adapter-banner-icon"><svg class="btn-ic"><use href="#${icon}"/></svg></span>` +
+    `<span class="adapter-banner-main">当前接入方式：<b>${esc(name)}</b><small>保存后需重启 Bot 生效</small></span>` +
+    `<span class="adapter-banner-tag">${key === 'qqofficial' ? '官方机器人' : key === 'satori' ? 'Satori 协议' : 'OneBot 协议'}</span>`;
 }
 
 function getPath(obj, path) {
@@ -812,6 +1139,9 @@ function renderConfigForm() {
         const card = document.createElement('div');
         card.className = 'platform-card' + (enabled ? '' : ' disabled');
         const c = PLATFORM_COLORS[site] || { pc: '#8b8fa3', pc2: '#b3b8c4' };
+        // 平台卡片的粉彩渐变由 --pc/--pc2 驱动；不设的话所有卡片都会退化成主题色
+        card.style.setProperty('--pc', c.pc);
+        card.style.setProperty('--pc2', c.pc2);
         card.innerHTML =
           `<svg class="p-watermark"><use href="#${meta.icon}"/></svg>` +
           `<div class="p-row">` +
@@ -831,15 +1161,35 @@ function renderConfigForm() {
       }
       panel.appendChild(grid);
     } else {
+      if (tab.id === 'network') {
+        // 顶部提示条：把「当前生效的是哪套接入方式」摆在最显眼的位置，
+        // 免得改完 OneBot 地址才发现 Bot 其实跑在 QQ 开放平台上。
+        const banner = document.createElement('div');
+        banner.className = 'adapter-banner';
+        banner.id = 'adapter-banner';
+        banner.innerHTML = adapterBannerHTML(getPath(configCache, 'adapter.mode'));
+        panel.appendChild(banner);
+      }
       for (const g of tab.groups) {
         const box = document.createElement('div');
         box.className = 'form-group';
         box.innerHTML = `<h4 class="form-group-title">${esc(g.title)}</h4>`;
+        // QQ 官方：顶部挂登录态卡片 + 扫码绑定入口（与平台弹层同一套账号卡片）
+        const showQQAccount = g.qqofficial && getPath(configCache, 'qqofficial.qrlogin') !== false;
+        if (showQQAccount) {
+          const acct = document.createElement('div');
+          acct.id = 'qqofficial-account';
+          acct.className = 'qq-account';
+          box.appendChild(acct);
+        }
         const grid = document.createElement('div');
         grid.className = 'form-grid';
         for (const f of g.fields) { const el = renderField(f); if (el) grid.appendChild(el); }
         box.appendChild(grid);
         panel.appendChild(box);
+        // panel 本身要等循环结束才挂进 #config-panels，这里必须延后一拍，
+        // 否则 getElementById 拿不到刚创建的账号卡片（表现为卡片空白）。
+        if (showQQAccount) setTimeout(() => loadPlatformAccount('qqofficial', 'qqofficial-account'), 0);
       }
     }
     panelsEl.appendChild(panel);
@@ -911,6 +1261,21 @@ function collectConfigPatch(tabId) {
   return collectPatchFromContainer($('#config-' + tabId));
 }
 
+// 接入方式切到 QQ 开放平台时，AppID / AppSecret 必须齐全。
+// 后端也会拒绝，但前端先提示能少一次「保存成功、重启却起不来」。
+function validateQQOfficialPatch(patch) {
+  const current = configCache || {};
+  const qqPatch = patch.qqofficial || {};
+  const adapterPatch = patch.adapter || {};
+  const mode = String(adapterPatch.mode !== undefined ? adapterPatch.mode : ((current.adapter || {}).mode || 'onebot-v11'));
+  if (mode !== 'qqofficial') return;
+  const fallback = current.qqofficial || {};
+  const appId = String(qqPatch['app-id'] !== undefined ? qqPatch['app-id'] : (fallback['app-id'] || '')).trim();
+  const secret = String(qqPatch['app-secret'] !== undefined ? qqPatch['app-secret'] : (fallback['app-secret'] || '')).trim();
+  if (!appId) throw new Error('接入方式为 QQ 开放平台时必须填写 AppID，或改回 OneBot 11');
+  if (!secret) throw new Error('接入方式为 QQ 开放平台时必须填写 AppSecret（扫码绑定会自动写入），或改回 OneBot 11');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // 凭据「清除/撤销」按钮（动态生成，委托到 document——覆盖配置面板与平台弹层）
   document.addEventListener('click', (e) => {
@@ -952,8 +1317,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let patch;
     try {
       patch = collectConfigPatch(activeConfigTab);
+      validateQQOfficialPatch(patch);
     } catch (e) {
-      toast('配置格式有误：' + e.message, false);
+      toast('配置校验未通过：' + e.message, false);
       return;
     }
     if (!Object.keys(patch).length) {
@@ -966,12 +1332,29 @@ document.addEventListener('DOMContentLoaded', () => {
         method: 'POST',
         body: JSON.stringify({ config: patch }),
       });
-      toast('配置已保存（自动热生效；连接类配置需重启 Bot）');
+      toast('配置已保存并热生效（接入方式/连接类配置需重启 Bot）');
       loadConfig();
     } catch (e) {
       toast('保存失败：' + e.message, false);
     } finally {
       $('#config-save').disabled = false;
+    }
+  });
+
+  // 手动热重载：直接修改 application.yaml 后不用重启（接入方式/连接类仍需重启）
+  $('#config-reload').addEventListener('click', async () => {
+    const btn = $('#config-reload');
+    btn.disabled = true;
+    btn.textContent = '重载中…';
+    try {
+      await apiJSON('/api/v1/config/reload', { method: 'POST' });
+      toast('配置已热重载（接入方式/连接类修改仍需重启）');
+      await loadConfig();
+    } catch (e) {
+      toast('热重载失败：' + e.message, false);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '热重载';
     }
   });
 });
@@ -1391,18 +1774,57 @@ function closeSidebar() {
 /* ===== 扫码登录 ===== */
 // 面板侧只做出码与轮询：真正的登录流程在服务端（B站走 lsp/bilibili 的原语，
 // 微博直接接 lsp/weibo 的 RunQRLoginForQQ），成功后由服务端写配置文件。
-const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博' };
+const LOGIN_PLATFORM_NAME = { bilibili: 'B站', weibo: '微博', qqofficial: 'QQ 开放平台' };
 
 let loginSession = null; // 服务端会话 id
 let loginTimer = null;   // 轮询定时器
 let loginReqSeq = 0;     // 建会话请求的序号，用来丢掉过期请求的迟到响应
 let loginSite = null;    // 当前平台，供「重新获取二维码」用
+let loginSetupMode = false; // true = 初始化向导里的匿名 QQ 绑定（还没有 admin.token）
+
+// 初始化向导出现在 admin.token 设置之前，这时走不了需要鉴权的 /api/v1/login/qrcode，
+// 因此服务端为 QQ 官方预留了一套同源、匿名、初始化完成即 404 的 setup 入口。
+const LOGIN_ENDPOINTS = {
+  normal: {
+    start: '/api/v1/login/qrcode',
+    status: '/api/v1/login/qrcode/status',
+    cancel: '/api/v1/login/qrcode/cancel',
+  },
+  setup: {
+    start: '/api/v1/setup/qqofficial/qrcode',
+    status: '/api/v1/setup/qqofficial/qrcode/status',
+    cancel: '/api/v1/setup/qqofficial/qrcode/cancel',
+  },
+};
+
+function loginEndpoint() {
+  return loginSetupMode ? LOGIN_ENDPOINTS.setup : LOGIN_ENDPOINTS.normal;
+}
+
+// 统一扫码接口调用：普通模式走带 token 的 apiJSON；setup 模式没有 token，直接 fetch。
+async function loginRequest(path, opts) {
+  if (!loginSetupMode) return apiJSON(path, opts);
+  const resp = await fetch(path, {
+    ...opts,
+    headers: {
+      ...(opts && opts.headers ? opts.headers : {}),
+      ...(opts && opts.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+  });
+  if (!resp.ok) {
+    let msg = 'HTTP ' + resp.status;
+    try { const e = await resp.json(); if (e.error) msg = e.error; } catch { /* 无 JSON 错误体 */ }
+    throw new Error(msg);
+  }
+  return resp.json();
+}
 
 // done=true 表示这次登录已经有结果了：按钮换成「重新扫码」+「关闭」。
 function loginActionsHTML(done, site) {
   return '<div class="login-actions">' +
     (done
-      ? '<button class="btn" data-login-platform="' + esc(site || '') + '">重新扫码</button>'
+      ? '<button class="btn" data-login-platform="' + esc(site || '') + '"' +
+        (loginSetupMode ? ' data-login-setup="1"' : '') + '>重新扫码</button>'
       : '<button class="btn" id="login-refresh">重新获取二维码</button>') +
     '<button class="btn' + (done ? ' primary' : '') + '" id="login-cancel">' + (done ? '关闭' : '取消') + '</button>' +
     '</div>' +
@@ -1427,8 +1849,9 @@ function renderLoginBody(html) {
 function cancelLoginSession() {
   if (!loginSession) return;
   const sid = loginSession;
+  const ep = loginEndpoint();
   loginSession = null;
-  api('/api/v1/login/qrcode/cancel', { method: 'POST', body: JSON.stringify({ session: sid }) }).catch(() => {});
+  loginRequest(ep.cancel, { method: 'POST', body: JSON.stringify({ session: sid }) }).catch(() => {});
 }
 
 function stopLoginPolling() {
@@ -1441,20 +1864,22 @@ function closeLoginModal() {
   cancelLoginSession();
 }
 
-async function startPlatformLogin(site) {
+async function startPlatformLogin(site, opts = {}) {
   const name = LOGIN_PLATFORM_NAME[site] || site;
   stopLoginPolling();
   cancelLoginSession();
   loginSite = site;
+  loginSetupMode = !!opts.setup;
 
-  $('#login-modal-title').textContent = name + ' 扫码登录';
+  $('#login-modal-title').textContent = name + (loginSetupMode ? ' · 扫码绑定' : ' 扫码登录');
   renderLoginBody('<div class="login-qr-box"><div class="login-qr-loading">正在获取二维码…</div></div>');
   $('#login-modal').classList.remove('hidden');
 
   const seq = ++loginReqSeq;
+  const ep = loginEndpoint();
   let resp;
   try {
-    resp = await apiJSON('/api/v1/login/qrcode', {
+    resp = await loginRequest(ep.start, {
       method: 'POST',
       body: JSON.stringify({ platform: site }),
     });
@@ -1483,9 +1908,10 @@ async function startPlatformLogin(site) {
 // 不能再来动界面 —— 否则它会劫持弹层、掐掉新会话的轮询，还弹一条莫名其妙的成功提示。
 async function pollLoginStatus(sid) {
   if (!sid || loginSession !== sid) return;
+  const ep = loginEndpoint();
   let r;
   try {
-    r = await apiJSON('/api/v1/login/qrcode/status?session=' + encodeURIComponent(sid));
+    r = await loginRequest(ep.status + '?session=' + encodeURIComponent(sid));
   } catch (e) {
     return; // 网络抖动，等下一次
   }
@@ -1496,6 +1922,18 @@ async function pollLoginStatus(sid) {
   if (r.state === 'confirmed') {
     stopLoginPolling();
     loginSession = null; // 服务端已经收尾，不用再发 cancel
+    if (loginSetupMode) {
+      // 向导里扫码只负责「拿到 AppID + 把 AppSecret 写进配置」，
+      // 真正的保存动作留给「完成初始化」那一下（adapter.mode 也会在那时落盘）。
+      setupQQ.bound = true;
+      setupQQ.appId = r.name || setupQQ.appId;
+      setupQQ.appSecret = '';
+      loginSetupMode = false;
+      $('#login-modal').classList.add('hidden');
+      syncQQSetupUI();
+      toast('QQ 开放平台绑定成功' + (r.name ? '：' + r.name : ''));
+      return;
+    }
     renderLoginBody(loginResultHTML('ok', r.message || '登录成功，凭据已写入配置', r.platform));
     // 服务端在登录成功时已经把账号缓存失效了，这里拿到的是新账号
     loadPlatformAccount(r.platform, 'login-result-account');
@@ -1528,6 +1966,7 @@ async function loadPlatformAccount(site, mountId) {
 
 function accountCardHTML(site, acc) {
   const label = LOGIN_PLATFORM_NAME[site] || site;
+  const isQQ = site === 'qqofficial';
   const initial = (acc.name || label).slice(0, 1);
   const avatar = acc.avatar
     ? '<img class="acct-avatar" alt="" src="' + esc(acc.avatar) + '" referrerpolicy="no-referrer">'
@@ -1535,9 +1974,9 @@ function accountCardHTML(site, acc) {
 
   if (!acc.loggedIn) {
     return '<div class="acct-card">' + avatar +
-      '<div class="acct-main"><div class="acct-name">未登录</div>' +
-      '<div class="acct-sub">' + esc(acc.message || '尚未登录') + '</div></div>' +
-      '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">扫码登录</button>' +
+      '<div class="acct-main"><div class="acct-name">' + (isQQ ? '未绑定' : '未登录') + '</div>' +
+      '<div class="acct-sub">' + esc(acc.message || (isQQ ? '尚未绑定 QQ 官方机器人' : '尚未登录')) + '</div></div>' +
+      '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">' + (isQQ ? '扫码绑定' : '扫码登录') + '</button>' +
       '</div>';
   }
 
@@ -1546,10 +1985,11 @@ function accountCardHTML(site, acc) {
   if (acc.mode) meta.push({ login: '登录模式', guest: '访客模式', api: 'API 模式' }[acc.mode] || acc.mode);
   if (acc.level) meta.push('LV' + acc.level);
   if (acc.vip) meta.push(acc.vip);
+  // QQ 官方：AppID 就是账号标识，不显示 UID / 等级一类的空字段
   return '<div class="acct-card ok">' + avatar +
-    '<div class="acct-main"><div class="acct-name">' + esc(acc.name || '已登录') + '</div>' +
-    '<div class="acct-sub">' + esc(meta.join(' · ') || acc.message || '已登录') + '</div></div>' +
-    '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">重新登录</button>' +
+    '<div class="acct-main"><div class="acct-name">' + esc(acc.name || (isQQ ? '已绑定' : '已登录')) + '</div>' +
+    '<div class="acct-sub">' + esc(meta.join(' · ') || acc.message || (isQQ ? 'AppSecret 已写入配置' : '已登录')) + '</div></div>' +
+    '<button class="btn ghost sm" data-login-platform="' + esc(site) + '">' + (isQQ ? '重新绑定' : '重新登录') + '</button>' +
     '</div>';
 }
 
@@ -1562,6 +2002,60 @@ function boot() {
 
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(localStorage.getItem(THEME_KEY) || 'auto');
+  cleanupLegacyUI();
+  // 外观配置在服务器 ui.json；登录页也要显示背景，GET 允许匿名
+  loadUISettings();
+
+  // 自定义背景（图床直链 / 本地图片）
+  document.querySelectorAll('[data-bg-toggle]').forEach((b) => b.addEventListener('click', openBgModal));
+  $('#bg-modal-close')?.addEventListener('click', closeBgModal);
+  $('#bg-cancel')?.addEventListener('click', closeBgModal);
+  $('#bg-reset')?.addEventListener('click', resetBackground);
+  $('#bg-save')?.addEventListener('click', saveBackground);
+  $('#bg-url')?.addEventListener('input', () => {
+    pendingBgData = '';
+    if ($('#bg-file-name')) $('#bg-file-name').textContent = '';
+    syncBgPreview();
+  });
+  $('#bg-position')?.addEventListener('change', () => {
+    syncBgPreview();
+    const img = $('#bg-image');
+    if (img) img.style.objectPosition = $('#bg-position').value;
+  });
+  $('#fg-reset')?.addEventListener('click', () => {
+    if ($('#fg-custom')) $('#fg-custom').checked = false;
+    if ($('#fg-color')) {
+      $('#fg-color').value = document.documentElement.getAttribute('data-theme') === 'light' ? '#3f2b4a' : '#f7f2ff';
+    }
+  });
+  $('#bg-file')?.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    bgShowError('');
+    try {
+      pendingBgData = await compressImageFile(file);
+      $('#bg-url').value = '';
+      $('#bg-file-name').textContent = file.name + '（已压缩）';
+      syncBgPreview();
+    } catch (err) {
+      pendingBgData = '';
+      $('#bg-file-name').textContent = '';
+      bgShowError(err.message);
+      e.target.value = '';
+    }
+  });
+  ['bg-blur', 'bg-opacity', 'bg-mask'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('input', () => {
+      const layer = $('#bg-layer');
+      if (!layer) return;
+      if (id === 'bg-blur') layer.style.setProperty('--bg-blur', $('#bg-blur').value + 'px');
+      if (id === 'bg-opacity') layer.style.setProperty('--bg-opacity', String(Number($('#bg-opacity').value) / 100));
+      if (id === 'bg-mask') layer.style.setProperty('--bg-mask', String(Number($('#bg-mask').value) / 100));
+    });
+  });
+  $('#bg-modal')?.addEventListener('click', (e) => {
+    if (e.target === $('#bg-modal')) closeBgModal();
+  });
 
   $('#login-form').addEventListener('submit', doLogin);
   $('#logout-btn').addEventListener('click', () => { localStorage.removeItem(TOKEN_KEY); showLogin(); });
@@ -1581,6 +2075,13 @@ document.addEventListener('DOMContentLoaded', () => {
       setPlatformEnabled(input.dataset.platform, input.checked);
       const card = input.closest('.platform-card');
       if (card) card.classList.toggle('disabled', !input.checked);
+      return;
+    }
+    // 接入方式切换：顶部提示条即时跟着变（真正生效仍需点保存 + 重启）
+    const adapterSel = e.target.closest('select[data-path="adapter.mode"]');
+    if (adapterSel) {
+      const banner = $('#adapter-banner');
+      if (banner) banner.innerHTML = adapterBannerHTML(adapterSel.value);
       return;
     }
     // ---- 权限：静默与命令开关 ----
@@ -1672,6 +2173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     saveBtn.textContent = '保存中…';
     try {
       const patch = collectPatchFromContainer($('#platform-modal-body'));
+      validateQQOfficialPatch(patch);
       if (Object.keys(patch).length) {
         await apiJSON('/api/v1/config', { method: 'POST', body: JSON.stringify({ config: patch }) });
         toast('平台配置已保存');
@@ -1696,8 +2198,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // 扫码登录：平台卡片上的按钮 + 弹层里的操作，统一委托到 document
   document.addEventListener('click', (e) => {
     const startBtn = e.target.closest('[data-login-platform]');
-    if (startBtn) { startPlatformLogin(startBtn.dataset.loginPlatform); return; }
-    if (e.target.closest('#login-refresh')) { startPlatformLogin(loginSite); return; }
+    if (startBtn) { startPlatformLogin(startBtn.dataset.loginPlatform, { setup: startBtn.dataset.loginSetup === '1' }); return; }
+    if (e.target.closest('#login-refresh')) { startPlatformLogin(loginSite, { setup: loginSetupMode }); return; }
     if (e.target.closest('#login-modal-close') || e.target.closest('#login-cancel') || e.target === $('#login-modal')) {
       closeLoginModal();
     }
@@ -1740,6 +2242,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key !== 'Escape') return;
     if (!$('#platform-modal').classList.contains('hidden')) closePlatformModal();
     else if (!$('#login-modal').classList.contains('hidden')) closeLoginModal();
+    else if ($('#bg-modal') && !$('#bg-modal').classList.contains('hidden')) closeBgModal();
   });
 
   $('#log-search').addEventListener('input', rerenderLogs);
@@ -1766,7 +2269,14 @@ async function checkSetupThenStart() {
   try {
     const r = await fetch('/api/v1/setup/status');
     const st = await r.json();
-    if (st && st.needed) { showSetup(); return; }
+    if (st && st.needed) {
+      // 已经扫过码 / 写过接入方式的实例：向导直接落在对应分支上，不用重新选。
+      setupAdapter = st.adapterMode === 'qqofficial' ? 'qqofficial' : 'onebot-v11';
+      setupQQ.bound = !!st.qqSecretSet;
+      setupQQ.appId = st.qqAppId || '';
+      showSetup();
+      return;
+    }
   } catch { /* 探测失败按常规流程走 */ }
   if (token) {
     hideLogin();
@@ -1779,11 +2289,14 @@ async function checkSetupThenStart() {
 /* ===== 初始化向导 ===== */
 let setupStep = 1;
 let setupMode = 'ws-server';
+let setupAdapter = 'onebot-v11'; // onebot-v11 | qqofficial
+const setupQQ = { bound: false, appId: '', appSecret: '' };
 
 function showSetup() {
   const ov = $('#setup-overlay');
   ov.classList.remove('hidden');
   document.querySelector('#app').style.visibility = 'hidden';
+  syncSetupAdapterUI();
   renderSetupSummary();
 }
 
@@ -1800,15 +2313,54 @@ function setupError(step, msg) {
   el.classList.remove('hidden');
 }
 
+// 接入方式卡片与下方表单联动：始终只展示当前方式需要的字段，
+// 避免「选了 QQ 开放平台，下面却还摆着 OneBot 地址」的错位感。
+function syncSetupAdapterUI() {
+  document.querySelectorAll('#setup-adapter .adapter-card').forEach((b) => {
+    b.classList.toggle('active', b.dataset.adapter === setupAdapter);
+  });
+  const onebot = $('#setup-onebot');
+  const qq = $('#setup-qq');
+  if (onebot) onebot.classList.toggle('hidden', setupAdapter !== 'onebot-v11');
+  if (qq) qq.classList.toggle('hidden', setupAdapter !== 'qqofficial');
+  syncQQSetupUI();
+}
+
+function syncQQSetupUI() {
+  const status = $('#setup-qq-status');
+  if (!status) return;
+  if (setupQQ.bound) {
+    status.className = 'setup-qq-status ok';
+    status.innerHTML = '已绑定 AppID <b>' + esc(setupQQ.appId || '（扫码完成）') + '</b>';
+  } else if (setupQQ.appId) {
+    status.className = 'setup-qq-status';
+    status.textContent = 'AppID：' + setupQQ.appId;
+  } else {
+    status.className = 'setup-qq-status';
+    status.textContent = '还没有绑定机器人';
+  }
+  const appIdInput = $('#setup-qq-appid');
+  if (appIdInput && !appIdInput.value && setupQQ.appId) appIdInput.value = setupQQ.appId;
+}
+
 function renderSetupSummary() {
   const pass = $('#setup-pass').value;
-  const addr = $('#setup-ob-addr').value.trim();
-  const modeName = setupMode === 'ws-server' ? '正向（Bot 监听）' : '反向（Bot 主动连）';
-  $('#setup-summary').innerHTML =
-    '<div class="ss-row"><span>管理密码</span><b>' + (pass ? '✓ 已设置' : '未设置') + '</b></div>' +
-    (addr ? '<div class="ss-row"><span>OneBot ' + modeName + '</span><b class="mono">' + esc(addr) + '</b></div>'
-          : '<div class="ss-row"><span>OneBot 连接</span><b>稍后在配置页设置</b></div>') +
-    '<p class="ss-note">OneBot 连接配置写入后需重启 Bot 生效。</p>';
+  let html = '<div class="ss-row"><span>管理密码</span><b>' + (pass ? '✓ 已设置' : '未设置') + '</b></div>';
+  if (setupAdapter === 'qqofficial') {
+    const appId = ($('#setup-qq-appid').value.trim() || setupQQ.appId);
+    html += '<div class="ss-row"><span>接入方式</span><b>QQ 开放平台</b></div>';
+    html += appId
+      ? '<div class="ss-row"><span>AppID</span><b class="mono">' + esc(appId) + '</b></div>'
+      : '<div class="ss-row"><span>AppID / AppSecret</span><b>尚未填写</b></div>';
+  } else {
+    const addr = $('#setup-ob-addr').value.trim();
+    const modeName = setupMode === 'ws-server' ? '正向（Bot 监听）' : '反向（Bot 主动连）';
+    html += '<div class="ss-row"><span>接入方式</span><b>OneBot 11</b></div>';
+    html += addr
+      ? '<div class="ss-row"><span>' + modeName + '</span><b class="mono">' + esc(addr) + '</b></div>'
+      : '<div class="ss-row"><span>OneBot 连接</span><b>使用默认配置</b></div>';
+  }
+  $('#setup-summary').innerHTML = html + '<p class="ss-note">接入配置写入后需重启 Bot 生效。</p>';
 }
 
 function gotoSetupStep(n) {
@@ -1825,19 +2377,43 @@ function gotoSetupStep(n) {
   if (n === 4) renderSetupSummary();
 }
 
+// validateSetupProtocol 在向导第 1 步做客户端预检：
+// 服务端仍会完整校验（最终以它为准），这里只是把明显填错的地方当场指出来。
+function validateSetupProtocol() {
+  if (setupAdapter === 'qqofficial') {
+    const appId = $('#setup-qq-appid').value.trim();
+    const secret = $('#setup-qq-secret').value.trim();
+    if (!appId && !setupQQ.bound) { setupError(1, '请填写 AppID，或点「扫码绑定」自动获取'); return false; }
+    if (appId && !/^\d+$/.test(appId)) { setupError(1, 'AppID 必须是纯数字，请到 QQ 开放平台核对'); return false; }
+    if (!secret && !setupQQ.bound) { setupError(1, '请填写 AppSecret，或点「扫码绑定」自动写入'); return false; }
+    if (setupQQ.bound && appId && appId !== setupQQ.appId && !secret) {
+      setupError(1, '更换 AppID 时请同时填写对应的 AppSecret，或重新扫码绑定');
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
 function bindSetupWizard() {
-  // 步骤导航（校验只在第 1 步，其余步直接放行到 data-goto 指定的下一步）
+  // 步骤导航：第 1 步协议端、第 2 步密码，其余步骤直接放行。
   document.querySelectorAll('.setup-next').forEach((b) => b.addEventListener('click', () => {
     if (setupStep === 1) {
-      const p = $('#setup-pass').value, p2 = $('#setup-pass2').value;
-      if (p.length < 6) { setupError(1, '管理密码至少 6 位'); return; }
-      if (p !== p2) { setupError(1, '两次输入的密码不一致'); return; }
+      if (!validateSetupProtocol()) return;
       setupError(1, '');
       gotoSetupStep(2);
-    } else {
-      setupError(setupStep, '');
-      gotoSetupStep(+b.dataset.goto);
+      return;
     }
+    if (setupStep === 2) {
+      const p = $('#setup-pass').value, p2 = $('#setup-pass2').value;
+      if (p.length < 3) { setupError(2, '管理密码至少 3 位（默认 520）'); return; }
+      if (p !== p2) { setupError(2, '两次输入的密码不一致'); return; }
+      setupError(2, '');
+      gotoSetupStep(3);
+      return;
+    }
+    setupError(setupStep, '');
+    gotoSetupStep(+b.dataset.goto);
   }));
   document.querySelectorAll('.setup-prev').forEach((b) => b.addEventListener('click', () => gotoSetupStep(+b.dataset.goto)));
 
@@ -1862,7 +2438,14 @@ function bindSetupWizard() {
   }));
   syncThemeBtns();
 
-  // 模式切换
+  // 接入方式切换（OneBot 11 / QQ 开放平台）
+  document.querySelectorAll('#setup-adapter .adapter-card').forEach((b) => b.addEventListener('click', () => {
+    setupAdapter = b.dataset.adapter;
+    syncSetupAdapterUI();
+    setupError(1, '');
+  }));
+
+  // OneBot 正向 / 反向
   const syncObAddrPlaceholder = () => {
     $('#setup-ob-addr').placeholder = setupMode === 'ws-server' ? '127.0.0.1:15630' : 'ws://127.0.0.1:3001';
   };
@@ -1870,24 +2453,39 @@ function bindSetupWizard() {
     setupMode = b.dataset.mode;
     document.querySelectorAll('#setup-mode .setup-mode-btn').forEach((x) => x.classList.toggle('active', x === b));
     syncObAddrPlaceholder();
-    setupError(2, '');
+    setupError(1, '');
   }));
   syncObAddrPlaceholder(); // 初始同步：index.html 的静态 placeholder 是旧值
+
+  // QQ 开放平台：在向导里直接扫码绑定（走匿名 setup 接口，完成后自动填 AppID）
+  const scanBtn = $('#setup-qq-scan');
+  if (scanBtn) scanBtn.addEventListener('click', () => startPlatformLogin('qqofficial', { setup: true }));
+
+  // 不想现在选协议端：用默认密码 520 直接进入，之后可在「配置 → 网络」里改
+  const skipBtn = $('#setup-skip');
+  if (skipBtn) skipBtn.addEventListener('click', skipSetup);
+
+  syncSetupAdapterUI();
 
   // 提交
   $('#setup-submit').addEventListener('click', async () => {
     const btn = $('#setup-submit');
     btn.disabled = true;
     btn.textContent = '初始化中…';
+    const isQQ = setupAdapter === 'qqofficial';
+    const obAddr = $('#setup-ob-addr').value.trim();
     try {
       const resp = await fetch('/api/v1/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: $('#setup-pass').value,
-          obMode: $('#setup-ob-addr').value.trim() ? setupMode : '',
-          obAddr: $('#setup-ob-addr').value.trim(),
-          obToken: $('#setup-ob-token').value,
+          adapterMode: setupAdapter,
+          obMode: !isQQ && obAddr ? setupMode : '',
+          obAddr: isQQ ? '' : obAddr,
+          obToken: isQQ ? '' : $('#setup-ob-token').value,
+          qqAppId: isQQ ? ($('#setup-qq-appid').value.trim() || setupQQ.appId) : '',
+          qqAppSecret: isQQ ? $('#setup-qq-secret').value : '',
         }),
       });
       if (!resp.ok) {
@@ -1911,10 +2509,57 @@ function bindSetupWizard() {
       };
       $('#setup-enter').addEventListener('click', enter);
     } catch (e) {
-      setupError(4, e.message); // 提交按钮在第 4 步，错误必须显示在该步
+      // 协议端/凭据错误回第 1 步，密码错误回第 2 步，别让用户在第 4 步发懵
+      if (/AppID|AppSecret|接入方式|连接模式|Access Token/.test(e.message)) {
+        gotoSetupStep(1);
+        setupError(1, e.message);
+      } else if (/管理密码/.test(e.message)) {
+        gotoSetupStep(2);
+        setupError(2, e.message);
+      } else {
+        setupError(4, e.message);
+      }
     } finally {
       btn.disabled = false;
       btn.textContent = '完成初始化';
     }
   });
+}
+
+// skipSetup 用默认密码 520 完成初始化：只写 admin.token，不改接入方式。
+// 这样用户第一次进来可以先看面板，协议端稍后在「配置 → 网络」里选。
+async function skipSetup() {
+  const btn = $('#setup-skip');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/api/v1/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: DEFAULT_ADMIN_TOKEN,
+        adapterMode: '',
+        obMode: '',
+        obAddr: '',
+        obToken: '',
+        qqAppId: '',
+        qqAppSecret: '',
+      }),
+    });
+    if (!resp.ok) {
+      let msg = '进入失败（' + resp.status + '）';
+      try { const e = await resp.json(); if (e.error) msg = e.error; } catch {}
+      throw new Error(msg);
+    }
+    token = DEFAULT_ADMIN_TOKEN;
+    localStorage.setItem(TOKEN_KEY, token);
+    hideSetup();
+    hideLogin();
+    boot();
+    toast('已使用默认密码 520 进入，可在「配置 → 网络」里选择协议端');
+  } catch (e) {
+    toast('跳过引导失败：' + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
 }

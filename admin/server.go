@@ -110,6 +110,9 @@ type Server struct {
 	// token 支持运行期热更新（初始化向导设置密码后无需重启即可登录），读写加锁
 	tokenMu sync.RWMutex
 	token   string
+	// tokenDefault 表示当前 token 是「admin.token 未配置」时的默认密码 520。
+	// 首次使用时初始化向导保持可用；向导写完 admin.token 后置 false。
+	tokenDefault bool
 
 	startedAt time.Time
 	online    *atomic.Bool
@@ -131,6 +134,30 @@ func (s *Server) setToken(t string) {
 	s.tokenMu.Unlock()
 }
 
+func (s *Server) isTokenDefault() bool {
+	s.tokenMu.RLock()
+	defer s.tokenMu.RUnlock()
+	return s.tokenDefault
+}
+
+func (s *Server) setTokenDefault(v bool) {
+	s.tokenMu.Lock()
+	s.tokenDefault = v
+	s.tokenMu.Unlock()
+}
+
+// setupNeeded 判断是否仍处于「首次使用」窗口。
+//
+// 配置里没写 admin.token 时，进程会使用默认密码 520（tokenDefault=true），
+// 此时向导保持可用，让用户先选协议端、扫码/填凭据、再设密码；
+// 向导完成后 tokenDefault 置 false，匿名 setup 接口立即 404。
+func (s *Server) setupNeeded() bool {
+	if s.isTokenDefault() {
+		return true
+	}
+	return s.getToken() == ""
+}
+
 type SubSummary struct {
 	Total  int            `json:"total"`
 	BySite map[string]int `json:"bySite"`
@@ -150,6 +177,9 @@ type Health struct {
 const (
 	// defaultAdminAddr 与示例配置保持一致：默认只监听本机，不把面板暴露到局域网。
 	defaultAdminAddr = "127.0.0.1:15631"
+	// defaultAdminToken 是 admin.token 未配置时的默认登录密码。
+	// 用户明确要求默认 520；首次打开会进入初始化向导，可在这里改成更长的密码。
+	defaultAdminToken = "520"
 	// docsWebUI 面板说明文档。面板默认关闭，未启用时若不给出入口，用户升级后
 	// 完全无从发现这个功能（老 application.yaml 里通常没有 admin 段）。
 	docsWebUI = "https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/"
@@ -169,8 +199,10 @@ func panelURL(addr string) string {
 }
 
 // adminTokenHint 说明本次启动的鉴权状态，免得用户打开面板后对着 401 发懵。
-func adminTokenHint(addr, token string) string {
+func adminTokenHint(addr, token string, tokenDefault bool) string {
 	switch {
+	case tokenDefault:
+		return "admin.token 未配置，默认登录密码为 520；本机首次打开会进入初始化向导"
 	case token != "":
 		return "登录密码为配置里的 admin.token"
 	case !isLoopbackAddr(addr):
@@ -192,12 +224,18 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	if addr == "" {
 		addr = defaultAdminAddr
 	}
-	token := config.GlobalConfig.GetString("admin.token")
+	configuredToken := config.GlobalConfig.GetString("admin.token")
+	token := configuredToken
+	tokenDefault := false
 	if token == "" {
-		logrus.Warn("admin.token 未配置：为防止未授权访问，管理 API 将拒绝所有请求（仅 /api/v1/health 可用性另议）。请配置 admin.token 后重启")
+		// 用户要求默认密码 520。默认密码只用于本机首次进入；面板默认只监听回环地址，
+		// 首次打开会进入初始化向导，写入新的 admin.token 后即失效。
+		token = defaultAdminToken
+		tokenDefault = true
+		logrus.Warn("admin.token 未配置，Web 管理面板使用默认密码 520；首次打开会进入初始化向导，建议设置新的管理密码")
 	}
 
-	s := &Server{addr: addr, token: token, startedAt: time.Now(), online: online}
+	s := &Server{addr: addr, token: token, tokenDefault: tokenDefault, startedAt: time.Now(), online: online}
 
 	// 推送记录收集器（eventbus → 内存环形缓冲，供 REST/SSE 读取）
 	installPushCollector()
@@ -207,6 +245,11 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 	// guardSetup 把可达来源限制为本机回环 + 同源，堵住跨站页面/局域网主机在首次部署窗口夺权（见审查报告 H2）。
 	mux.HandleFunc("/api/v1/setup", s.guardSetup(s.handleSetup))
 	mux.HandleFunc("/api/v1/setup/status", s.handleSetupStatus)
+	// 初始化向导里的「QQ 开放平台扫码绑定」：与 /api/v1/setup 同一套本机同源限制，
+	// 且 admin.token 一旦设置就 404。首次部署还没 token 时也能走扫码这条主路径。
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode", s.guardSetup(s.handleSetupQQOfficialQRCode))
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode/status", s.guardSetup(s.handleSetupQQOfficialQRCodeStatus))
+	mux.HandleFunc("/api/v1/setup/qqofficial/qrcode/cancel", s.guardSetup(s.handleSetupQQOfficialQRCodeCancel))
 	// 基础 API
 	mux.HandleFunc("/api/v1/health", s.withAuth(s.handleHealth))
 	mux.HandleFunc("/api/v1/onebot/status", s.withAuth(s.handleOneBotStatus))
@@ -220,6 +263,12 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 
 	// 配置管理 API
 	mux.HandleFunc("/api/v1/config", s.withAuth(s.handleConfig))
+	mux.HandleFunc("/api/v1/config/reload", s.withAuth(s.handleConfigReload))
+
+	// WebUI 外观（背景图 / 字体颜色）：登录页也要显示背景，GET 允许匿名；
+	// 保存接口本机匿名可用（首次登录前也能改），远端必须带 admin.token。
+	mux.HandleFunc("/api/v1/ui", s.handleUIGet)
+	mux.HandleFunc("/api/v1/ui/save", s.guardLocalOrAuth(s.handleUISave))
 
 	// 平台登录态（扫码登录开着时替换掉凭据输入框）
 	mux.HandleFunc("/api/v1/platform/account", s.withAuth(s.handlePlatformAccount))
@@ -279,7 +328,7 @@ func Start(online *atomic.Bool, alive *atomic.Bool) (*Server, error) {
 			logrus.Errorf("admin server 异常退出(addr=%s): %v", addr, err)
 		}
 	}()
-	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, token))
+	logrus.Infof("Web 管理面板已启动：%s（%s）", panelURL(addr), adminTokenHint(addr, token, tokenDefault))
 	return s, nil
 }
 
@@ -364,6 +413,33 @@ func isLoopbackAddr(remoteAddr string) bool {
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	return ip != nil && ip.IsLoopback()
+}
+
+// guardLocalOrAuth 允许「本机匿名」或「远端带 admin.token」两种访问。
+// 用于登录页也要能修改的 WebUI 外观设置：本机走 guardSetup 的同源/回环校验，
+// 远端走标准 Bearer 鉴权，避免把匿名写接口暴露到局域网。
+func (s *Server) guardLocalOrAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 本机 + 回环 Host + 同源：允许匿名（登录页也能改外观）。
+		// 其余一律走 Bearer 鉴权，避免把匿名写接口暴露到局域网/跨站页面。
+		if isLoopbackAddr(r.RemoteAddr) && isLoopbackHost(r.Host) && sameOriginRequest(r) {
+			next(w, r)
+			return
+		}
+		s.withAuth(next)(w, r)
+	}
+}
+
+// sameOriginRequest 判断带 Origin / Referer 的请求是否与当前 Host 同源。
+// 两者都缺失（本机 curl）时返回 true，由调用方的回环校验兜底。
+func sameOriginRequest(r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return sameOriginHost(origin, r.Host)
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		return sameOriginHost(referer, r.Host)
+	}
+	return true
 }
 
 // isLoopbackHost 判断请求 Host 头是否指向本机（回环 IP 或 localhost）。
@@ -806,22 +882,6 @@ func maskedConfigValue(v interface{}) interface{} {
 	return redactedPlaceholder
 }
 
-// mergeConfig 将 newCfg 合并到 baseCfg（new 优先）；值为脱敏占位符的键跳过，保留 base 原值
-func mergeConfig(baseCfg, newCfg map[string]interface{}) {
-	for k, v := range newCfg {
-		if s, ok := v.(string); ok && s == redactedPlaceholder {
-			continue
-		}
-		if nm, ok := v.(map[string]interface{}); ok {
-			if bm, ok2 := baseCfg[k].(map[string]interface{}); ok2 {
-				mergeConfig(bm, nm)
-				continue
-			}
-		}
-		baseCfg[k] = v
-	}
-}
-
 // writeFileAtomic 以「临时文件 + rename」方式写入配置文件。
 // 配置热重载由 fsnotify 监听，直接 os.WriteFile 会被读到只写了一半的内容；
 // 原子替换同时也保证写入失败时磁盘上仍是完整的旧配置。
@@ -985,6 +1045,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
 			return
 		}
+		// 接入方式是「跑错通道可能收发不到消息」的配置：面板写入时先校验，
+		// 别让一个笔误只能靠重启后的 Warn 发现（adapter 侧仍保留回落兜底）。
+		if err := validateAdapterModePatch(req.Config); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 
 		// 与其他写配置的地方（初始化向导 / 微博 cookie 回写）共用同一把写锁：
 		// 这里是「读整份 -> 改 -> 写整份」，不持锁与后台回写并发时会互相覆盖。
@@ -1015,7 +1082,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if existing == nil {
 			// ghodss/yaml 对空内容 / 纯注释 / 字面 null 不报错，却会把目标 map 置成 nil，
-			// 后面 mergeConfig 往 nil map 写会 panic（handler 里就是连接被直接掐断）。
+			// 后面展开补丁往 nil map 写会 panic（handler 里就是连接被直接掐断）。
 			existing = make(map[string]interface{})
 		}
 
@@ -1030,19 +1097,36 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
-		// mergeConfig 是递归合并，用户删掉的命令会继续留在配置里，改不动。
-		if v, ok := req.Config["customCommandPrefix"]; ok {
-			existing["customCommandPrefix"] = v
-			delete(req.Config, "customCommandPrefix")
+		// 接入方式为 QQ 开放平台时，AppID / AppSecret 必须齐全；否则重启后
+		// qqofficial adapter 会直接 Fatal（「缺少 qqofficial.app-id」）。
+		// 允许在同一次保存里同时填凭据（配置页常见操作）。
+		if err := validateQQOfficialCredentialsPatch(existing, req.Config); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
 		}
 
-		mergeConfig(existing, req.Config)
+		// customCommandPrefix 是「命令 -> 前缀」的整表，语义是整体替换：
+		// 递归展开成叶子路径会把用户删掉的命令继续留在配置里，改不动。
+		var patches []cfg.ConfigPatch
+		if v, ok := req.Config["customCommandPrefix"]; ok {
+			patches = append(patches, cfg.ConfigPatch{Path: []string{"customCommandPrefix"}, Value: v})
+			delete(req.Config, "customCommandPrefix")
+		}
+		patches = append(patches, cfg.FlattenConfigPatch(req.Config)...)
 
-		data, err := yaml.Marshal(existing)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to marshal config"})
+		// 脱敏占位符代表「未修改」：高级页整份 JSON 回传时不能把占位符写进配置。
+		filtered := patches[:0]
+		for _, patch := range patches {
+			if s, ok := patch.Value.(string); ok && s == redactedPlaceholder {
+				continue
+			}
+			filtered = append(filtered, patch)
+		}
+		patches = filtered
+
+		if len(patches) == 0 {
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 			return
 		}
 
@@ -1053,10 +1137,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := writeFileAtomic(cfgPath, data, 0600); err != nil {
+		// 只改补丁里的值行：默认生成的 application.yaml 的注释、空行、缩进、
+		// 行内注释都原样保留（整份 yaml.Marshal 会把它们全部吃掉）。
+		if err := cfg.WriteConfigPatchesToPath(patches, cfgPath); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to write config file"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "写入配置失败: " + err.Error()})
 			return
+		}
+		// 写入后主动热重载：viper 的 WatchConfig 事件会被写配置窗口忽略，
+		// 不主动读一次的话，日志等级 / 定时任务等要等到下次文件变动才生效。
+		if err := cfg.ReloadConfigFile(); err != nil {
+			logrus.Warnf("配置已写入，但热重载失败（重启后生效）: %v", err)
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -1067,10 +1158,116 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleConfigReload POST /api/v1/config/reload —— 手动热重载配置文件。
+// 用于用户直接编辑 application.yaml 后，不想重启 Bot 的场景。
+func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+	// 与写配置共用同一把锁，避免读到写了一半的文件
+	cfgMu := cfg.GetConfigWriteMutex()
+	cfgMu.Lock()
+	defer cfgMu.Unlock()
+	if err := cfg.ReloadConfigFile(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "热重载失败: " + err.Error()})
+		return
+	}
+	// admin.token 也是配置的一部分：外部改了之后热重载应立刻生效。
+	// 空值保持当前 token，避免把面板弄成「无密码」。
+	if newToken := strings.TrimSpace(config.GlobalConfig.GetString("admin.token")); newToken != "" {
+		s.setToken(newToken)
+		s.setTokenDefault(false)
+	}
+	logrus.Info("配置已热重载（接入方式/连接类修改仍需重启 Bot）")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
 // protectedConfigKeys 禁止通过 API 修改的配置键（防止改 token 提权或持久化后门）
 var protectedConfigKeys = map[string]bool{
 	"admin.token":     true,
 	"websocket.token": true,
+}
+
+// validateAdapterModePatch 校验配置补丁里的 adapter.mode。
+// 只拦「显式写了不认识的取值」；没带 adapter 段 / 没带 mode 时原样放行。
+// 支持列表与 adapter.resolveAdapterType 保持一致。
+func validateAdapterModePatch(patch map[string]interface{}) error {
+	raw, exists := patch["adapter"]
+	if !exists {
+		return nil
+	}
+	adapterCfg, ok := raw.(map[string]interface{})
+	if !ok {
+		// {"adapter": null} 这类整体替换不是受保护键，交给 mergeConfig 处理
+		return nil
+	}
+	modeRaw, exists := adapterCfg["mode"]
+	if !exists {
+		return nil
+	}
+	mode := strings.TrimSpace(configValueString(modeRaw))
+	switch mode {
+	case "", "onebot-v11", "satori", "qqofficial":
+		return nil
+	default:
+		return fmt.Errorf("adapter.mode 只支持 onebot-v11 / satori / qqofficial，收到 %q", mode)
+	}
+}
+
+// configPatchString 取补丁里的值；补丁没带这个键时回退到现有配置。
+// 第二个返回值表示补丁里是否显式出现了该键（显式清空时不能回退）。
+func configPatchString(existing, patch map[string]interface{}, top string, keys ...string) (string, bool) {
+	if sub, ok := patch[top].(map[string]interface{}); ok {
+		for _, key := range keys {
+			if v, exists := sub[key]; exists {
+				return configValueString(v), true
+			}
+		}
+	}
+	return nestedConfigString(existing, top, keys...), false
+}
+
+// validateQQOfficialCredentialsPatch 阻止「接入方式切到 QQ 开放平台，但凭据是空的」
+// 这种重启必挂的配置落盘。
+//
+// 判定基于「补丁合入后的有效值」：补丁里带 qqofficial.app-id/app-secret 就用补丁的，
+// 否则用现有配置。这样「先在配置页填凭据，再切接入方式」和「同一次保存里一起填」
+// 都能通过；只有确实缺凭据时才拒绝。
+func validateQQOfficialCredentialsPatch(existing, patch map[string]interface{}) error {
+	mode := ""
+	if sub, ok := patch["adapter"].(map[string]interface{}); ok {
+		if v, exists := sub["mode"]; exists {
+			mode = strings.TrimSpace(configValueString(v))
+		}
+	}
+	if mode == "" {
+		if sub, ok := existing["adapter"].(map[string]interface{}); ok {
+			mode = strings.TrimSpace(configValueString(sub["mode"]))
+		}
+	}
+	if mode == "" {
+		mode = "onebot-v11"
+	}
+	if mode != "qqofficial" {
+		return nil
+	}
+
+	appID, _ := configPatchString(existing, patch, "qqofficial", "app-id", "appId")
+	appSecret, _ := configPatchString(existing, patch, "qqofficial", "app-secret", "appSecret", "secret")
+	if appID == "" {
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-id（AppID），或改回 OneBot 11")
+	}
+	if appSecret == "" {
+		return fmt.Errorf("接入方式为 QQ 开放平台时必须填写 qqofficial.app-secret（AppSecret），或改回 OneBot 11")
+	}
+	if !isNumericAppID(appID) {
+		return fmt.Errorf("AppID 必须是纯数字，请到 QQ 开放平台机器人管理端核对")
+	}
+	return nil
 }
 
 // isProtectedConfigKeyPath 判断完整键路径是否命中受保护键：
@@ -1096,6 +1293,7 @@ type DetailedStatus struct {
 	Online              bool            `json:"online"`
 	Uptime              time.Duration   `json:"uptime"`
 	Version             string          `json:"version"`
+	AdapterMode         string          `json:"adapterMode"`
 	Subscriptions       int             `json:"subscriptions"`
 	SubscriptionsBySite map[string]int  `json:"subscriptionsBySite"`
 	ConcernsStatus      map[string]bool `json:"concernsStatus"`
@@ -1135,6 +1333,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Online:              online,
 		Uptime:              uptime,
 		Version:             "", // 版本信息需要从其他地方获取
+		AdapterMode:         string(adapter.GetAdapterType()),
 		Subscriptions:       subscriptions,
 		SubscriptionsBySite: subscriptionsBySite,
 		ConcernsStatus:      concernsStatus,

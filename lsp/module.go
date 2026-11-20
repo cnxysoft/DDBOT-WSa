@@ -42,6 +42,9 @@ import (
 
 const ModuleName = "me.sora233.Lsp"
 
+// configReloadHookOnce 防止 Init 被多次调用时重复注册热重载钩子。
+var configReloadHookOnce sync.Once
+
 const (
 	TargetTypeGroup = iota
 	TargetTypeFriend
@@ -457,6 +460,14 @@ func (l *Lsp) Init() {
 		go cfg.ReloadCustomCommandPrefix()
 		configureLogLevels()
 		l.CronjobReload()
+	})
+	// Web 面板保存后由 admin 主动调用 cfg.ReloadConfigFile()：它已经重新 ReadInConfig，
+	// 这里把日志等级与定时任务这两个「不在 viper 读取时自动生效」的模块接上。
+	configReloadHookOnce.Do(func() {
+		cfg.RegisterConfigReloadHook(func() {
+			configureLogLevels()
+			l.CronjobReload()
+		})
 	})
 }
 
