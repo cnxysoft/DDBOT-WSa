@@ -113,7 +113,11 @@ type WSClient struct {
 	reconnectCnt      int
 	maxReconnect      int
 	httpServer        *http.Server
+	listener          net.Listener
 	messageHandler    func([]byte)
+	connectionHandler func(uint64)
+	generationHandler func([]byte, uint64)
+	generation        uint64
 	heartbeatInterval time.Duration
 	connectTimeout    time.Duration
 
@@ -145,6 +149,16 @@ func WithWSMessageHandler(handler func([]byte)) WSClientOption {
 	return func(c *WSClient) { c.messageHandler = handler }
 }
 
+// WithWSConnectionHandler is called before a new socket becomes available.
+// The callback must only reset local state and must not call WSClient methods.
+func WithWSConnectionHandler(handler func(uint64)) WSClientOption {
+	return func(c *WSClient) { c.connectionHandler = handler }
+}
+
+func WithWSGenerationMessageHandler(handler func([]byte, uint64)) WSClientOption {
+	return func(c *WSClient) { c.generationHandler = handler }
+}
+
 func NewWSClient(mode, wsMode, url string, opts ...WSClientOption) *WSClient {
 	c := &WSClient{
 		mode:              mode,
@@ -168,6 +182,9 @@ func (c *WSClient) Start() error {
 	case WSModeServer:
 		return c.startServer()
 	case WSModeReverse:
+		if parsed, err := url.Parse(c.url); err != nil || parsed.Host == "" || (parsed.Scheme != "ws" && parsed.Scheme != "wss") {
+			return fmt.Errorf("invalid websocket reverse address")
+		}
 		go c.connectLoop()
 		return nil
 	default:
@@ -190,16 +207,28 @@ func (c *WSClient) Stop() error {
 		delete(c.responseCh, echo)
 	}
 	if c.conn != nil {
-		// 设置短 deadline 唤醒阻塞的 HTTP/2 读循环，防止 goroutine 泄漏
-		c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		// Close wakes the read loop without concurrently mutating its read deadline.
 		c.conn.Close()
 		c.conn = nil
 	}
-	if c.httpServer != nil {
-		c.httpServer.Shutdown(context.Background())
-		c.httpServer = nil
-	}
+	server := c.httpServer
+	c.httpServer = nil
+	listener := c.listener
+	c.listener = nil
 	c.mu.Unlock()
+	// Stop may race the Serve goroutine before net/http registers its listener.
+	// Always close our own listening socket, including that pre-Serve window.
+	if listener != nil {
+		_ = listener.Close()
+	}
+	if server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+			_ = server.Close()
+			return err
+		}
+	}
 	if isDebugLoggingEnabled() {
 		wsLogger.Debugf("<<< mu.Unlock() #%d  caller=%s  [Stop]", nextLockSeq(), getCallerFuncName(2))
 	}
@@ -269,10 +298,21 @@ func (c *WSClient) startServer() error {
 			return
 		}
 		c.mu.Lock()
+		select {
+		case <-c.stopChan:
+			c.mu.Unlock()
+			_ = conn.Close()
+			return
+		default:
+		}
 		if c.conn != nil {
 			c.conn.Close()
 		}
 		c.conn = conn
+		c.generation++
+		if c.connectionHandler != nil {
+			c.connectionHandler(c.generation)
+		}
 		c.isConnected = true
 		c.reconnectCnt = 0
 		c.mu.Unlock()
@@ -282,12 +322,17 @@ func (c *WSClient) startServer() error {
 	// 先发布 server 引用再启动监听 goroutine：goroutine 内使用局部变量 srv，
 	// 避免 Stop() 把 c.httpServer 置空后与 ListenAndServe 竞争导致空指针
 	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(handler)}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen websocket server: %w", err)
+	}
 	c.mu.Lock()
 	c.httpServer = srv
+	c.listener = listener
 	c.mu.Unlock()
 	go func() {
 		wsLogger.Infof("WebSocket server starting on ws://%s/", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
 			wsLogger.Errorf("WebSocket server error: %v", err)
 		}
 	}()
@@ -335,10 +380,13 @@ func (c *WSClient) connect() error {
 	// 先关闭旧连接，唤醒其 goroutines，防止泄漏
 	if oldConn != nil {
 		wsLogger.Debugf("connect: closing old conn=%p before replacing", oldConn)
-		oldConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		oldConn.Close()
 	}
 	c.conn = conn
+	c.generation++
+	if c.connectionHandler != nil {
+		c.connectionHandler(c.generation)
+	}
 	c.isConnected = true
 	c.reconnectCnt = 0
 	c.mu.Unlock()
@@ -354,8 +402,7 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 		if r := recover(); r != nil {
 			wsLogger.Errorf("handleConnection panic: %v", r)
 		}
-		// 设置短 deadline 唤醒阻塞的 HTTP/2 读循环，防止 goroutine 泄漏
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		// Close is safe concurrently with the reader; SetReadDeadline is not.
 		conn.Close()
 		c.mu.Lock()
 		if isDebugLoggingEnabled() {
@@ -406,7 +453,7 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 			} else {
 				wsLogger.Warnf("Read error: got nil from readErrChan (channel may be closed)")
 			}
-			wsLogger.Debugf("handleConnection: readErrChan case, returning (isConnected=%v)", c.isConnected)
+			wsLogger.Debugf("handleConnection: readErrChan case, returning (isConnected=%v)", c.IsConnected())
 			return
 		case <-checkTimer.C:
 			// 定期检查连接是否已被新的连接替换，防止死锁
@@ -422,6 +469,13 @@ func (c *WSClient) handleConnection(conn *websocket.Conn) {
 }
 
 func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
+	c.mu.RLock()
+	generation := c.generation
+	isCurrent := c.conn == conn
+	c.mu.RUnlock()
+	if !isCurrent {
+		return
+	}
 	c.activeReadLoops.Add(1)
 	wsLogger.Debugf("readLoop started: conn=%p, errChan=%p, activeReadLoops=%d", conn, errChan, c.activeReadLoops.Load())
 	defer func() {
@@ -474,6 +528,7 @@ func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 				wsLogger.Debugf("readLoop: errChan full, dropped stale error, returning")
 				return
 			}
+			return
 		}
 		// 安全修复：handler 调用链中任何 panic 不再击穿整个进程
 		go func() {
@@ -482,12 +537,18 @@ func (c *WSClient) readLoop(conn *websocket.Conn, errChan chan error) {
 					wsLogger.Errorf("handleMessage panic (recovered): %v\n%s", r, debug.Stack())
 				}
 			}()
-			c.handleMessage(message)
+			c.handleMessage(message, generation)
 		}()
 	}
 }
 
-func (c *WSClient) handleMessage(message []byte) {
+func (c *WSClient) handleMessage(message []byte, generations ...uint64) {
+	c.mu.RLock()
+	generation := c.generation
+	c.mu.RUnlock()
+	if len(generations) > 0 && generations[0] != generation {
+		return
+	}
 	// 处理 echo 响应
 	var resp WSResponse
 	if err := json.Unmarshal(message, &resp); err == nil && resp.Echo != "" {
@@ -519,6 +580,7 @@ func (c *WSClient) handleMessage(message []byte) {
 		wsLogger.Debugf(">>> mu.RLock() #%d  caller=%s  [handleMessage handler]", nextLockSeq(), getCallerFuncName(2))
 	}
 	handler := c.messageHandler
+	generationHandler := c.generationHandler
 	responseChLen := len(c.responseCh)
 	c.mu.RUnlock()
 	if isDebugLoggingEnabled() {
@@ -533,6 +595,9 @@ func (c *WSClient) handleMessage(message []byte) {
 
 	if handler != nil {
 		handler(message)
+	}
+	if generationHandler != nil {
+		generationHandler(message, generation)
 	}
 }
 

@@ -229,7 +229,7 @@ func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
 	log.Infof("run %v command", lgc.CommandName())
 	defer func() { log.Infof("%v command end", lgc.CommandName()) }()
 
-	if !lgc.l.status.ImagePoolEnable {
+	if lgc.l.pool == nil || !lgc.l.pool.Enabled() {
 		log.Debug("image pool not setup")
 		return
 	}

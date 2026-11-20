@@ -16,6 +16,11 @@ var logger = utils.GetModuleLogger("local_pool")
 
 type LocalPool struct {
 	freshMutex *sync.Mutex
+	lifeMu     sync.Mutex
+	stop       chan struct{}
+	done       chan struct{}
+	started    bool
+	closed     bool
 
 	imageDir  string
 	imageList []string
@@ -82,22 +87,47 @@ func (pool *LocalPool) RefreshImage() error {
 }
 
 func NewLocalPool(path string) (*LocalPool, error) {
-	if i, err := os.Stat(path); err != nil || i == nil {
+	pool, err := PrepareLocalPool(path)
+	if err == nil {
+		pool.Start()
+	}
+	return pool, err
+}
+
+// PrepareLocalPool validates and loads the directory without starting workers.
+func PrepareLocalPool(path string) (*LocalPool, error) {
+	if i, err := os.Stat(path); err != nil || i == nil || !i.IsDir() {
 		return nil, errors.New("invalid path")
 	}
 	pool := &LocalPool{
 		imageDir:   path,
 		freshMutex: new(sync.Mutex),
 		imageList:  make([]string, 0),
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	err := pool.RefreshImage()
 	if err != nil {
 		return nil, err
 	}
+	return pool, nil
+}
+
+func (pool *LocalPool) Start() {
+	pool.lifeMu.Lock()
+	defer pool.lifeMu.Unlock()
+	if pool.started || pool.closed {
+		return
+	}
+	pool.started = true
 	go func() {
+		defer close(pool.done)
 		timer := time.NewTimer(time.Minute)
+		defer timer.Stop()
 		for {
 			select {
+			case <-pool.stop:
+				return
 			case <-timer.C:
 				err := pool.RefreshImage()
 				if err != nil {
@@ -107,5 +137,18 @@ func NewLocalPool(path string) (*LocalPool, error) {
 			}
 		}
 	}()
-	return pool, nil
+}
+
+func (pool *LocalPool) Close() error {
+	pool.lifeMu.Lock()
+	if !pool.closed {
+		close(pool.stop)
+		pool.closed = true
+	}
+	started := pool.started
+	pool.lifeMu.Unlock()
+	if started {
+		<-pool.done
+	}
+	return nil
 }

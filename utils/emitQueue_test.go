@@ -1,24 +1,25 @@
 package utils
 
 import (
-	"github.com/cnxysoft/DDBOT-WSa/internal/test"
-	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/internal/test"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestEmitQueue(t *testing.T) {
 	c := make(chan *EmitE, 1)
 	eq := NewEmitQueue(c, time.Millisecond*100)
 
-	eq.Start()
-	defer eq.Stop()
-	time.Sleep(time.Millisecond * 500)
-
 	eq.Add(nil)
 	eq.Add(NewEmitE(1, test.DouyuLive))
 	eq.Add(NewEmitE(2, test.DouyuLive))
 	eq.Add(NewEmitE(3, test.DouyuLive))
+	// Install the initial list before the worker can wrap its cursor. Separate
+	// Add calls do not form an atomic batch while the queue is already running.
+	eq.Start()
+	defer eq.Stop()
 	for count := 0; count < 3; count++ {
 		select {
 		case item := <-c:

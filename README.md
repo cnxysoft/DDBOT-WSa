@@ -62,7 +62,7 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 
 ## Web 管理面板
 
-next-dev 内置一个网页管理面板，不用登录 QQ 就能在浏览器里管理 DDBOT。**默认关闭**，在 `application.yaml` 里打开后重启：
+next-dev 内置一个网页管理面板，不用登录 QQ 就能在浏览器里管理 DDBOT。**默认关闭**，在 `application.yaml` 里打开并保存后在线启用：
 
 ```yaml
 admin:
@@ -71,7 +71,7 @@ admin:
   token: ""                 # 访问密码；留空时第一次打开面板会进入初始化向导
 ```
 
-重启后启动日志里会出现一行 `Web 管理面板已启动：http://127.0.0.1:15631/`，照着打开就行；面板没启用时，启动日志里也会有一行提示告诉你怎么开。
+打开配置的监听地址（默认 `http://127.0.0.1:15631/`）即可；启动时面板没启用，日志里也会提示如何开启。地址、密码与支持的登录凭据可在线更新，具体范围和失败处理见 [配置热更新](docs/config-hot-reload.md)。
 
 > 只在 next-dev 可用，master / next 不含此功能。想从其它机器或手机访问，把 `addr` 改成 `0.0.0.0:15631` 并**务必设置 token**。完整说明见 [Web 管理面板](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/)。
 

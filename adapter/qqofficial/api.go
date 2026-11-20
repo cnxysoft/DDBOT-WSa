@@ -54,7 +54,10 @@ type Client struct {
 //
 // base URL 与超时取 qqofficial.* 配置（见 config.go），缺省是 https://api.bot.qq.com。
 func NewClient(tm *TokenManager) *Client {
-	cfg := GetConfig()
+	return newClientFromConfig(tm, GetConfig())
+}
+
+func newClientFromConfig(tm *TokenManager, cfg *Config) *Client {
 	c := &Client{tm: tm}
 	if tm != nil {
 		c.baseURL = tm.baseURL

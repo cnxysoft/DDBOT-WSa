@@ -19,8 +19,8 @@ var (
 	ErrVerifyRequired = errors.New("账号信息缺失")
 	json              = jsoniter.ConfigCompatibleWithStandardLibrary
 	mux               = new(sync.Mutex)
-	username          string
-	password          string
+	atomicAccount     atomic.Pointer[accountCredentials]
+	publishMu         sync.Mutex
 	accountUid        atomic.Int64
 	atomicVerifyInfo  atomic.Pointer[VerifyInfo]
 )
@@ -99,6 +99,8 @@ func IsCookieGiven() bool {
 }
 
 func SetVerify(_AuthKey int64, _AcPassToken string) {
+	publishMu.Lock()
+	defer publishMu.Unlock()
 	atomicVerifyInfo.Store(&VerifyInfo{
 		AuthKey:     _AuthKey,
 		AcPassToken: _AcPassToken,
@@ -110,9 +112,17 @@ func getVerify() *VerifyInfo {
 	return atomicVerifyInfo.Load()
 }
 
-func SetAccount(_username string, _password string) {
-	username = _username
-	password = _password
+type accountCredentials struct{ username, password string }
+
+func getAccount() *accountCredentials {
+	if state := atomicAccount.Load(); state != nil {
+		return state
+	}
+	return new(accountCredentials)
+}
+
+func SetAccount(username string, password string) {
+	atomicAccount.Store(&accountCredentials{username: username, password: password})
 }
 
 func GetVerifyOption() []requests.Option {
@@ -124,7 +134,7 @@ func GetVerifyOption() []requests.Option {
 }
 
 func IsAccountGiven() bool {
-	if username == "" {
+	if getAccount().username == "" {
 		return false
 	}
 	return true
@@ -178,7 +188,13 @@ func GetVerifyInfo() *VerifyInfo {
 }
 
 func FreshSelfInfo() {
+	generation := getVerify()
 	Resp, err := GetUserPersonalInfo()
+	publishMu.Lock()
+	defer publishMu.Unlock()
+	if getVerify() != generation {
+		return
+	}
 	if err != nil {
 		logger.Errorf("获取个人信息失败 - %v，A站功能可能无法使用", err)
 	} else {
@@ -206,16 +222,17 @@ func FreshSelfInfo() {
 }
 
 func freshAccountCookieInfo() (*LoginResponse, error) {
+	account := getAccount()
 	logger.Debug("freshAccountCookieInfo")
 	if !IsAccountGiven() {
 		return nil, errors.New("未设置帐号")
 	}
-	if ci, err := GetCookieInfo(username); err == nil {
+	if ci, err := GetCookieInfo(account.username); err == nil {
 		logger.Debug("GetCookieInfo from db ok")
 		return ci, nil
 	}
 	logger.Debug("login to fresh cookie")
-	resp, err := Login(username, password)
+	resp, err := Login(account.username, account.password)
 	if err != nil {
 		logger.Errorf("Login error %v", err)
 		return nil, err
@@ -225,7 +242,7 @@ func freshAccountCookieInfo() (*LoginResponse, error) {
 		return nil, fmt.Errorf("login error %v - %v", resp.GetResult(), resp.GetErrorMsg())
 	}
 	logger.Debug("login success")
-	if err = SetCookieInfo(username, resp); err != nil {
+	if err = SetCookieInfo(account.username, resp); err != nil {
 		logger.Errorf("SetCookieInfo error %v", err)
 	} else {
 		logger.Debug("SetCookieInfo ok")

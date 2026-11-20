@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"net/http/cookiejar"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
@@ -44,7 +43,6 @@ const (
 
 var (
 	logger   = templUtils.GetModuleLogger(ConcernName)
-	Cookie   *cookiejar.Jar
 	online   bool
 	BasePath = map[string]string{
 		PathGetUserInfo:         BaseHost,
@@ -340,7 +338,6 @@ func getRefreshInterval() time.Duration {
 
 func (d *Concern) fresh() concern.FreshFunc {
 	return func(ctx context.Context, eventChan chan<- concern.Event) {
-		interval := getRefreshInterval()
 		ti := time.NewTimer(time.Second * 3)
 		defer ti.Stop() // 确保定时器资源释放
 
@@ -350,9 +347,9 @@ func (d *Concern) fresh() concern.FreshFunc {
 			case <-ctx.Done():
 				return
 			}
-			if cfg.IsPlatformDisabled(Site) {
+			if cfg.IsPlatformDisabled(Site) || !currentCredentials().ready() {
 				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
-				ti.Reset(interval)
+				ti.Reset(getRefreshInterval())
 				continue
 			}
 			var start = time.Now()
@@ -403,7 +400,7 @@ func (d *Concern) fresh() concern.FreshFunc {
 			} else {
 				logger.WithField("cost", end.Sub(start)).Errorf("watchCore error %v", err)
 			}
-			ti.Reset(interval)
+			ti.Reset(getRefreshInterval())
 		}
 	}
 }
@@ -563,29 +560,29 @@ func (d *Concern) GetCurrentLive(id string) (bool, error) {
 }
 
 func SetRequestOptions() []requests.Option {
+	state := currentCredentials()
 	return []requests.Option{
 		requests.ProxyOption(proxy_pool.PreferNone),
 		requests.TimeoutOption(time.Second * 10),
-		requests.AddUAOption(UserAgent),
+		requests.AddUAOption(state.userAgent),
 		requests.RequestAutoHostOption(),
-		requests.CookieOption("__ac_signature", AcSignature),
-		requests.CookieOption("__ac_nonce", AcNonce),
-		requests.CookieOption("sessionid", SessionId),
+		requests.CookieOption("__ac_signature", state.signature),
+		requests.CookieOption("__ac_nonce", state.nonce),
+		requests.CookieOption("sessionid", state.sessionID),
 		requests.HeaderOption("Connection", "keep-alive"),
 		requests.HeaderOption("Accept", "*/*"),
 		requests.HeaderOption("Accept-Encoding", "gzip, deflate, br, zstd"),
 		requests.HeaderOption("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6"),
 		requests.RetryOption(3),
-		requests.WithCookieJar(Cookie),
+		requests.WithCookieJar(state.jar),
 	}
 }
 
 func (d *Concern) Start() error {
 	// 以用户设置覆盖默认设置
 	setCookies()
-	if Stop {
-		logger.Warn("抖音Cookie未设置，将关闭抖音推送功能。")
-		return nil
+	if !currentCredentials().ready() {
+		logger.Info("抖音 Cookie 未设置，轮询等待后续配置更新")
 	}
 	// 如果需要启用轮询器，可以使用下面的方法
 	//d.UseEmitQueue()

@@ -4,7 +4,9 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 )
 
+var registeredConcern *Concern
+
 func init() {
-	c := NewConcern(concern.GetNotifyChan())
-	concern.RegisterConcern(c)
+	registeredConcern = NewConcern(concern.GetNotifyChan())
+	concern.RegisterConcern(registeredConcern)
 }
