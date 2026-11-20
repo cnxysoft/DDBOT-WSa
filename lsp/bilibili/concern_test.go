@@ -190,7 +190,7 @@ func TestConcernNotify(t *testing.T) {
 		assert.NotNil(t, notify)
 		assert.EqualValues(t, test.UID1, notify.GetUid())
 		assert.EqualValues(t, test.G1, notify.GetGroupCode())
-		assert.Contains(t, msgstringer.MsgToString(notify.ToMessage().Elements()), "mytitle")
+		assert.Contains(t, msgstringer.AdapterMsgToString(notify.ToMessage().Elements()), "mytitle")
 	case <-time.After(time.Second):
 		assert.Fail(t, "no item received")
 	}

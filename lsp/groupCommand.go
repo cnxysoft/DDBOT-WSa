@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"go.uber.org/atomic"
 
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
 	"github.com/alecthomas/kong"
@@ -23,17 +23,19 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/twitter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
 
 type LspGroupCommand struct {
-	msg *message.GroupMessage
+	msg *adapter.GroupMessage
 
 	*Runtime
 }
 
-func NewLspGroupCommand(l *Lsp, msg *message.GroupMessage) *LspGroupCommand {
+func NewLspGroupCommand(l *Lsp, msg *adapter.GroupMessage) *LspGroupCommand {
 	c := &LspGroupCommand{
 		Runtime: NewRuntime(l, l.PermissionStateManager.CheckGroupSilence(msg.GroupCode)),
 		msg:     msg,
@@ -62,31 +64,30 @@ func (lgc *LspGroupCommand) Execute() {
 		if err := recover(); err != nil {
 			logger.WithField("stack", string(debug.Stack())).
 				Errorf("panic recovered: %v", err)
-			lgc.textReply("エラー発生：看到该信息表示BOT出了一些问题，该问题已记录")
+			lgc.textReply("エラー発生：看到该信息表示BOT出了一些问题，该問題已记录")
 		}
 	}()
 
-	if len(lgc.CommandName()) == 0 {
-		return
-	}
-
-	log := lgc.DefaultLogger().WithField("cmd", lgc.GetCmdArgs())
-
 	if lgc.l.PermissionStateManager.CheckBlockList(lgc.uin()) ||
 		lgc.l.PermissionStateManager.CheckBlockList(lgc.groupCode()) {
-		log.Debug("blocked")
 		return
 	}
 
 	if !lgc.DebugCheck() {
-		log.Debugf("debug mode, skip execute.")
+		return
+	}
+
+	if len(lgc.CommandName()) == 0 {
+		// 非命令消息，执行通用消息模板
+		lgc.groupMessageTemplate(false, false)
 		return
 	}
 
 	if !lgc.AtCheck() {
-		log.Debugf("at check fail, skip execute")
 		return
 	}
+
+	log := lgc.DefaultLogger().WithField("cmd", lgc.GetCmdArgs())
 
 	log.Debug("execute command")
 
@@ -161,6 +162,24 @@ func (lgc *LspGroupCommand) Execute() {
 				lgc.CleanConcernCommand()
 			}
 		}
+	case ResubscribeCommand:
+		if lgc.requireNotDisable(ResubscribeCommand) {
+			if lgc.l.PermissionStateManager.RequireAny(
+				permission.AdminRoleRequireOption(lgc.uin()),
+				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+			) {
+				lgc.ResubscribeCommand()
+			}
+		}
+	case ScanCommand, ScanEnCommand:
+		if lgc.requireNotDisable(ScanCommand) {
+			if lgc.l.PermissionStateManager.RequireAny(
+				permission.AdminRoleRequireOption(lgc.uin()),
+				permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+			) {
+				lgc.ScanCommand()
+			}
+		}
 	default:
 		if CheckCustomGroupCommand(lgc.CommandName()) {
 			if lgc.requireNotDisable(lgc.CommandName()) {
@@ -184,6 +203,8 @@ func (lgc *LspGroupCommand) Execute() {
 			log.Debug("no command matched")
 		}
 	}
+	// 命令执行完成后，执行通用消息模板（所有消息都触发）
+	lgc.groupMessageTemplate(true, true)
 	return
 }
 
@@ -279,7 +300,7 @@ func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
 	var (
 		imgsBytes   = make([][]byte, len(imgs))
 		errs        = make([]error, len(imgs))
-		groupImages = make([]*message.ImageElement, len(imgs))
+		groupImages = make([]*adapter.ImageSegment, len(imgs))
 		wg          = new(sync.WaitGroup)
 	)
 
@@ -303,7 +324,7 @@ func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
 				errs[index] = fmt.Errorf("get image bytes failed %v", err)
 				return
 			}
-			groupImages[index], errs[index] = utils.UploadGroupImage(lgc.groupCode(), imgBytes, true)
+			groupImages[index] = (&mmsg.ImageBytesElement{Buf: imgBytes}).Norm().PackToElement(mmsg.NewGroupTarget(lgc.groupCode())).(*adapter.ImageSegment)
 		}(index)
 	}
 	wg.Wait()
@@ -360,7 +381,7 @@ func (lgc *LspGroupCommand) SetuCommand(r18 bool) {
 			if len(msg.Elements()) == 0 {
 				return
 			}
-			if lgc.reply(msg).Id == -1 {
+			if lgc.reply(msg).ID == -1 {
 				missCount.Add(imgSubCount)
 			}
 		}(i)
@@ -733,10 +754,13 @@ func (lgc *LspGroupCommand) ConfigCommand() {
 				Id string `arg:"" help:"配置的主播id"`
 			} `cmd:"" help:"查看当前过滤器" name:"show" group:"filter"`
 		} `cmd:"" help:"配置动态过滤器" name:"filter"`
+		WeiboAlert struct {
+			Action string `arg:"" optional:"" default:"show" enum:"show,true,false,1,0,on,off,enable,disable" help:"show=查看, true/false=群内开关"`
+		} `cmd:"" help:"配置本群是否接收微博Cookie/SUB告警通知" name:"weibo_alert"`
 	}
 
 	kongCtx, output := lgc.parseCommandSyntax(&configCmd, lgc.CommandName(),
-		kong.Description("管理BOT的配置，目前支持配置@成员、@全体成员、开启下播推送、开启标题推送、推送过滤"),
+		kong.Description("管理BOT的配置，目前支持配置@成员、@全体成员、开启下播推送、开启标题推送、推送过滤、微博告警"),
 	)
 	if output != "" {
 		lgc.textReply(output)
@@ -825,9 +849,103 @@ func (lgc *LspGroupCommand) ConfigCommand() {
 			log.WithField("filter_cmd", filterCmd).Errorf("unknown filter command")
 			lgc.textSend("未知的filter子命令")
 		}
+	case "weibo_alert":
+		lgc.ConfigWeiboAlertCommand(configCmd.WeiboAlert.Action)
 	default:
 		lgc.textSend("暂未支持，你可以催作者GKD")
 	}
+}
+
+// ConfigWeiboAlertCommand 配置微博告警通知发送对象
+// 群内使用：/config weibo_alert true|false|show 控制该群是否接收告警
+func (lgc *LspGroupCommand) ConfigWeiboAlertCommand(action string) {
+	log := lgc.DefaultLoggerWithCommand("config weibo_alert")
+	log.Infof("run config weibo_alert command")
+	defer func() { log.Infof("config weibo_alert command end") }()
+
+	// 需要管理员权限
+	if !lgc.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(lgc.uin()),
+	) {
+		lgc.textReply("权限不足 - 需要管理员权限")
+		return
+	}
+
+	groupCode := lgc.groupCode()
+
+	if groupCode > 0 {
+		// 群内使用：切换该群的告警开关
+		lgc.configWeiboAlertGroup(action, groupCode)
+	} else {
+		// 私聊使用 show 时，显示当前告警目标
+		handleWeiboAlertShow(func(s string) { lgc.textReply(s) })
+	}
+}
+
+// configWeiboAlertGroup 群内配置微博告警开关
+func (lgc *LspGroupCommand) configWeiboAlertGroup(action string, groupCode int64) {
+	switch action {
+	case "true", "1", "on", "enable":
+		if err := weibo.EnableAlertGroup(groupCode); err != nil {
+			lgc.textReply("启用失败")
+			return
+		}
+		lgc.textReply(fmt.Sprintf("已为本群（%d）启用微博 Cookie/SUB 告警通知", groupCode))
+
+	case "false", "0", "off", "disable":
+		if err := weibo.DisableAlertGroup(groupCode); err != nil {
+			lgc.textReply("禁用失败")
+			return
+		}
+		lgc.textReply(fmt.Sprintf("已为本群（%d）禁用微博 Cookie/SUB 告警通知", groupCode))
+
+	case "show":
+		enabled := weibo.IsAlertGroupEnabled(groupCode)
+		if enabled {
+			lgc.textReply(fmt.Sprintf("本群（%d）已启用微博 Cookie/SUB 告警通知", groupCode))
+		} else {
+			lgc.textReply(fmt.Sprintf("本群（%d）未启用微博 Cookie/SUB 告警通知\n发送 /config weibo_alert true 可开启", groupCode))
+		}
+
+	default:
+		lgc.textReply("群内用法：/config weibo_alert true|false|show\ntrue=开启本群告警, false=关闭本群告警, show=查看状态")
+	}
+}
+
+// handleWeiboAlertShow 展示微博告警的实际发送目标（管理员私聊 + 已启用告警的群）
+func handleWeiboAlertShow(reply func(string)) {
+	var lines []string
+	lines = append(lines, "=== 微博告警推送目标 ===")
+
+	// 管理员私聊（默认）
+	admins := weibo.GetBotAdmins()
+	if len(admins) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "【私聊 - 管理员】")
+		for _, qq := range admins {
+			lines = append(lines, fmt.Sprintf("  QQ %d", qq))
+		}
+	} else {
+		lines = append(lines, "")
+		lines = append(lines, "【私聊 - 管理员】（无）")
+	}
+
+	// 已启用告警的群
+	alertGroups := weibo.GetEnabledAlertGroups()
+	if len(alertGroups) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "【群聊 - 已启用告警】")
+		for _, gc := range alertGroups {
+			lines = append(lines, fmt.Sprintf("  群 %d", gc))
+		}
+	} else {
+		lines = append(lines, "")
+		lines = append(lines, "【群聊 - 已启用告警】（无）")
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, "在群内发送 /config weibo_alert true 可为该群启用告警")
+	reply(strings.Join(lines, "\n"))
 }
 
 func (lgc *LspGroupCommand) ReverseCommand() {
@@ -844,32 +962,34 @@ func (lgc *LspGroupCommand) ReverseCommand() {
 	}
 
 	for _, e := range lgc.msg.Elements {
-		if e.Type() == message.Image {
-			switch ie := e.(type) {
-			case *message.GroupImageElement:
-				lgc.reserveGif(ie.Url)
-				return
-			default:
-				log.Errorf("cast to ImageElement failed")
-				lgc.textReply("失败")
-				return
-			}
-		} else if e.Type() == message.Reply {
-			if re, ok := e.(*message.ReplyElement); ok {
-				urls := lgc.l.LspStateManager.GetMessageImageUrl(lgc.groupCode(), re.ReplySeq)
-				if len(urls) >= 1 {
-					lgc.reserveGif(urls[0])
-					return
-				}
-			} else {
-				log.Errorf("cast to ReplyElement failed")
-				lgc.textReply("失败")
-				return
-			}
+		imageURL := messageImageURL(e)
+		if imageURL != "" {
+			lgc.reserveGif(imageURL)
+			return
 		}
+
+		replySeq, ok := messageReplySeq(e)
+		if !ok {
+			continue
+		}
+		urls := lgc.l.LspStateManager.GetMessageImageUrl(lgc.groupCode(), replySeq)
+		if len(urls) >= 1 {
+			lgc.reserveGif(urls[0])
+			return
+		}
+		log.Errorf("reply image url not found")
+		lgc.textReply("失败")
+		return
 	}
 	log.Debug("no image found")
 	lgc.textReply("参数错误 - 未找到图片")
+}
+
+func messageReplySeq(msg adapter.IMessageElement) (int32, bool) {
+	if e, ok := msg.(*adapter.ReplySegment); ok {
+		return e.ReplySeq, true
+	}
+	return 0, false
 }
 
 func (lgc *LspGroupCommand) HelpCommand() {
@@ -909,6 +1029,61 @@ func (lgc *LspGroupCommand) CleanConcernCommand() {
 
 }
 
+func (lgc *LspGroupCommand) ResubscribeCommand() {
+	log := lgc.DefaultLoggerWithCommand(lgc.CommandName())
+	log.Infof("run %v command", lgc.CommandName())
+	defer func() { log.Infof("%v command end", lgc.CommandName()) }()
+
+	if !lgc.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(lgc.uin()),
+		permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+	) {
+		lgc.textReply("权限不足")
+		return
+	}
+
+	// 调用微博 Concern 的一键重新订阅功能
+	weiboConcern, err := concern.GetConcernBySiteAndType("weibo", weibo.News)
+	if err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	wc, ok := weiboConcern.(*weibo.Concern)
+	if !ok {
+		lgc.textReply("失败 - 类型转换错误")
+		return
+	}
+
+	count, err := wc.ResubscribeAll(lgc.NewMessageContext(log), lgc.groupCode())
+	if err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	lgc.textSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
+}
+
+func (lgc *LspGroupCommand) ScanCommand() {
+	log := lgc.DefaultLoggerWithCommand(lgc.CommandName())
+	log.Infof("run %v command", lgc.CommandName())
+	defer func() { log.Infof("%v command end", lgc.CommandName()) }()
+
+	if !lgc.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(lgc.uin()),
+		permission.GroupAdminRoleRequireOption(lgc.groupCode(), lgc.uin()),
+	) {
+		lgc.textReply("权限不足")
+		return
+	}
+
+	if err := twitter.ManualRefresh(lgc.groupCode()); err != nil {
+		lgc.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+	lgc.textSend("已触发手动刷新，正在强制拉取本群订阅的最新推文...")
+}
+
 func (lgc *LspGroupCommand) DefaultLogger() *logrus.Entry {
 	return logger.WithField("Name", lgc.displayName()).
 		WithField("Uin", lgc.uin()).
@@ -938,7 +1113,7 @@ func (lgc *LspGroupCommand) reserveGif(url string) {
 }
 
 func (lgc *LspGroupCommand) uin() int64 {
-	return lgc.msg.Sender.Uin
+	return lgc.msg.Sender.UserID
 }
 
 func (lgc *LspGroupCommand) displayName() string {
@@ -997,46 +1172,52 @@ func (lgc *LspGroupCommand) groupDisabled(command string) bool {
 	return lgc.l.PermissionStateManager.CheckGroupCommandDisabled(lgc.groupCode(), command)
 }
 
-func (lgc *LspGroupCommand) textReply(text string) *message.GroupMessage {
+func (lgc *LspGroupCommand) textReply(text string) *adapter.GroupMessage {
 	return lgc.reply(mmsg.NewText(text))
 }
 
-func (lgc *LspGroupCommand) textReplyF(format string, args ...interface{}) *message.GroupMessage {
+func (lgc *LspGroupCommand) textReplyF(format string, args ...interface{}) *adapter.GroupMessage {
 	return lgc.reply(mmsg.NewTextf(format, args...))
 }
 
-func (lgc *LspGroupCommand) textSend(text string) *message.GroupMessage {
+func (lgc *LspGroupCommand) textSend(text string) *adapter.GroupMessage {
 	return lgc.send(mmsg.NewText(text))
 }
 
-func (lgc *LspGroupCommand) textSendF(format string, args ...interface{}) *message.GroupMessage {
+func (lgc *LspGroupCommand) textSendF(format string, args ...interface{}) *adapter.GroupMessage {
 	return lgc.send(mmsg.NewTextf(format, args...))
 }
 
-func (lgc *LspGroupCommand) reply(msg *mmsg.MSG) *message.GroupMessage {
+func (lgc *LspGroupCommand) reply(msg *mmsg.MSG) *adapter.GroupMessage {
 	m := mmsg.NewMSG()
-	m.Append(message.NewReply(lgc.msg))
+	// Use adapter types to build the reply reference
+	replyElem := &adapter.ReplySegment{
+		ReplySeq: int32(lgc.msg.ID),
+		Sender:   lgc.msg.Sender.UserID,
+		GroupID:  lgc.msg.GroupCode,
+	}
+	m.Append(replyElem)
 	m.Append(msg.Elements()...)
 	return lgc.send(m)
 }
 
-func (lgc *LspGroupCommand) send(msg *mmsg.MSG) *message.GroupMessage {
-	return lgc.l.GM(lgc.l.SendMsg(msg, mmsg.NewGroupTarget(lgc.groupCode())))[0]
+func (lgc *LspGroupCommand) send(msg *mmsg.MSG) *adapter.GroupMessage {
+	return lgc.l.AGM(lgc.l.SendMsg(msg, mmsg.NewGroupTarget(lgc.groupCode())))[0]
 }
 
-func (lgc *LspGroupCommand) sendChain(msg *mmsg.MSG) []*message.GroupMessage {
-	return lgc.l.GM(lgc.l.SendMsg(msg, mmsg.NewGroupTarget(lgc.groupCode())))
+func (lgc *LspGroupCommand) sendChain(msg *mmsg.MSG) []*adapter.GroupMessage {
+	return lgc.l.AGM(lgc.l.SendMsg(msg, mmsg.NewGroupTarget(lgc.groupCode())))
 }
 
-func (lgc *LspGroupCommand) sender() *message.Sender {
+func (lgc *LspGroupCommand) sender() *adapter.SenderInfo {
 	return lgc.msg.Sender
 }
 
-func (lgc *LspGroupCommand) noPermissionReply() *message.GroupMessage {
+func (lgc *LspGroupCommand) noPermissionReply() *adapter.GroupMessage {
 	return lgc.textReply("权限不够")
 }
 
-func (lgc *LspGroupCommand) globalDisabledReply() *message.GroupMessage {
+func (lgc *LspGroupCommand) globalDisabledReply() *adapter.GroupMessage {
 	return lgc.textReply("无法操作该命令，该命令已被管理员禁用")
 }
 
@@ -1045,7 +1226,7 @@ func (lgc *LspGroupCommand) commonTemplateData() map[string]interface{} {
 		"msg":         lgc.msg,
 		"group_code":  lgc.groupCode(),
 		"group_name":  lgc.groupName(),
-		"member_code": lgc.sender().Uin,
+		"member_code": lgc.sender().UserID,
 		"member_name": lgc.sender().DisplayName(),
 		"command":     CommandMaps,
 	}
@@ -1064,6 +1245,28 @@ func (lgc *LspGroupCommand) templateMsg(name string, data map[string]interface{}
 		return nil
 	}
 	return m
+}
+
+// groupMessageTemplate 执行通用群消息处理模板
+// isCommand: 是否有命令前缀（消息是否为命令）
+// isMatched: 命令是否匹配到了处理函数（仅当 isCommand 为 true 时有意义）
+func (lgc *LspGroupCommand) groupMessageTemplate(isCommand, isMatched bool) {
+	const templateName = "trigger.group.message.tmpl"
+	if template.LoadTemplate(templateName) == nil {
+		return
+	}
+	data := lgc.commonTemplateData()
+	data["isCommand"] = isCommand
+	data["isMatched"] = isMatched
+	data["commandName"] = lgc.CommandName()
+	m, err := template.LoadAndExec(templateName, data)
+	if err != nil {
+		logger.Errorf("groupMessageTemplate error %v", err)
+		return
+	}
+	if m != nil && len(m.Elements()) > 0 {
+		lgc.sendChain(m)
+	}
 }
 
 func (lgc *LspGroupCommand) NewMessageContext(log *logrus.Entry) *MessageContext {
@@ -1095,6 +1298,11 @@ func (lgc *LspGroupCommand) NewMessageContext(log *logrus.Entry) *MessageContext
 		}
 		return nil
 	}
-	ctx.Sender = lgc.sender()
+	ctx.Sender = &adapter.SenderInfo{
+		UserID:   lgc.msg.Sender.UserID,
+		Uin:      lgc.msg.Sender.UserID,
+		Nickname: lgc.msg.Sender.Nickname,
+		Card:     lgc.msg.Sender.Card,
+	}
 	return ctx
 }

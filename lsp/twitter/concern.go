@@ -2,29 +2,28 @@
 package twitter
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/rand"
 	"net/http/cookiejar"
-	"net/url"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-
 	templUtils "github.com/Sora233/MiraiGo-Template/utils"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 )
 
 const (
@@ -53,11 +52,7 @@ const (
 var (
 	logger          = templUtils.GetModuleLogger(ConcernName)
 	requestInterval = time.Second * 5 // 每个请求之间的间隔
-	buildProfileURL = func(screenName string) *url.URL {
-		Url, _ := url.Parse(BaseURL[rand.Intn(len(BaseURL))] + screenName)
-		return Url
-	}
-	Cookie *cookiejar.Jar
+	Cookie          *cookiejar.Jar
 )
 
 type StateManager struct {
@@ -71,17 +66,17 @@ func (t *StateManager) GetGroupConcernConfig(groupCode int64, id interface{}) co
 	return NewGroupConcernConfig(t.StateManager.GetGroupConcernConfig(groupCode, id), t.concern)
 }
 
-func (t *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage) error {
-	tmp := &message.GroupMessage{
-		Id:        msg.Id,
+func (t *StateManager) SetNotifyMsg(notifyKey string, msg *adapter.GroupMessage) error {
+	tmp := &adapter.GroupMessage{
+		ID:        msg.ID,
 		GroupCode: msg.GroupCode,
 		Sender:    msg.Sender,
 		Time:      msg.Time,
-		Elements: localutils.MessageFilter(msg.Elements, func(e message.IMessageElement) bool {
-			return e.Type() == message.Text || e.Type() == message.Image
+		Elements: localutils.AdapterMessageFilter(msg.Elements, func(e adapter.IMessageElement) bool {
+			return e.Type() == adapter.ElementTypeText || e.Type() == adapter.ElementTypeImage
 		}),
 	}
-	value, err := localutils.SerializationGroupMsg(tmp)
+	value, err := localutils.SerializationAdapterGroupMsg(tmp)
 	if err != nil {
 		return err
 	}
@@ -89,12 +84,12 @@ func (t *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage)
 		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
 }
 
-func (t *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message.GroupMessage, error) {
+func (t *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*adapter.GroupMessage, error) {
 	value, err := t.Get(t.NotifyMsgKey(groupCode, notifyKey))
 	if err != nil {
 		return nil, err
 	}
-	return localutils.DeserializationGroupMsg(value)
+	return localutils.DeserializationAdapterGroupMsg(value)
 }
 
 func (t *StateManager) SetGroupCompactMarkIfNotExist(groupCode int64, compactKey string) error {
@@ -110,6 +105,14 @@ func (t *StateManager) MarkTweetId(tweetId string) (replaced bool, err error) {
 
 type twitterConcern struct {
 	*StateManager
+	homeTimelineCursor string        // 保存 HomeTimeline 翻页 cursor
+	mirrorNext         atomic.Uint64 // 上次成功的镜像下标
+	mirrorMu           sync.Mutex
+	mirrorFailures     map[string]mirrorFailure
+
+	// manualRefreshCh 手动刷新触发通道，值为目标群代码（0 表示全部）
+	// 由 RefreshCommand 等外部命令触发，实现"强制拉取最新并重置计时"
+	manualRefreshCh chan int64
 }
 
 func (t *twitterConcern) Site() string {
@@ -143,47 +146,16 @@ func CSTTime(t time.Time) time.Time {
 }
 
 func (t *twitterConcern) FindUserInfo(id string, refresh bool) (*UserInfo, error) {
-retry:
-	var info *UserInfo
 	if refresh {
-		Url := buildProfileURL(id)
-		opts := SetRequestOptions()
-		var resp bytes.Buffer
-		var respHeaders requests.RespHeader
-		if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-			if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-				logger.WithField("Mirror", Url.Hostname()).Errorf("查找用户失败：%v", err)
-				return nil, err
-			}
-		}
-
-		// 解压缩HTML
-		body, err := utils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-		if err != nil {
-			logger.WithField("Mirror", Url.Hostname()).
-				WithField("User", id).Errorf("解压缩HTML失败：%v", err)
-			return nil, err
-		}
-
-		// 解析用户信息
-		profile, _, challenge, err := ParseResp(body, Url.String())
+		profile, _, err := t.fetchMirror(id)
 		if err != nil {
 			return nil, err
-		} else if challenge != nil && challenge.Type == "anubis" {
-			FreshCookie(challenge.Anubis)
-			goto retry
-		} else if challenge != nil && challenge.Type == "poast" {
-			time.Sleep(time.Second * 3)
-			goto retry
-		} else if profile == nil {
-			return nil, errors.New("用户不存在或返回结果为空")
 		}
-		info = &UserInfo{
-			Id:   profile.ScreenName,
+		info := &UserInfo{
+			Id:   id,
 			Name: profile.Name,
 		}
-		err = t.AddUserInfo(info)
-		if err != nil {
+		if err := t.AddUserInfo(info); err != nil {
 			return nil, err
 		}
 	}
@@ -217,6 +189,87 @@ func (t *twitterConcern) AddUserInfo(info *UserInfo) error {
 func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
 	userId := id.(string)
 	log := logger.WithFields(localutils.GroupLogFields(groupCode)).WithField("id", userId)
+
+	if TwitterMode == ModeAPI {
+		if !IsTwitterEnabled() {
+			return nil, errors.New("Twitter API 未配置有效 Cookie")
+		}
+		info := &UserInfo{
+			Id:   userId,
+			Name: userId,
+		}
+
+		// 如果是订阅自己（Cookie账号），跳过关注检查，直接订阅
+		if twitterAPI != nil && twitterAPI.GetScreenName() == userId {
+			log.Infof("Subscribing to self, skip follow check")
+			_ = t.AddUserInfo(info)
+			_, err := t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
+			if err != nil {
+				return nil, err
+			}
+			return info, nil
+		}
+
+		// 获取用户信息（包含是否已关注）
+		var userProfile *UserProfileInfo
+		var err error
+		if twitterAPI != nil {
+			userProfile, err = twitterAPI.GetUserByScreenName(context.Background(), userId)
+			if err != nil {
+				log.Errorf("GetUserByScreenName %s failed: %v", userId, err)
+				return nil, fmt.Errorf("获取用户信息失败: %v", err)
+			}
+		}
+		// 如果获取到用户信息，使用真实昵称
+		if userProfile != nil && userProfile.Name != "" {
+			info.Name = userProfile.Name
+		}
+		_ = t.AddUserInfo(info)
+
+		// 逐账号查询不依赖关注关系；HomeTimeline 模式仍在首次订阅时自动关注。
+		if r, _ := t.GetStateManager().GetConcern(userId); r.Empty() {
+			if !apiFetchModeNeedsFollow() {
+				log.Infof("per_user mode, skip automatic follow for %s", userId)
+			} else if twitterAPI != nil {
+				// 首次订阅，自动关注
+				followUserID := ""
+				if userProfile != nil {
+					followUserID = userProfile.RestID
+				}
+				if followUserID == "" {
+					followUserID, err = twitterAPI.ResolveUserID(context.Background(), userId)
+					if err != nil {
+						log.Errorf("Resolve Twitter user %s failed: %v", userId, err)
+						return nil, fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+					}
+				}
+				// 如果已经关注，则跳过
+				if userProfile != nil && userProfile.IsFollowing {
+					log.Infof("User %s already following, skip", userId)
+				} else {
+					if err := twitterAPI.Follow(context.Background(), followUserID); err != nil {
+						log.Errorf("Follow user %s failed: %v", userId, err)
+						return nil, fmt.Errorf("关注用户 %s 失败: %v", userId, err)
+					}
+					log.Infof("Follow user %s success", userId)
+				}
+			}
+
+			// 首次订阅预标记：预拉一次该账号的现有推文并逐条标记，
+			// 避免下一轮 UserTweets 把最近 N 条存量推文当作新推文全量推送。
+			// 与 mirror 分支的 GetTweets + filterTweet 预标记对齐。
+			if err := t.preMarkUserTweets(context.Background(), userId); err != nil {
+				log.Errorf("PreMark user %s tweets failed: %v", userId, err)
+				return nil, fmt.Errorf("添加订阅失败 - 预标记存量推文失败: %v", err)
+			}
+		}
+		_, err = t.GetStateManager().AddGroupConcern(groupCode, id, ctype)
+		if err != nil {
+			return nil, err
+		}
+		return info, nil
+	}
+
 	info, err := t.FindOrLoadUserInfo(userId)
 	if err != nil {
 		log.Errorf("FindOrLoadUserInfo error %v", err)
@@ -230,9 +283,8 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 		}
 		if len(tweets) < 1 {
 			log.Errorf("GetTweets not ok")
-			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户微博")
+			return nil, fmt.Errorf("添加订阅失败 - 无法查看用户推文")
 		}
-		// 第一次就手动添加一下已有推文，以此来过滤旧的微博
 		for _, tweet := range tweets {
 			_ = t.filterTweet(tweet)
 		}
@@ -245,18 +297,23 @@ func (t *twitterConcern) Add(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, 
 }
 
 func (t *twitterConcern) removeUserInfo(id string) error {
-	_, err := t.Delete(t.UserInfoKey(id), buntdb.IgnoreNotFoundOpt())
+	_, err := t.Delete(t.UserInfoKey(id), localdb.IgnoreNotFoundOpt())
 	return err
 }
 
 func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
+	userId := id.(string)
 	identity, _ := t.Get(id)
-	_, err := t.GetStateManager().RemoveGroupConcern(groupCode, id.(string), ctype)
+
+	var allCtype concern_type.Type
+	_, err := t.GetStateManager().RemoveGroupConcern(groupCode, userId, ctype)
 	if err != nil {
 		return nil, err
 	}
 
-	if err = t.removeUserInfo(id.(string)); err != nil {
+	allCtype, _ = t.GetStateManager().GetConcern(userId)
+
+	if err = t.removeUserInfo(userId); err != nil {
 		if err != errors.New("not found") {
 			logger.WithError(err).Errorf("remove UserInfo error")
 		} else {
@@ -264,10 +321,31 @@ func (t *twitterConcern) Remove(ctx mmsg.IMsgCtx, groupCode int64, id interface{
 		}
 	}
 
+	// 如果开启unsub且该用户已无任何订阅，则取消关注
+	if cfg.GetTwitterUnsub() && allCtype.Empty() && apiFetchModeNeedsFollow() {
+		go t.unsubUser(userId)
+	}
+
 	if identity == nil {
 		identity = concern.NewIdentity(id, "unknown")
 	}
 	return identity, err
+}
+
+func (t *twitterConcern) unsubUser(userId string) {
+	if twitterAPI == nil {
+		return
+	}
+	apiUserID, err := twitterAPI.ResolveUserID(context.Background(), userId)
+	if err != nil {
+		logger.Errorf("解析用户 %s 的数字 ID 失败 - %v", userId, err)
+		return
+	}
+	if err := twitterAPI.Unfollow(context.Background(), apiUserID); err != nil {
+		logger.Errorf("取消关注失败 - %v", err)
+	} else {
+		logger.WithField("userId", userId).Info("取消关注成功")
+	}
 }
 
 func (t *twitterConcern) Get(id interface{}) (concern.IdentityInfo, error) {
@@ -294,36 +372,316 @@ func (t *twitterConcern) notifyGenerator() concern.NotifyGeneratorFunc {
 	}
 }
 
-// 新增辅助函数获取刷新间隔
+// getRetweetFullTextEnabled 是否在转发推文中显示原推文完整文本。
+// 关闭（默认）时沿用 X API 的截断摘要（"RT @user: " + 前140字符），
+// 开启时以原推文完整内容替换。
+func getRetweetFullTextEnabled() bool {
+	if config.GlobalConfig != nil {
+		return config.GlobalConfig.GetBool("twitter.retweetFullText")
+	}
+	return false
+}
+
+// twitterRefreshIntervalDefault 未配置 twitter.interval 时的默认刷新间隔。
+// 取 120s 是为了降低 X 的限流/封号风险。
+const twitterRefreshIntervalDefault = 120 * time.Second
+
+// getRefreshInterval 获取推文刷新间隔。
+//
+// 语义：只有「未配置」twitter.interval 时才使用默认 120s；
+// 显式配置的值一律按配置生效——即使低于建议下限也只告警提示，不静默钳制/降级到 120s。
 func getRefreshInterval() time.Duration {
 	if config.GlobalConfig != nil {
-		interval := config.GlobalConfig.GetDuration("twitter.interval")
-		if interval > 0 {
+		if interval := parseInterval(config.GlobalConfig.Get("twitter.interval")); interval > 0 {
+			if interval < twitterRefreshIntervalDefault {
+				logger.Warnf("twitter.interval=%v 低于建议下限 %v，已按配置值生效；间隔过短可能触发 X 限流甚至封禁",
+					interval, twitterRefreshIntervalDefault)
+			}
 			return interval
 		}
 	}
-	return time.Second * 30
+	return twitterRefreshIntervalDefault
+}
+
+// parseInterval 解析 twitter.interval 配置，返回 0 表示「未配置或无法解析」，由调用方取默认值。
+//
+// 支持带单位的字符串（"2m"、"90s"）与数字；数字按「秒」解释。
+// 注意不要直接用 GetDuration：无单位数字会被 viper 当成纳秒，
+// 例如 twitter.interval: 60 会解析成 60ns，等于把限流彻底取消。
+func parseInterval(raw interface{}) time.Duration {
+	switch v := raw.(type) {
+	case nil:
+		return 0
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return 0
+		}
+		if d, err := time.ParseDuration(s); err == nil {
+			if d <= 0 {
+				return 0
+			}
+			return d
+		}
+		// 容忍纯数字字符串（如 "60"），按秒解释
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			return secondsToDuration(n)
+		}
+		logger.Warnf("twitter.interval=%q 无法解析（请使用如 120s / 2m 的格式），将使用默认值 %v",
+			v, twitterRefreshIntervalDefault)
+		return 0
+	case int:
+		return secondsToDuration(float64(v))
+	case int32:
+		return secondsToDuration(float64(v))
+	case int64:
+		return secondsToDuration(float64(v))
+	case uint:
+		return secondsToDuration(float64(v))
+	case uint64:
+		return secondsToDuration(float64(v))
+	case float32:
+		return secondsToDuration(float64(v))
+	case float64:
+		return secondsToDuration(v)
+	default:
+		logger.Warnf("twitter.interval 类型不支持（%T），将使用默认值 %v", raw, twitterRefreshIntervalDefault)
+		return 0
+	}
+}
+
+// secondsToDuration 把按「秒」解释的数值转成 Duration；非正数返回 0，表示未配置。
+func secondsToDuration(seconds float64) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func (t *twitterConcern) processUsers(ctx context.Context, eventChan chan<- concern.Event) {
-	// 获取最新用户列表
-	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
+	t.processUsersInGroup(ctx, eventChan, 0)
+}
+
+// processUsersInGroup 拉取指定群订阅用户的推文。
+// groupCode<=0 表示拉取所有订阅用户
+func (t *twitterConcern) processUsersInGroup(ctx context.Context, eventChan chan<- concern.Event, groupCode int64) {
+	if IsTwitterEnabled() {
+		// HomeTimeline 是账号首页的全量时间线，无法按群过滤。
+		// 手动刷新指定群时明确提示，避免用户误以为只拉了本群
+		if groupCode > 0 && TwitterAPIFetchMode != APIFetchModePerUser {
+			logger.WithField("groupCode", groupCode).
+				Info("API 模式手动刷新为全量 HomeTimeline 拉取（无法按群过滤），推送侧按订阅关系分发")
+		}
+		if TwitterAPIFetchMode == APIFetchModePerUser {
+			t.processPerUserTimeline(ctx, eventChan)
+		} else {
+			t.processHomeTimeline(ctx, eventChan)
+		}
+		return
+	}
+
+	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool {
+		if groupCode > 0 && g != groupCode {
+			return false
+		}
+		return p.ContainAll(Tweets)
+	})
 	for _, userId := range ids {
 		if ctx.Err() != nil {
 			return
 		}
-		// 执行处理逻辑（与之前相同）
 		events, err := t.freshNewsInfo(Tweets, userId)
 		if err != nil {
-			//logger.WithError(err).WithField("userId", userId).Error("刷新用户推文失败")
 			continue
 		}
 		for _, e := range events {
 			eventChan <- e
 		}
-		// 添加随机间隔（避免请求对齐）
 		time.Sleep(time.Duration(rand.Intn(10)) * time.Second)
 	}
+}
+
+func (t *twitterConcern) processPerUserTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	_, ids, _, err := t.StateManager.ListConcernState(func(_ int64, _ interface{}, p concern_type.Type) bool {
+		return p.ContainAll(Tweets)
+	})
+	if err != nil {
+		logger.Errorf("List Twitter subscriptions error: %v", err)
+		return
+	}
+
+	uniqueIDs := make([]string, 0, len(ids))
+	seenIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		userID, ok := id.(string)
+		if !ok || strings.TrimSpace(userID) == "" {
+			continue
+		}
+		userID = strings.TrimSpace(userID)
+		if _, exists := seenIDs[userID]; exists {
+			continue
+		}
+		seenIDs[userID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, userID)
+	}
+
+	firstRequest := true
+	waitForRequest := func() bool {
+		if firstRequest {
+			firstRequest = false
+			return true
+		}
+		return waitTwitterRequestInterval(ctx)
+	}
+
+	for _, userID := range uniqueIDs {
+		if !waitForRequest() {
+			return
+		}
+
+		apiUserID, err := twitterAPI.ResolveUserID(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("解析 Twitter 用户 ID 失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+		userInfo, err := t.getAPIUserInfo(ctx, userID)
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("加载 Twitter 用户信息失败：%v", err)
+			continue
+		}
+		if !waitForRequest() {
+			return
+		}
+
+		result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+		if err != nil {
+			logger.WithField("userId", userID).Warnf("获取用户推文失败：%v", err)
+			recordTwitterFetchResult(false)
+			continue
+		}
+		recordTwitterFetchResult(true)
+		logger.WithField("userId", userID).Debugf("API UserTweets 返回 %d 条推文", len(result.Tweets))
+
+		for _, tweet := range result.Tweets {
+			if tweet == nil || tweet.ID == "" {
+				continue
+			}
+			if t.filterTweet(tweet) {
+				// fetch 阶段异步启动翻译，与 processHomeTimeline/freshNewsInfo 对齐；
+				// 推送渲染只读缓存，per_user 路径不启动预翻译会导致推送永远不带翻译
+				StartAsyncTranslate(tweet)
+				eventChan <- &NewsInfo{UserInfo: userInfo, Tweet: tweet}
+			}
+		}
+
+	}
+}
+
+func (t *twitterConcern) getAPIUserInfo(ctx context.Context, userID string) (*UserInfo, error) {
+	info, err := t.GetUserInfo(userID)
+	if err == nil && info != nil {
+		return info, nil
+	}
+	profile, err := twitterAPI.GetUserByScreenName(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil {
+		return nil, errors.New("Twitter API returned empty user profile")
+	}
+	info = &UserInfo{Id: userID, Name: profile.Name}
+	if info.Name == "" {
+		info.Name = userID
+	}
+	if err := t.AddUserInfo(info); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func waitTwitterRequestInterval(ctx context.Context) bool {
+	timer := time.NewTimer(requestInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (t *twitterConcern) processHomeTimeline(ctx context.Context, eventChan chan<- concern.Event) {
+	_, ids, _, _ := t.StateManager.ListConcernState(func(g int64, id interface{}, p concern_type.Type) bool { return p.ContainAll(Tweets) })
+
+	subscribedUsers := make(map[string]bool)
+	for _, userId := range ids {
+		subscribedUsers[userId.(string)] = true
+	}
+
+	if len(subscribedUsers) == 0 {
+		return
+	}
+
+	// 获取Cookie账号的screenName
+	cookieScreenName := twitterAPI.GetScreenName()
+
+	result, err := twitterAPI.HomeTimeline(ctx, t.homeTimelineCursor)
+	if err != nil {
+		logger.Errorf("HomeTimeline fetch error: %v", err)
+		t.homeTimelineCursor = "" // 清除无效 cursor
+		recordTwitterFetchResult(false)
+		return
+	}
+	recordTwitterFetchResult(true)
+
+	for _, tweet := range result.Tweets {
+		var screenName string
+		var orgUser *UserProfile
+
+		if tweet.IsRetweet && tweet.RetweetUser != nil && tweet.RetweetUser.ScreenName == cookieScreenName {
+			// 转发：如果是Cookie账号发的，转发者就是screenName
+			screenName = cookieScreenName
+			orgUser = tweet.RetweetUser
+		} else if tweet.QuoteTweet != nil && tweet.OrgUser != nil {
+			// 引用推文：用 QuoteTweet 的 OrgUser
+			screenName = tweet.OrgUser.ScreenName
+			orgUser = tweet.OrgUser
+		} else if tweet.OrgUser != nil {
+			// 普通推文
+			screenName = tweet.OrgUser.ScreenName
+			orgUser = tweet.OrgUser
+		}
+
+		if orgUser == nil {
+			continue
+		}
+
+		if !subscribedUsers[screenName] {
+			continue
+		}
+
+		userInfo, err := t.FindOrLoadUserInfo(screenName)
+		if err != nil {
+			logger.WithField("screenName", screenName).Errorf("FindOrLoadUserInfo error: %v", err)
+			continue
+		}
+
+		if pass := t.filterTweet(tweet); pass {
+			// fetch 阶段异步启动翻译，推送时读取缓存，避免阻塞推送管线
+			StartAsyncTranslate(tweet)
+			event := &NewsInfo{
+				UserInfo: userInfo,
+				Tweet:    tweet,
+			}
+			eventChan <- event
+		}
+	}
+
+	// 保存 cursor，下次 fresh 继续翻页
+	t.homeTimelineCursor = result.Cursor
 }
 
 func (t *twitterConcern) fresh() concern.FreshFunc {
@@ -332,16 +690,55 @@ func (t *twitterConcern) fresh() concern.FreshFunc {
 		ti := time.NewTimer(time.Second * 3)
 		defer ti.Stop() // 确保定时器资源释放
 
+		// reset 按 interval+随机抖动重置定时器，供定时与手动刷新共用
+		reset := func() {
+			// 添加随机抖动，避免固定间隔被识别为机器人
+			jitter := time.Duration(rand.Intn(30)) * time.Second // 0-30秒随机抖动
+			ti.Reset(interval + jitter)
+		}
+
 		for {
 			select {
 			case <-ti.C:
+				if cfg.IsPlatformDisabled(Site) {
+					logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+					reset()
+					continue
+				}
 				t.processUsers(ctx, eventChan)
-				ti.Reset(interval) // 重置定时器
+				reset()
+			case groupCode := <-t.manualRefreshCh:
+				// 手动触发：立即强制拉取该群订阅用户的最新推文，并重置计时
+				logger.WithField("groupCode", groupCode).Info("收到手动刷新指令，强制拉取最新推文")
+				t.processUsersInGroup(ctx, eventChan, groupCode)
+				reset()
 			case <-ctx.Done():
 				return
 			}
 		}
 	}
+}
+
+// preMarkUserTweets 首次订阅时预拉该账号的现有推文并逐条写入去重标记，
+// 避免下一轮轮询把最近 N 条存量推文当作新推文全量推送（首见即推）。
+// 仅用于 API 模式；mirror 模式的对等逻辑在 Add 的非 API 分支。
+func (t *twitterConcern) preMarkUserTweets(ctx context.Context, userId string) error {
+	apiUserID, err := twitterAPI.ResolveUserID(ctx, userId)
+	if err != nil {
+		return fmt.Errorf("解析用户 %s 的数字 ID 失败: %v", userId, err)
+	}
+	result, err := twitterAPI.UserTweets(ctx, apiUserID, "")
+	if err != nil {
+		return fmt.Errorf("拉取用户 %s 存量推文失败: %v", userId, err)
+	}
+	for _, tweet := range result.Tweets {
+		if tweet == nil || tweet.ID == "" {
+			continue
+		}
+		// 逐条写入去重标记；标记写入失败时 filterTweet 内部已记日志并返回 false
+		t.filterTweet(tweet)
+	}
+	return nil
 }
 
 func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) ([]concern.Event, error) {
@@ -358,6 +755,8 @@ func (t *twitterConcern) freshNewsInfo(ctype concern_type.Type, id interface{}) 
 		}
 		for _, tweet := range newTweets {
 			if pass := t.filterTweet(tweet); pass {
+				// fetch 阶段异步启动翻译，推送时读取缓存，避免阻塞推送管线
+				StartAsyncTranslate(tweet)
 				res := &NewsInfo{
 					UserInfo: userInfo,
 					Tweet:    tweet,
@@ -382,6 +781,28 @@ func (t *twitterConcern) filterTweet(tweet *Tweet) bool {
 	return true
 }
 
+// twitterFetchFailures 运行时拉取失败的连续计数；成功一轮即清零。
+// 连续失败达到阈值说明会话/网络级别故障，进入自动恢复模式并告警，
+// 避免像以前那样只刷日志静默停摆。
+var (
+	twitterFetchFailures      atomic.Int32
+	twitterFetchFailThreshold int32 = 20
+)
+
+func recordTwitterFetchResult(ok bool) {
+	if ok {
+		twitterFetchFailures.Store(0)
+		return
+	}
+	n := twitterFetchFailures.Add(1)
+	if n >= twitterFetchFailThreshold {
+		twitterFetchFailures.Store(0)
+		if !twitterRecovering.Load() {
+			enterTwitterRecovering(fmt.Sprintf("运行中连续%d次获取推文失败", n))
+		}
+	}
+}
+
 func SetRequestOptions() []requests.Option {
 	//h1 := (http.DefaultTransport).(*http.Transport).Clone()
 	//h1.MaxResponseHeaderBytes = 262144
@@ -399,14 +820,14 @@ func SetRequestOptions() []requests.Option {
 		requests.HeaderOption("sec-ch-ua-platform-version", "19.0.0"),
 		requests.HeaderOption("sec-ch-ua-model", "navigate"),
 		requests.HeaderOption("Sec-Fetch-Site", "none"),
-		requests.HeaderOption("sec-ch-ua", "\"Microsoft Edge\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\""),
+		requests.HeaderOption("sec-ch-ua", "\"Chromium\";v=\"149\", \"Not)A;Brand\";v=\"24\""),
 		requests.HeaderOption("sec-ch-ua-mobile", "?0"),
 		requests.HeaderOption("sec-ch-ua-platform", "\"Windows\""),
-		requests.HeaderOption("sec-ch-ua-full-version", "\"135.0.3179.73\""),
+		requests.HeaderOption("sec-ch-ua-full-version", "\"149.0.4650.56\""),
 		requests.HeaderOption("sec-ch-ua-arch", "\"x86\""),
 		requests.HeaderOption("sec-ch-ua-bitness", "64"),
 		requests.HeaderOption("sec-ch-ua-full-version-list",
-			"\"Microsoft Edge\";v=\"135.0.3179.73\", \"Not-A.Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"135.0.7049.85\""),
+			"\"Chromium\";v=\"149.0.4650.56\", \"Not)A;Brand\";v=\"24.0.0.0\", \"Google Chrome\";v=\"149.0.4650.56\""),
 		requests.HeaderOption("Upgrade-Insecure-Requests", "1"),
 		requests.HeaderOption("Sec-Fetch-Dest", "document"),
 		requests.HeaderOption("Sec-Fetch-Mode", "navigate"),
@@ -419,47 +840,13 @@ func SetRequestOptions() []requests.Option {
 }
 
 func (t *twitterConcern) GetTweets(id string) ([]*Tweet, error) {
-retry:
-	Url := buildProfileURL(id)
-	opts := SetRequestOptions()
-	var resp bytes.Buffer
-	var respHeaders requests.RespHeader
-	if err := requests.GetWithHeader(Url.String(), nil, &resp, &respHeaders, opts...); err != nil {
-		if err.Error() != ErrUnavailable && Url.Hostname() != "nitter.poast.org" {
-			logger.WithField("Mirror", Url.Hostname()).WithField("userId", id).Errorf("获取推文列表失败：%v", err)
-			return nil, err
-		}
-	}
-
-	// 解压缩HTML
-	body, err := utils.HtmlDecoder(respHeaders.ContentEncoding, resp)
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解压缩HTML失败：%v", err)
-		return nil, err
-	}
-
-	// 解析解压后的数据
-	_, tweets, challenge, err := ParseResp(body, Url.String())
-	if err != nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Errorf("解析HTML失败：%v", err)
-		return nil, err
-	} else if challenge != nil && challenge.Type == "anubis" {
-		FreshCookie(challenge.Anubis)
-		goto retry
-	} else if challenge != nil && challenge.Type == "poast" {
-		time.Sleep(time.Second * 3)
-		goto retry
-	} else if tweets == nil {
-		logger.WithField("Mirror", Url.Hostname()).
-			WithField("userId", id).Warn("获取推文列表失败：无法解析数据或推文列表为空")
-		return nil, nil
-	}
-	return tweets, nil
+	_, tweets, err := t.fetchMirror(id)
+	return tweets, err
 }
 
 func (t *twitterConcern) Start() error {
+	// 清理 ./tmp 目录下的旧临时文件
+	cleanupTmpDir()
 	// 以用户设置覆盖默认设置
 	setCookies()
 	// 如果需要启用轮询器，可以使用下面的方法
@@ -482,8 +869,39 @@ func (t *twitterConcern) GetStateManager() concern.IStateManager {
 	return t.StateManager
 }
 
+// TriggerManualRefresh 手动触发刷新：向 fresh 循环发送信号。
+// groupCode<=0 表示刷新全部订阅；>0 表示仅刷新该群订阅的用户。
+// 返回非 nil 表示触发失败（如通道已满/尚未初始化）。
+func (t *twitterConcern) TriggerManualRefresh(groupCode int64) error {
+	if t == nil || t.manualRefreshCh == nil {
+		return errors.New("twitter concern 未初始化，无法手动刷新")
+	}
+	select {
+	case t.manualRefreshCh <- groupCode:
+		return nil
+	default:
+		return errors.New("已有手动刷新在进行中，请稍后重试")
+	}
+}
+
+// ManualRefresh 外部命令入口：按 site 获取 twitter concern 并触发手动刷新。
+// groupCode<=0 表示刷新全部订阅；>0 表示仅刷新该群订阅的用户。
+func ManualRefresh(groupCode int64) error {
+	c, err := concern.GetConcernBySite(Site)
+	if err != nil {
+		return err
+	}
+	tc, ok := c.(*twitterConcern)
+	if !ok {
+		return errors.New("twitter concern 类型断言失败")
+	}
+	return tc.TriggerManualRefresh(groupCode)
+}
+
 func newConcern(notifyChan chan<- concern.Notify) *twitterConcern {
-	con := &twitterConcern{}
+	con := &twitterConcern{
+		manualRefreshCh: make(chan int64, 8),
+	}
 	// 默认是string格式的id
 	con.StateManager = &StateManager{StateManager: concern.NewStateManagerWithStringID(Site, notifyChan), concern: con, ExtraKey: NewExtraKey()}
 	// 如果要使用int64格式的id，可以用下面的

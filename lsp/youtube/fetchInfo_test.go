@@ -1,6 +1,12 @@
 package youtube
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/Jeffail/gabs/v2"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -21,9 +27,664 @@ func TestSearcher(t *testing.T) {
 }
 
 func TestXFetchInfo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping network request in short mode")
+	}
+
 	const testChannel = "UCDbQblY1XASbgqOXmy6FOFQ"
 	vi, err := XFetchInfo(testChannel)
-	if err == nil {
-		assert.NotNil(t, vi)
+	if err != nil {
+		t.Skipf("skipping unavailable youtube API: %v", err)
 	}
+	if vi == nil {
+		t.Skip("skipping unavailable youtube API: empty response")
+	}
+	assert.NotNil(t, vi)
+}
+
+// loadDebugRoot loads a saved YouTube page fixture for offline parsing tests.
+//
+// The fixtures are expected under ../../debug/youtube/ (ignored by .gitignore
+// because they contain captured YouTube HTML). When a fixture is missing —
+// the default in CI / a fresh clone — the calling test is skipped instead of
+// failing, so these tests act as developer-time regression checks rather
+// than hard CI gates. To run them locally, drop the saved HTML into
+// lsp/youtube/testdata/youtube/ (or the legacy ../../debug/youtube/ path)
+// and re-run `go test ./lsp/youtube/...`.
+func loadDebugRoot(t *testing.T, name string) *gabs.Container {
+	t.Helper()
+
+	path := filepath.Join("..", "..", "debug", "youtube", name)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Skipf("youtube fixture %s not present; skipping (see loadDebugRoot doc)", name)
+		}
+		t.Fatalf("read debug html %s: %v", path, err)
+	}
+	root, err := extractData(body)
+	if err != nil {
+		t.Fatalf("extractData %s: %v", path, err)
+	}
+	return root
+}
+
+func TestPageMatchesRequestedType_StreamTabs(t *testing.T) {
+	gamerSecret := loadDebugRoot(t, "9.videos_@GamerSecret.html")
+	gamerSecretStreamsRedirect := loadDebugRoot(t, "12.streams_@GamerSecret.html")
+	onRainyDaysVideos := loadDebugRoot(t, "10.videos_@onrainydays500.html")
+	onRainyDaysStreams := loadDebugRoot(t, "11.streams_@onrainydays500.html")
+
+	assert.Equal(t, "视频", selectedTabTitle(gamerSecret))
+	assert.False(t, pageMatchesRequestedType(gamerSecret, fetchPageTypeStream))
+
+	assert.Equal(t, "首页", selectedTabTitle(gamerSecretStreamsRedirect))
+	assert.False(t, pageMatchesRequestedType(gamerSecretStreamsRedirect, fetchPageTypeStream))
+
+	assert.Equal(t, "视频", selectedTabTitle(onRainyDaysVideos))
+	assert.False(t, pageMatchesRequestedType(onRainyDaysVideos, fetchPageTypeStream))
+
+	assert.Equal(t, "直播", selectedTabTitle(onRainyDaysStreams))
+	assert.True(t, pageMatchesRequestedType(onRainyDaysStreams, fetchPageTypeStream))
+}
+
+func TestExtractVideoInfos_LockupVideos(t *testing.T) {
+	root := loadDebugRoot(t, "1.videos.html")
+
+	channelName := extractChannelName(root)
+	assert.Equal(t, "肥宅MS", channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeVideo, "@otakumsvideo", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "@otakumsvideo", infos[0].ChannelId)
+		assert.Equal(t, "肥宅MS", infos[0].ChannelName)
+		assert.NotEmpty(t, infos[0].VideoId)
+		assert.NotEmpty(t, infos[0].VideoTitle)
+		assert.NotEmpty(t, infos[0].Cover)
+		assert.Equal(t, VideoType_Video, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Upload, infos[0].VideoStatus)
+		assert.Positive(t, infos[0].DurationSeconds)
+		assert.Positive(t, infos[0].PublishTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupStreams(t *testing.T) {
+	root := loadDebugRoot(t, "2.streams.html")
+
+	channelName := extractChannelName(root)
+	assert.Equal(t, "肥宅MS", channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeStream, "@otakumsvideo", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "@otakumsvideo", infos[0].ChannelId)
+		assert.Equal(t, "肥宅MS", infos[0].ChannelName)
+		assert.NotEmpty(t, infos[0].VideoId)
+		assert.NotEmpty(t, infos[0].VideoTitle)
+		assert.NotEmpty(t, infos[0].Cover)
+		assert.Equal(t, VideoType_Video, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Upload, infos[0].VideoStatus)
+	}
+}
+
+func TestExtractVideoInfos_LockupStreamsLiving(t *testing.T) {
+	root := loadDebugRoot(t, "4.streams_living.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeStream, "@sample_living", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "NqOpyKonuxs", infos[0].VideoId)
+		assert.Equal(t, "@sample_living", infos[0].ChannelId)
+		assert.Equal(t, channelName, infos[0].ChannelName)
+		assert.Equal(t, VideoType_Live, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Living, infos[0].VideoStatus)
+		assert.EqualValues(t, 0, infos[0].VideoTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupStreamsLiving_Haudailuen(t *testing.T) {
+	root := loadDebugRoot(t, "8.streams_living.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeStream, "@haudailuen", channelName)
+	var found *VideoInfo
+	for _, info := range infos {
+		if info.VideoId == "v8zL_22NlEU" {
+			found = info
+			break
+		}
+	}
+
+	if assert.NotNil(t, found) {
+		assert.Equal(t, VideoType_Live, found.VideoType)
+		assert.Equal(t, VideoStatus_Living, found.VideoStatus)
+		assert.EqualValues(t, 0, found.VideoTimestamp)
+		assert.EqualValues(t, 0, found.PublishTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupStreamsLiving_OnRainyDays_AllTenLives(t *testing.T) {
+	root := loadDebugRoot(t, "11.streams_@onrainydays500.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeStream, "@onrainydays500", channelName)
+	liveIDs := make(map[string]bool)
+	for _, info := range infos {
+		if info != nil && info.IsLiving() {
+			liveIDs[info.VideoId] = true
+		}
+	}
+
+	expected := []string{
+		"OKGUpUbswmg",
+		"C8X-OH6w47Y",
+		"T3Nmp1FgQVk",
+		"3fOLhGDvwyM",
+		"Qa_rRecN2P4",
+		"RjIAFwJgKIQ",
+		"HXvFSwm-ITo",
+		"BMYpffyq0fc",
+		"GFOzJ2rJr4M",
+		"uQKFoiifkQw",
+	}
+
+	assert.Len(t, liveIDs, len(expected))
+	for _, id := range expected {
+		assert.Truef(t, liveIDs[id], "expected live id %s", id)
+	}
+}
+
+func TestExtractVideoInfos_Videos_GamerSecretHololiveTitlesAreNotLive(t *testing.T) {
+	root := loadDebugRoot(t, "9.videos_@GamerSecret.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeVideo, "@GamerSecret", channelName)
+	targets := map[string]*VideoInfo{}
+	for _, info := range infos {
+		if info == nil {
+			continue
+		}
+		if info.VideoId == "h5N2LBdXn_w" || info.VideoId == "cXhHVpkD9A8" {
+			targets[info.VideoId] = info
+		}
+	}
+
+	if assert.Len(t, targets, 2) {
+		for id, info := range targets {
+			assert.Equalf(t, VideoType_Video, info.VideoType, "video %s should not be classified as live", id)
+			assert.Equalf(t, VideoStatus_Upload, info.VideoStatus, "video %s should stay upload", id)
+			assert.Positivef(t, info.PublishTimestamp, "video %s should retain publish timestamp", id)
+			assert.Positivef(t, info.DurationSeconds, "video %s should retain duration", id)
+		}
+	}
+}
+
+func TestMergeVideoInfos_HaudailuenLiveWinsAcrossPages(t *testing.T) {
+	videoRoot := loadDebugRoot(t, "7.videos_living.html")
+	streamRoot := loadDebugRoot(t, "8.streams_living.html")
+
+	channelName := extractChannelName(streamRoot)
+	if channelName == "" {
+		channelName = extractChannelName(videoRoot)
+	}
+	assert.NotEmpty(t, channelName)
+
+	infos := append(
+		extractVideoInfos(videoRoot, fetchPageTypeVideo, "@haudailuen", channelName),
+		extractVideoInfos(streamRoot, fetchPageTypeStream, "@haudailuen", channelName)...,
+	)
+	infos = mergeVideoInfos(infos)
+
+	var expected *VideoInfo
+	for _, info := range extractVideoInfos(streamRoot, fetchPageTypeStream, "@haudailuen", channelName) {
+		if info.VideoId == "v8zL_22NlEU" && !info.HeaderSummary {
+			expected = info
+			break
+		}
+	}
+
+	var found *VideoInfo
+	for _, info := range infos {
+		if info.VideoId == "v8zL_22NlEU" {
+			found = info
+			break
+		}
+	}
+
+	if assert.NotNil(t, found) {
+		if assert.NotNil(t, expected) {
+			assert.Equal(t, expected.VideoTitle, found.VideoTitle)
+			assert.Equal(t, expected.Cover, found.Cover)
+		}
+		assert.Equal(t, VideoType_Live, found.VideoType)
+		assert.Equal(t, VideoStatus_Living, found.VideoStatus)
+		assert.False(t, found.HeaderSummary)
+	}
+}
+
+func TestExtractVideoInfos_VideosHeaderLiving_Haudailuen(t *testing.T) {
+	root := loadDebugRoot(t, "7.videos_living.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeVideo, "@haudailuen", channelName)
+	var found *VideoInfo
+	for _, info := range infos {
+		if info.VideoId == "v8zL_22NlEU" {
+			found = info
+			break
+		}
+	}
+
+	if assert.NotNil(t, found) {
+		assert.Equal(t, VideoType_Live, found.VideoType)
+		assert.Equal(t, VideoStatus_Living, found.VideoStatus)
+		assert.NotEmpty(t, found.VideoTitle)
+	}
+}
+
+func TestParseLockupVideoInfo_StreamReplayWithLiveBadge(t *testing.T) {
+	root, err := gabs.ParseJSON([]byte(`{
+		"contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+		"contentId": "replay123",
+		"rendererContext": {
+			"accessibilityContext": {
+				"label": "Replay Example 12:19"
+			}
+		},
+		"metadata": {
+			"lockupMetadataViewModel": {
+				"title": {
+					"content": "Replay Example"
+				},
+				"metadata": {
+					"contentMetadataViewModel": {
+						"metadataRows": [
+							{
+								"metadataParts": [
+									{
+										"text": {
+											"content": "1,234 views"
+										}
+									},
+									{
+										"text": {
+											"content": "Streamed 2 days ago"
+										}
+									}
+								]
+							}
+						]
+					}
+				}
+			}
+		},
+		"contentImage": {
+			"thumbnailViewModel": {
+				"image": {
+					"sources": [
+						{
+							"url": "https://example.com/replay.jpg"
+						}
+					]
+				},
+				"overlays": [
+					{
+						"thumbnailBottomOverlayViewModel": {
+							"badges": [
+								{
+									"thumbnailBadgeViewModel": {
+										"text": "LIVE",
+										"badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
+									}
+								},
+								{
+									"thumbnailBadgeViewModel": {
+										"text": "12:19",
+										"badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT",
+										"rendererContext": {
+											"accessibilityContext": {
+												"label": "12分钟19秒钟"
+											}
+										}
+									}
+								}
+							]
+						}
+					}
+				]
+			}
+		}
+	}`))
+	assert.NoError(t, err)
+
+	info := parseLockupVideoInfo(root, fetchPageTypeStream, "@sample_replay", "Sample Replay")
+	if assert.NotNil(t, info) {
+		assert.Equal(t, VideoType_Video, info.VideoType)
+		assert.Equal(t, VideoStatus_Upload, info.VideoStatus)
+		assert.Positive(t, info.DurationSeconds)
+		assert.Positive(t, info.PublishTimestamp)
+	}
+}
+
+func TestParseLockupVideoInfo_StreamLiveWithoutDuration(t *testing.T) {
+	root, err := gabs.ParseJSON([]byte(`{
+		"contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+		"contentId": "live123",
+		"rendererContext": {
+			"accessibilityContext": {
+				"label": "Live Example"
+			}
+		},
+		"metadata": {
+			"lockupMetadataViewModel": {
+				"title": {
+					"content": "Live Example"
+				},
+				"metadata": {
+					"contentMetadataViewModel": {
+						"metadataRows": [
+							{
+								"metadataParts": [
+									{
+										"text": {
+											"content": "1,234 watching"
+										}
+									}
+								]
+							}
+						]
+					}
+				}
+			}
+		},
+		"contentImage": {
+			"thumbnailViewModel": {
+				"image": {
+					"sources": [
+						{
+							"url": "https://example.com/live.jpg"
+						}
+					]
+				},
+				"overlays": [
+					{
+						"thumbnailBottomOverlayViewModel": {
+							"badges": [
+								{
+									"thumbnailBadgeViewModel": {
+										"text": "LIVE",
+										"badgeStyle": "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
+									}
+								}
+							]
+						}
+					}
+				]
+			}
+		}
+	}`))
+	assert.NoError(t, err)
+
+	info := parseLockupVideoInfo(root, fetchPageTypeStream, "@sample_live", "Sample Live")
+	if assert.NotNil(t, info) {
+		assert.Equal(t, VideoType_Live, info.VideoType)
+		assert.Equal(t, VideoStatus_Living, info.VideoStatus)
+		assert.EqualValues(t, 0, info.DurationSeconds)
+		assert.EqualValues(t, 0, info.PublishTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupVideosLivingPageUploads(t *testing.T) {
+	root := loadDebugRoot(t, "3.videos_living.html")
+
+	channelName := extractChannelName(root)
+	assert.Equal(t, "OLED Premium", channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeVideo, "@sample_video_living", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "_o4Uuvvjqxw", infos[0].VideoId)
+		assert.Equal(t, "@sample_video_living", infos[0].ChannelId)
+		assert.Equal(t, channelName, infos[0].ChannelName)
+		assert.Equal(t, VideoType_Video, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Upload, infos[0].VideoStatus)
+		assert.EqualValues(t, 0, infos[0].VideoTimestamp)
+		assert.Positive(t, infos[0].DurationSeconds)
+		assert.Positive(t, infos[0].PublishTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupStreamsComing(t *testing.T) {
+	root := loadDebugRoot(t, "6.streams_coming.html")
+
+	channelName := extractChannelName(root)
+	assert.NotEmpty(t, channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeStream, "@sample_coming", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "64gve2YrBAw", infos[0].VideoId)
+		assert.Equal(t, "@sample_coming", infos[0].ChannelId)
+		assert.Equal(t, channelName, infos[0].ChannelName)
+		assert.Equal(t, VideoType_FirstLive, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Waiting, infos[0].VideoStatus)
+		assert.Equal(t, time.Date(2027, 5, 1, 23, 0, 0, 0, time.Local).Unix(), infos[0].VideoTimestamp)
+	}
+}
+
+func TestExtractVideoInfos_LockupVideosComingPageUploads(t *testing.T) {
+	root := loadDebugRoot(t, "5.videos_coming.html")
+
+	channelName := extractChannelName(root)
+	assert.Equal(t, "YuuRi Channel", channelName)
+
+	infos := extractVideoInfos(root, fetchPageTypeVideo, "@sample_video_coming", channelName)
+	if assert.NotEmpty(t, infos) {
+		assert.Equal(t, "7yf8CTTrXm8", infos[0].VideoId)
+		assert.Equal(t, "@sample_video_coming", infos[0].ChannelId)
+		assert.Equal(t, channelName, infos[0].ChannelName)
+		assert.Equal(t, VideoType_Video, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Upload, infos[0].VideoStatus)
+		assert.EqualValues(t, 0, infos[0].VideoTimestamp)
+		assert.Positive(t, infos[0].DurationSeconds)
+		assert.Positive(t, infos[0].PublishTimestamp)
+	}
+}
+
+func TestMergeVideoInfos_PreferLiveTimestamp(t *testing.T) {
+	infos := mergeVideoInfos([]*VideoInfo{
+		{
+			UserInfo: UserInfo{
+				ChannelId:   "@sample",
+				ChannelName: "Sample",
+			},
+			VideoId:          "dup",
+			VideoTitle:       "same video",
+			Cover:            "cover-a",
+			VideoType:        VideoType_Video,
+			VideoStatus:      VideoStatus_Upload,
+			VideoTimestamp:   0,
+			PublishTimestamp: 1790000000,
+			DurationSeconds:  242,
+		},
+		{
+			UserInfo: UserInfo{
+				ChannelId:   "@sample",
+				ChannelName: "Sample",
+			},
+			VideoId:        "dup",
+			VideoTitle:     "same video",
+			Cover:          "cover-b",
+			VideoType:      VideoType_FirstLive,
+			VideoStatus:    VideoStatus_Waiting,
+			VideoTimestamp: 1798642800,
+		},
+	})
+
+	if assert.Len(t, infos, 1) {
+		assert.Equal(t, "dup", infos[0].VideoId)
+		assert.Equal(t, VideoType_FirstLive, infos[0].VideoType)
+		assert.Equal(t, VideoStatus_Waiting, infos[0].VideoStatus)
+		assert.EqualValues(t, 1798642800, infos[0].VideoTimestamp)
+		assert.EqualValues(t, 1790000000, infos[0].PublishTimestamp)
+		assert.EqualValues(t, 242, infos[0].DurationSeconds)
+		assert.NotEmpty(t, infos[0].Cover)
+	}
+}
+
+func TestParseDurationSeconds(t *testing.T) {
+	assert.EqualValues(t, 147, parseDurationSeconds([]string{"2:27"}))
+	assert.EqualValues(t, 11585, parseDurationSeconds([]string{"3:13:05"}))
+	assert.EqualValues(t, 11580, parseDurationSeconds([]string{"3小时13分钟"}))
+	assert.EqualValues(t, 242, parseDurationSeconds([]string{"4分钟2秒钟"}))
+}
+
+func TestParseRelativeTimestamp(t *testing.T) {
+	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
+
+	assert.Equal(t, now.AddDate(0, -2, 0).Unix(), parseRelativeTimestamp("2个月前", now))
+	assert.Equal(t, now.Add(-6*time.Hour).Unix(), parseRelativeTimestamp("直播于 6 小时前", now))
+	assert.Equal(t, now.AddDate(0, 0, -3).Unix(), parseRelativeTimestamp("Streamed 3 days ago", now))
+	assert.Equal(t, now.AddDate(0, 0, -7).Unix(), parseRelativeTimestamp("1週間前", now))
+}
+
+func TestExtractShortsTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "tag separated by space-hash",
+			in:   "忍得住这种酥麻感吗？♡ #shorts #asmr, 7,690次观看 - 播放 Shorts 短视频",
+			want: "忍得住这种酥麻感吗？♡",
+		},
+		{
+			name: "comma fallback when no tag",
+			in:   "Hello, world! 短视频",
+			want: "Hello",
+		},
+		{
+			name: "no separator returns the whole string",
+			in:   "just a title",
+			want: "just a title",
+		},
+		{
+			name: "empty input",
+			in:   "",
+			want: "",
+		},
+		{
+			// No separator at all + length way over the cap. The function should
+			// fall back to a hard-truncated title so a pathological accessibilityText
+			// can't blow up the renderer downstream.
+			name: "pathological long input is truncated",
+			in:   strings.Repeat("a", 500),
+			want:  strings.Repeat("a", 200) + "…",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractShortsTitle(tt.in))
+		})
+	}
+}
+
+func TestParseShortsLockupVideoInfo_TitleAndType(t *testing.T) {
+	json := `{
+		"accessibilityText": "今天的萌宠合集 #shorts #pets, 1,234次观看",
+		"onTap": {
+			"innertubeCommand": {
+				"reelWatchEndpoint": {
+					"videoId": "abc123",
+					"thumbnail": {
+						"thumbnails": [
+							{"url": "https://example.com/shorts-cover.jpg"}
+						]
+					}
+				}
+			}
+		}
+	}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+
+	before := time.Now().Unix()
+	info := parseShortsLockupVideoInfo(root, "UC_X", "Channel X")
+	after := time.Now().Unix()
+
+	assert.NotNil(t, info)
+	assert.Equal(t, "abc123", info.VideoId)
+	assert.Equal(t, VideoType_Shorts, info.VideoType)
+	assert.Equal(t, VideoStatus_Upload, info.VideoStatus)
+	assert.Equal(t, "Channel X", info.ChannelName)
+	assert.Equal(t, "https://example.com/shorts-cover.jpg", info.Cover)
+	// accessibilityText has no relative time and no publishedTimeText, so the
+	// fallback should pin PublishTimestamp to "now" (not 0).
+	assert.GreaterOrEqual(t, info.PublishTimestamp, before)
+	assert.LessOrEqual(t, info.PublishTimestamp, after)
+	// And the title should be cut at the first " #" tag.
+	assert.Equal(t, "今天的萌宠合集", info.VideoTitle)
+}
+
+func TestParseShortsLockupVideoInfo_PublishedTimeTextHonored(t *testing.T) {
+	// When publishedTimeText carries a parseable relative time, that
+	// should win over the "now" fallback.
+	json := `{
+		"accessibilityText": "title #shorts",
+		"publishedTimeText": {"simpleText": "2天前"},
+		"onTap": {
+			"innertubeCommand": {
+				"reelWatchEndpoint": {
+					"videoId": "vid-with-time",
+					"thumbnail": {"thumbnails": [{"url": "https://x/c.jpg"}]}
+				}
+			}
+		}
+	}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+
+	// We can't override time.Now from outside, so just assert the returned
+	// timestamp is recent (well within a few days) and definitely not 0.
+	info := parseShortsLockupVideoInfo(root, "UC", "C")
+	assert.NotNil(t, info)
+	assert.Greater(t, info.PublishTimestamp, int64(0))
+	assert.Less(t, time.Now().Unix()-info.PublishTimestamp, int64(60*60*24*30))
+}
+
+func TestParseShortsLockupVideoInfo_MissingVideoIdReturnsNil(t *testing.T) {
+	json := `{"accessibilityText": "x", "onTap": {"innertubeCommand": {"reelWatchEndpoint": {}}}}`
+	root, err := gabs.ParseJSON([]byte(json))
+	assert.Nil(t, err)
+	assert.Nil(t, parseShortsLockupVideoInfo(root, "UC", "C"))
+}
+
+func TestPageMatchesRequestedType_ShortsTab(t *testing.T) {
+	// selectedTabTitle expects a ytdc-watch-card or similar; we feed it a
+	// pageHeaderRenderer with the tab title baked in.
+	withTab := func(title string) *gabs.Container {
+		json := `{
+			"contents": {
+				"twoColumnBrowseResultsRenderer": {
+					"tabs": [
+						{"tabRenderer": {"title": "` + title + `", "selected": true}}
+					]
+				}
+			}
+		}`
+		c, _ := gabs.ParseJSON([]byte(json))
+		return c
+	}
+	assert.True(t, pageMatchesRequestedType(withTab("Shorts"), fetchPageTypeShorts))
+	assert.True(t, pageMatchesRequestedType(withTab("Shorts 短视频"), fetchPageTypeShorts))
+	assert.False(t, pageMatchesRequestedType(withTab("Videos 视频"), fetchPageTypeShorts))
+	assert.False(t, pageMatchesRequestedType(withTab(""), fetchPageTypeShorts))
 }

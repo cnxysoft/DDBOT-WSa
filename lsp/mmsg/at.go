@@ -2,45 +2,49 @@ package mmsg
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"strconv"
 )
 
 type AtElement struct {
-	*message.AtElement
+	Target  int64
+	Display string
 }
 
-func (a *AtElement) Type() message.ElementType {
+func (a *AtElement) Type() adapter.ElementType {
 	return At
 }
 
-func (a *AtElement) PackToElement(target Target) message.IMessageElement {
-	if a == nil || a.AtElement == nil {
+func (a *AtElement) ToSendingMessage() *adapter.SendingMessage {
+	return &adapter.SendingMessage{Elements: []adapter.IMessageElement{a}}
+}
+
+func (a *AtElement) PackToElement(target Target) adapter.IMessageElement {
+	if a == nil {
 		return nil
 	}
-	switch target.TargetType() {
-	case TargetGroup:
-		if a.Target == 0 {
-			a.QQ = "all"
-			a.Display = "@全体成员"
-		} else {
-			a.QQ = strconv.FormatInt(a.Target, 10)
-			if a.Display == "" {
-				if gi := localutils.GetBot().FindGroup(target.TargetCode()); gi != nil {
-					if gmi := gi.FindMember(a.Target); gmi != nil {
-						a.Display = fmt.Sprintf("@%v", gmi.DisplayName())
-					}
+	s := &adapter.AtSegment{
+		Target:  a.Target,
+		Display: a.Display,
+	}
+	if a.Target == 0 {
+		if s.Display == "" {
+			s.Display = "@全体成员"
+		}
+	} else {
+		if s.Display == "" {
+			if gi := localutils.GetBot().FindGroup(target.TargetCode()); gi != nil {
+				if gmi := gi.FindMember(a.Target); gmi != nil {
+					s.Display = fmt.Sprintf("@%v", gmi.DisplayName())
 				}
 			}
-			if a.Display == "" {
-				a.Display = fmt.Sprintf("@%v", a.Target)
-			}
 		}
-		return a.AtElement
-	default:
-		return nil
+		if s.Display == "" {
+			s.Display = fmt.Sprintf("@%v", a.Target)
+		}
 	}
+	return s
 }
 
 func NewAt(target int64, display ...string) *AtElement {
@@ -49,9 +53,7 @@ func NewAt(target int64, display ...string) *AtElement {
 		dis = display[0]
 	}
 	return &AtElement{
-		AtElement: &message.AtElement{
-			Target:  target,
-			Display: dis,
-		},
+		Target:  target,
+		Display: dis,
 	}
 }

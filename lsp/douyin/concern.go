@@ -8,21 +8,19 @@ import (
 	"net/http/cookiejar"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
+	templUtils "github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"golang.org/x/sync/errgroup"
-
-	"github.com/Sora233/MiraiGo-Template/utils"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/eventbus"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -45,7 +43,7 @@ const (
 )
 
 var (
-	logger   = utils.GetModuleLogger(ConcernName)
+	logger   = templUtils.GetModuleLogger(ConcernName)
 	Cookie   *cookiejar.Jar
 	online   bool
 	BasePath = map[string]string{
@@ -86,17 +84,17 @@ func (c *StateManager) SetGroupCompactMarkIfNotExist(groupCode int64, compactKey
 		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
 }
 
-func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage) error {
-	tmp := &message.GroupMessage{
-		Id:        msg.Id,
+func (c *StateManager) SetNotifyMsg(notifyKey string, msg *adapter.GroupMessage) error {
+	tmp := &adapter.GroupMessage{
+		ID:        msg.ID,
 		GroupCode: msg.GroupCode,
 		Sender:    msg.Sender,
 		Time:      msg.Time,
-		Elements: localutils.MessageFilter(msg.Elements, func(e message.IMessageElement) bool {
-			return e.Type() == message.Text || e.Type() == message.Image
+		Elements: localutils.AdapterMessageFilter(msg.Elements, func(e adapter.IMessageElement) bool {
+			return e.Type() == adapter.ElementTypeText || e.Type() == adapter.ElementTypeImage
 		}),
 	}
-	value, err := localutils.SerializationGroupMsg(tmp)
+	value, err := localutils.SerializationAdapterGroupMsg(tmp)
 	if err != nil {
 		return err
 	}
@@ -104,12 +102,12 @@ func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage)
 		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
 }
 
-func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message.GroupMessage, error) {
+func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*adapter.GroupMessage, error) {
 	value, err := c.Get(c.NotifyMsgKey(groupCode, notifyKey))
 	if err != nil {
 		return nil, err
 	}
-	return localutils.DeserializationGroupMsg(value)
+	return localutils.DeserializationAdapterGroupMsg(value)
 }
 
 func (c *StateManager) MarkDynamicId(dynamic string) (bool, error) {
@@ -240,17 +238,17 @@ func (d *Concern) GroupWatchNotify(groupCode int64, mid string) {
 }
 
 func (d *Concern) removeUserInfo(id string) error {
-	_, err := d.Delete(d.UserInfoKey(id), buntdb.IgnoreNotFoundOpt())
+	_, err := d.Delete(d.UserInfoKey(id), localdb.IgnoreNotFoundOpt())
 	return err
 }
 
 func (d *Concern) removeCurrentLive(id string) error {
-	_, err := d.Delete(d.CurrentLiveKey(id), buntdb.IgnoreNotFoundOpt())
+	_, err := d.Delete(d.CurrentLiveKey(id), localdb.IgnoreNotFoundOpt())
 	return err
 }
 
 func (d *Concern) removeFresh(id string) error {
-	_, err := d.Delete(d.FreshKey(id), buntdb.IgnoreNotFoundOpt())
+	_, err := d.Delete(d.FreshKey(id), localdb.IgnoreNotFoundOpt())
 	return err
 }
 
@@ -351,6 +349,11 @@ func (d *Concern) fresh() concern.FreshFunc {
 			case <-ti.C:
 			case <-ctx.Done():
 				return
+			}
+			if cfg.IsPlatformDisabled(Site) {
+				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+				ti.Reset(interval)
+				continue
 			}
 			var start = time.Now()
 			var errGroup errgroup.Group

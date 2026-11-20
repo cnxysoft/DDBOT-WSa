@@ -1,0 +1,19 @@
+{{ if .is_video -}}
+{{ printf "小红书-%s 发布了新视频：\n" .name -}}
+{{ else -}}
+{{ printf "小红书-%s 发布了新图文：\n" .name -}}
+{{ end -}}
+{{ if ne .title "" -}}
+{{ printf "%s\n" .title -}}
+{{ end -}}
+{{ if and (ne .desc "") (ne .desc .title) -}}
+{{ printf "%s\n" .desc -}}
+{{ end -}}
+{{ if gt (len .pictures) 0 -}}
+{{ range .pictures -}}
+{{ pic . -}}
+{{ end -}}
+{{ else if ne .cover "" -}}
+{{ pic .cover -}}
+{{ end -}}
+{{ printf "%s" .url -}}

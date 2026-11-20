@@ -1,14 +1,14 @@
 package lsp
 
 import (
-	"github.com/Mrs4s/MiraiGo/client"
-	"github.com/Mrs4s/MiraiGo/message"
+	"sort"
+	"testing"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/buntdb"
-	"sort"
-	"testing"
 )
 
 func newStateManager(t *testing.T) *StateManager {
@@ -71,22 +71,22 @@ func TestStateManager_GetMessageImageUrl(t *testing.T) {
 	sm := newStateManager(t)
 	assert.NotNil(t, sm)
 
-	assert.Nil(t, sm.SaveMessageImageUrl(test.G1, test.MessageID1, []message.IMessageElement{}))
+	assert.Nil(t, sm.SaveMessageImageUrl(test.G1, test.MessageID1, []adapter.IMessageElement{}))
 	assert.Len(t, sm.GetMessageImageUrl(test.G1, test.MessageID1), 0)
 
-	assert.Nil(t, sm.SaveMessageImageUrl(test.G1, test.MessageID1, []message.IMessageElement{
-		&message.GroupImageElement{
-			Url: "image1",
-		},
-		&message.GroupImageElement{
-			Url: "image2",
-		},
-		&message.FriendImageElement{
-			Url: "image3",
-		},
+	assert.Nil(t, sm.SaveMessageImageUrl(test.G1, test.MessageID1, []adapter.IMessageElement{
+		&adapter.ImageSegment{Url: "image1"},
+		&adapter.ImageSegment{Url: "image2"},
+		&adapter.ImageSegment{Url: "image3"},
 	}))
 
 	assert.Len(t, sm.GetMessageImageUrl(test.G1, test.MessageID1), 3)
+
+	assert.Nil(t, sm.SaveMessageImageUrl(test.G1, test.MessageID2, []adapter.IMessageElement{
+		&adapter.ImageSegment{File: "file-image", Url: "url-image"},
+		&adapter.ImageSegment{File: "file-image-only"},
+	}))
+	assert.ElementsMatch(t, []string{"url-image", "file-image-only"}, sm.GetMessageImageUrl(test.G1, test.MessageID2))
 }
 
 func TestStateManager_GetCurrentMode(t *testing.T) {
@@ -147,7 +147,7 @@ func TestStateManager_GetNewFriendRequest(t *testing.T) {
 	_, err := sm.GetNewFriendRequest(0)
 	assert.NotNil(t, err)
 
-	var expected = []*client.NewFriendRequest{
+	var expected = []*adapter.NewFriendRequest{
 		{
 			RequestId:     test.ID1,
 			Message:       "test1",
@@ -204,7 +204,7 @@ func TestStateManager_GetGroupInvitedRequest(t *testing.T) {
 	_, err := sm.GetGroupInvitedRequest(0)
 	assert.NotNil(t, err)
 
-	var expected = []*client.GroupInvitedRequest{
+	var expected = []*adapter.GroupInvitedRequest{
 		{
 			RequestId:   test.ID1,
 			InvitorUin:  test.UID1,

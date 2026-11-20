@@ -40,3 +40,7 @@ func RandomUA(entry FakeUAEntry) string {
 	}
 	return l[rand.Intn(count)]
 }
+
+func DefaultUA() string {
+	return defaultUA
+}

@@ -2,21 +2,33 @@ package utils
 
 import (
 	"bytes"
-	"github.com/cnxysoft/DDBOT-WSa/internal/test"
-	"github.com/stretchr/testify/assert"
 	"image"
 	_ "image/draw"
 	_ "image/gif"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-var imageUrl = "https://user-images.githubusercontent.com/11474360/111737379-78fbe200-88ba-11eb-9e7e-ecc9f2440dd8.jpg"
+func imageTestURL(t *testing.T) string {
+	t.Helper()
+	var data bytes.Buffer
+	require.NoError(t, jpeg.Encode(&data, image.NewRGBA(image.Rect(0, 0, 1080, 2340)), nil))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(data.Bytes())
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
 
 func TestImageNormSize(t *testing.T) {
-	test.FakeImage(0)
-	b, err := ImageGet(imageUrl)
+	b, err := ImageGet(imageTestURL(t))
 	assert.Nil(t, err)
 	assert.NotEmpty(t, b)
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
@@ -33,6 +45,7 @@ func TestImageNormSize(t *testing.T) {
 }
 
 func TestImageGet(t *testing.T) {
+	imageUrl := imageTestURL(t)
 	_, err := ImageGetWithoutCache(imageUrl)
 	assert.Nil(t, err)
 	b, err := ImageGet(imageUrl)

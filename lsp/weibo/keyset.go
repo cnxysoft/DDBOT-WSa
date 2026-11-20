@@ -15,3 +15,12 @@ func (*extraKeySet) NewsInfoKey(keys ...interface{}) string {
 func (*extraKeySet) MarkMblogIdKey(keys ...interface{}) string {
 	return localdb.WeiboMarkMblogIdKey(keys...)
 }
+
+func (*extraKeySet) CookieAlertKey(keys ...interface{}) string {
+	return localdb.WeiboCookieAlertKey(keys...)
+}
+
+func (*extraKeySet) SUBExpiredAlertKey(keys ...interface{}) string {
+	return localdb.WeiboSUBExpiredAlertKey(keys...)
+}
+

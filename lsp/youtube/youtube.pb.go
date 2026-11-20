@@ -75,6 +75,7 @@ const (
 	VideoType_FirstLive VideoType = 0
 	VideoType_Live      VideoType = 1
 	VideoType_Video     VideoType = 2
+	VideoType_Shorts    VideoType = 3
 )
 
 // Enum value maps for VideoType.
@@ -83,11 +84,13 @@ var (
 		0: "FirstLive",
 		1: "Live",
 		2: "Video",
+		3: "Shorts",
 	}
 	VideoType_value = map[string]int32{
 		"FirstLive": 0,
 		"Live":      1,
 		"Video":     2,
+		"Shorts":    3,
 	}
 )
 

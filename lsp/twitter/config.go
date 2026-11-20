@@ -1,20 +1,20 @@
 package twitter
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 )
 
-// GroupConcernConfig 创建一个新结构，准备重写 FilterHook
+// GroupConcernConfig 在通用配置上扩展Twitter推送回调。
 type GroupConcernConfig struct {
 	concern.IConfig
 	concern *twitterConcern
 }
 
-// FilterHook 可以在这里自定义过滤逻辑
-func (g *GroupConcernConfig) FilterHook(concern.Notify) *concern.HookResult {
-	return concern.HookResultPass
+// FilterHook 保留通用关键词过滤；ConcernNewsNotify会直接提供模板动态文字，避免提前渲染消息。
+func (g *GroupConcernConfig) FilterHook(notify concern.Notify) *concern.HookResult {
+	return g.IConfig.FilterHook(notify)
 }
 
 // 还有更多方法可以重载
@@ -41,8 +41,8 @@ retry:
 	}
 }
 
-func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *message.GroupMessage) {
-	if msg == nil || msg.Id == -1 {
+func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *adapter.GroupMessage) {
+	if msg == nil || msg.ID == -1 {
 		return
 	}
 	notify := inotify.(*ConcernNewsNotify)

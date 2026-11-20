@@ -3,29 +3,36 @@ package msgstringer
 import (
 	"testing"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 )
 
-func TestMsgToString(t *testing.T) {
-	var m = []message.IMessageElement{
-		message.NewFace(1),
-		message.NewText("q"),
-		&message.GroupImageElement{},
-		&message.GroupImageElement{Flash: true},
-		&message.FriendImageElement{},
-		&message.FriendImageElement{Flash: true},
-		message.AtAll(),
-		&message.RedBagElement{},
-		&message.GroupFileElement{},
-		&message.FriendFileElement{},
-		&message.ShortVideoElement{},
-		&message.ForwardElement{},
-		&message.MusicShareElement{},
-		&message.LightAppElement{},
-		&message.ServiceElement{},
-		&message.VoiceElement{},
-		&message.ReplyElement{ReplySeq: 199},
+func TestAdapterMsgToString(t *testing.T) {
+	m := []adapter.IMessageElement{
+		&adapter.FaceSegment{Index: 1},
+		&adapter.TextSegment{Content: "q"},
+		&adapter.ImageSegment{},
+		&adapter.AtSegment{Target: 0},
+		&adapter.FileSegment{},
+		&adapter.VideoSegment{},
+		&adapter.ForwardSegment{},
+		&adapter.JsonSegment{},
+		&adapter.VoiceSegment{},
+		&adapter.ReplySegment{ReplySeq: 199},
 		nil,
 	}
-	MsgToString(m)
+	AdapterMsgToString(m)
+}
+
+func TestAdapterMsgToStringSkipsNilElements(t *testing.T) {
+	elements := []adapter.IMessageElement{
+		(*adapter.TextSegment)(nil),
+		&adapter.TextSegment{Content: "正文"},
+		(*adapter.ReplySegment)(nil),
+		(*adapter.ImageSegment)(nil),
+		&adapter.ReplySegment{ReplySeq: 42},
+		nil,
+	}
+	if got, want := AdapterMsgToString(elements), "正文[回复:42]"; got != want {
+		t.Fatalf("AdapterMsgToString() = %q, want %q", got, want)
+	}
 }

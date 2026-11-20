@@ -1,0 +1,332 @@
+{
+ "id_str": "1247387931641905159",
+ "type": "DYNAMIC_TYPE_LIVE_RCMD",
+ "basic": {
+  "rid_str": "728394705008403604",
+  "comment_type": 17,
+  "comment_id_str": "1247387931641905159",
+  "like_icon": {
+   "id": "0",
+   "start_url": "",
+   "action_url": "",
+   "end_url": ""
+  },
+  "in_audit": false,
+  "is_only_fans": false,
+  "editable": false,
+  "open_app_extra": "",
+  "jump_url": "",
+  "aigc": false
+ },
+ "visible": true,
+ "modules": {
+  "module_tag": null,
+  "module_author": {
+   "type": "AUTHOR_TYPE_NORMAL",
+   "avatar": {
+    "container_size": {
+     "width": 1.375,
+     "height": 1.375
+    },
+    "layers": [],
+    "fallback_layers": {
+     "group_id": "",
+     "layers": [
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 0.787,
+         "height": 0.787
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "AVATAR_LAYER": {
+          "config_type": 0
+         },
+         "GENERAL_CFG": {
+          "config_type": 1,
+          "general_config": {
+           "web_css_style": {
+            "borderRadius": "50%"
+           }
+          }
+         }
+        },
+        "is_critical": true,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 6,
+          "remote": {
+           "url": "https://i2.hdslb.com/bfs/face/91db180a8175da648188d2b7d2f37f4fba548dad.jpg",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      },
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 2,
+         "axis_x": 0.6875,
+         "axis_y": 0.6875
+        },
+        "size_spec": {
+         "width": 1.375,
+         "height": 1.375
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "PENDENT_LAYER": {
+          "config_type": 0
+         }
+        },
+        "is_critical": false,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 1,
+          "placeholder": 0,
+          "remote": {
+           "url": "https://i2.hdslb.com/bfs/garb/item/dc97ea72d358f2a5bb04076624d75f5cf8674131.png",
+           "bfs_style": "widget-layer-avatar"
+          }
+         }
+        }
+       }
+      },
+      {
+       "layer_id": "",
+       "visible": true,
+       "general_spec": {
+        "pos_spec": {
+         "coordinate_pos": 1,
+         "axis_x": 0.7560000000000001,
+         "axis_y": 0.7726666666666667
+        },
+        "size_spec": {
+         "width": 0.41666666666666663,
+         "height": 0.41666666666666663
+        },
+        "render_spec": {
+         "opacity": 1
+        }
+       },
+       "layer_config": {
+        "tags": {
+         "GENERAL_CFG": {
+          "config_type": 1,
+          "general_config": {
+           "web_css_style": {
+            "background-color": "var(--bg1)",
+            "border": "2px solid var(--bg1)",
+            "borderRadius": "50%",
+            "boxSizing": "border-box"
+           }
+          }
+         },
+         "ICON_LAYER": {
+          "config_type": 0
+         }
+        },
+        "is_critical": false,
+        "allow_over_paint": false,
+        "layer_mask": null
+       },
+       "resource": {
+        "res_type": 3,
+        "res_image": {
+         "image_src": {
+          "src_type": 2,
+          "placeholder": 0,
+          "local": 4
+         }
+        }
+       }
+      }
+     ],
+     "group_mask": null,
+     "is_critical_group": true
+    },
+    "mid": "174501086"
+   },
+   "face": "https://i2.hdslb.com/bfs/face/91db180a8175da648188d2b7d2f37f4fba548dad.jpg",
+   "face_nft": false,
+   "nft_info": null,
+   "name": "哔哩哔哩会员购",
+   "name_render": null,
+   "label": "",
+   "mid": 174501086,
+   "jump_url": "//space.bilibili.com/174501086/dynamic",
+   "following": 1,
+   "pub_ts": "1789268535",
+   "pub_time": "",
+   "pub_action": "直播了",
+   "pub_location_text": "",
+   "pendant": {
+    "pid": 4537,
+    "name": "不思议之旅",
+    "image": "https://i2.hdslb.com/bfs/garb/item/dc97ea72d358f2a5bb04076624d75f5cf8674131.png",
+    "expire": "0",
+    "image_enhance": "https://i2.hdslb.com/bfs/garb/item/dc97ea72d358f2a5bb04076624d75f5cf8674131.png",
+    "image_enhance_frame": "",
+    "n_pid": "4537"
+   },
+   "vip": {
+    "type": 2,
+    "status": 1,
+    "due_date": "1968249600000",
+    "vip_pay_type": 0,
+    "theme_type": 0,
+    "label": {
+     "path": "http://i0.hdslb.com/bfs/vip/label_annual.png",
+     "text": "十年大会员",
+     "label_theme": "ten_annual_vip",
+     "text_color": "#FFFFFF",
+     "bg_style": 1,
+     "bg_color": "#FB7299",
+     "border_color": "",
+     "use_img_label": true,
+     "img_label_uri_hans": "",
+     "img_label_uri_hant": "",
+     "img_label_uri_hans_static": "https://i0.hdslb.com/bfs/vip/adb599797dd171e2d3d6d012f448b49679258344.png",
+     "img_label_uri_hant_static": "https://i0.hdslb.com/bfs/activity-plat/static/20220614/e369244d0b14644f5e1a06431e22a4d5/sGu57N6pgK.png"
+    },
+    "avatar_subscript": 1,
+    "nickname_color": "#FB7299",
+    "role": "7",
+    "avatar_subscript_url": "",
+    "tv_vip_status": 0,
+    "tv_vip_pay_type": 0,
+    "tv_due_date": "0",
+    "avatar_icon": {
+     "icon_type": 1,
+     "icon_resource": {
+      "type": 0,
+      "url": ""
+     }
+    }
+   },
+   "official_verify": {
+    "type": 1,
+    "desc": ""
+   },
+   "decorate": null,
+   "decoration_card": null,
+   "is_top": false,
+   "icon_badge": null,
+   "views_text": "",
+   "official": null,
+   "more": null,
+   "decorate_card": null
+  },
+  "module_more": {
+   "rcmd_text": "",
+   "three_point_items": [
+    {
+     "label": "取消关注",
+     "type": "THREE_POINT_FOLLOWING",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    },
+    {
+     "label": "举报",
+     "type": "THREE_POINT_REPORT",
+     "params": {},
+     "modal": null,
+     "jump_url": ""
+    }
+   ]
+  },
+  "module_dispute": null,
+  "module_dynamic": {
+   "topic": null,
+   "desc": null,
+   "major": {
+    "type": "MAJOR_TYPE_LIVE_RCMD",
+    "none": null,
+    "blocked": null,
+    "archive": null,
+    "pgc": null,
+    "courses": null,
+    "draw": null,
+    "article": null,
+    "music": null,
+    "common": null,
+    "upower_common": null,
+    "live": null,
+    "live_rcmd": {
+     "reserve_type": 0,
+     "content": "{\"type\":1,\"live_play_info\":{\"room_id\":5055636,\"uid\":174501086,\"live_status\":1,\"room_type\":0,\"play_type\":0,\"title\":\"凡人众筹最后一天！即将结束！\",\"cover\":\"https://i0.hdslb.com/bfs/live/new_room_cover/c18efafe2c99142b68a72fccac0b6f824333497b.jpg\",\"online\":3299,\"area_id\":1078,\"area_name\":\"购物\",\"parent_area_id\":16,\"parent_area_name\":\"购物\",\"live_screen_type\":0,\"live_start_time\":1789268174,\"link\":\"//live.bilibili.com/5055636?live_from=85002\",\"live_id\":728394705008403604,\"pendants\":{\"list\":null},\"watched_show\":{\"switch\":true,\"num\":9290,\"text_small\":\"9290\",\"text_large\":\"9290人看过\",\"icon\":\"https://i0.hdslb.com/bfs/live/a725a9e61242ef44d764ac911691a7ce07f36c1d.png\",\"icon_location\":\"\",\"icon_web\":\"https://i0.hdslb.com/bfs/live/8d9d0f33ef8bf6f308742752d13dd0df731df19c.png\"},\"room_paid_type\":0},\"live_record_info\":null}"
+    },
+    "medialist": null,
+    "subscription": null,
+    "ugc_season": null,
+    "subscription_new": null,
+    "opus": null
+   },
+   "additional": null
+  },
+  "module_extend": null,
+  "module_stat": {
+   "forward": {
+    "status": false,
+    "count": 0,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "comment": {
+    "status": false,
+    "count": 0,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": true
+   },
+   "like": {
+    "status": false,
+    "count": 218,
+    "forbidden": false,
+    "disabled": false,
+    "silent": false,
+    "hidden": false
+   },
+   "coin": null,
+   "favorite": null
+  },
+  "module_interaction": null,
+  "module_share_info": null,
+  "module_fold": null
+ },
+ "orig": null
+}

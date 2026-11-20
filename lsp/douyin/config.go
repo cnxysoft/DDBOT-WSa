@@ -1,7 +1,7 @@
 package douyin
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 )
@@ -12,9 +12,9 @@ type GroupConcernConfig struct {
 	concern *Concern
 }
 
-// FilterHook 可以在这里自定义过滤逻辑
-func (g *GroupConcernConfig) FilterHook(concern.Notify) *concern.HookResult {
-	return concern.HookResultPass
+// FilterHook 委托给基础实现，支持关键字黑白名单过滤
+func (g *GroupConcernConfig) FilterHook(notify concern.Notify) *concern.HookResult {
+	return g.IConfig.FilterHook(notify)
 }
 
 // 还有更多方法可以重载
@@ -37,8 +37,8 @@ func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {
 	}
 }
 
-func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *message.GroupMessage) {
-	if inotify.Type() != News || msg == nil || msg.Id == -1 {
+func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *adapter.GroupMessage) {
+	if inotify.Type() != News || msg == nil || msg.ID == -1 {
 		return
 	}
 	notify := inotify.(*ConcernNewsNotify)

@@ -5,19 +5,19 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/cnxysoft/DDBOT-WSa/utils/blockCache"
 	"github.com/sirupsen/logrus"
 )
 
 const PathWebDynamicDetail = "/x/polymer/web-dynamic/v1/detail"
+const PathWebDynamicDetailPic = "/x/polymer/web-dynamic/v1/detail/pic"
 
 type NewsInfo struct {
 	UserInfo
@@ -52,6 +52,7 @@ type ConcernNewsNotify struct {
 	// 用于联合投稿和转发的时候防止多人同时推送
 	shouldCompact bool
 	compactKey    string
+	compactReady  bool
 	concern       *Concern
 }
 
@@ -293,11 +294,19 @@ func (notify *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	)
 	// 推送一条简化动态防止刷屏，主要是联合投稿和转发的时候
 	if notify.shouldCompact {
-		// 通过回复之前消息的方式简化推送
-		m = mmsg.NewMSG()
-		msg, _ := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
-		if msg != nil {
+		if !notify.compactReady {
+			// FilterHook may already have rendered and cached the full message.
+			// Prepare compact state and invalidate that cache before rendering again.
+			msg, err := notify.concern.GetNotifyMsg(notify.GroupCode, notify.compactKey)
 			card.orgMsg = msg
+			card.compactMiss = msg == nil
+			card.resetRenderCache()
+			notify.compactReady = true
+			if msg == nil {
+				log.WithField("group_code", notify.GroupCode).
+					WithField("compact_key", notify.compactKey).
+					Warnf("compact notify miss: reply msg not found, suppress origin content (err: %v)", err)
+			}
 		}
 		log.WithField("compact_key", notify.compactKey).Debug("compact notify")
 	}
@@ -354,101 +363,38 @@ func (notify *ConcernLiveNotify) GetGroupCode() int64 {
 	return notify.GroupCode
 }
 
-// combineImageCache 是给combineImage用的cache，其他地方禁止使用
-var combineImageCache = blockCache.NewBlockCache(5, 3)
-
-var mode = "auto"
-var modeSync sync.Once
-
-func shouldCombineImage(pic []*CardWithImage_Item_Picture) bool {
-	modeSync.Do(func() {
-		if config.GlobalConfig == nil {
-			return
-		}
-		switch config.GlobalConfig.GetString("bilibili.imageMergeMode") {
-		case "auto":
-			mode = "auto"
-		case "off", "false":
-			mode = "off"
-		case "only9":
-			mode = "only9"
-		default:
-			mode = "auto"
-		}
-	})
-	if mode == "off" {
-		return false
-	} else if mode == "only9" {
-		return len(pic) == 9
-	}
-	if len(pic) <= 3 {
-		return false
-	}
-	if len(pic) == 9 {
-		return true
-	}
-	// 有竖条形状的图
-	for _, i := range pic {
-		if i.ImgWidth > 250 && float64(i.ImgHeight) > 3*float64(i.ImgWidth) {
-			return true
-		}
-	}
-	// 有超过一半的近似矩形图片尺寸一样
-	var size = make(map[int64]int)
-	for _, i := range pic {
-		var gap float64
-		if i.ImgHeight < i.ImgWidth {
-			gap = float64(i.ImgHeight) / float64(i.ImgWidth)
-		} else {
-			gap = float64(i.ImgWidth) / float64(i.ImgHeight)
-		}
-		if gap >= 0.95 {
-			size[int64(i.ImgWidth)*int64(i.ImgHeight)] += 1
-		}
-	}
-	var sizeMerge bool
-	for _, count := range size {
-		if 2*count > len(pic) {
-			sizeMerge = true
-		}
-	}
-	if sizeMerge && (len(pic) == 4 || len(pic) == 6 || len(pic) == 9) {
-		return true
-	}
-	return false
-}
-
-func urlsMergeImage(urls []string) (result []byte, err error) {
-	cacheR := combineImageCache.WithCacheDo(strings.Join(urls, "+"), func() blockCache.ActionResult {
-		var imgBytes = make([][]byte, len(urls))
-		for index, url := range urls {
-			imgBytes[index], err = localutils.ImageGet(url)
-			if err != nil {
-				return blockCache.NewResultWrapper(nil, err)
-			}
-		}
-		return blockCache.NewResultWrapper(localutils.MergeImages(imgBytes))
-	})
-	if cacheR.Err() != nil {
-		return nil, cacheR.Err()
-	}
-	return cacheR.Result().([]byte), nil
-}
-
 type CacheCard struct {
 	*Card
-	GroupCode  int64
-	once       sync.Once
-	msgCache   *mmsg.MSG
-	dynamic    DynamicInfo
-	dynamicRaw map[string]interface{}
-	orgMsg     *message.GroupMessage
+	GroupCode   int64
+	prepareOnce sync.Once
+	renderOnce  sync.Once
+	msgCache    *mmsg.MSG
+	dynamic     DynamicInfo
+	dynamicRaw  map[string]interface{}
+	orgMsg      *adapter.GroupMessage
+	// compactMiss 表示本条动态需要紧凑推送（shouldCompact），
+	// 但没能从数据库取到可回复的原消息。
+	// 用于让模板区分「首次推送」与「应压缩却查不到原消息」两种 orgMsg == nil 的情况。
+	compactMiss bool
+}
+
+func imageGallerySizes(pictures []*CardWithImage_Item_Picture) map[string]localutils.ImageSize {
+	sizes := make(map[string]localutils.ImageSize, len(pictures))
+	for _, pic := range pictures {
+		sizes[pic.GetImgSrc()] = localutils.ImageSize{Width: int(pic.GetImgWidth()), Height: int(pic.GetImgHeight())}
+	}
+	return sizes
 }
 
 func NewCacheCard(card *Card) *CacheCard {
 	cacheCard := new(CacheCard)
 	cacheCard.Card = card
 	return cacheCard
+}
+
+func (c *CacheCard) resetRenderCache() {
+	c.renderOnce = sync.Once{}
+	c.msgCache = nil
 }
 
 type DynamicInfo struct {
@@ -480,9 +426,10 @@ type DynamicInfo struct {
 	} `json:"origin_user,omitempty"`
 
 	Image struct {
-		ImageUrls   []string `json:"image_urls,omitempty"`
-		Bytes       []byte   `json:"-"`
-		Description string   `json:"description,omitempty"`
+		ImageUrls   []string                        `json:"image_urls,omitempty"`
+		Sizes       map[string]localutils.ImageSize `json:"-"`
+		Bytes       []byte                          `json:"-"`
+		Description string                          `json:"description,omitempty"`
 	} `json:"image,omitempty"`
 
 	Text struct {
@@ -546,6 +493,17 @@ type DynamicInfo struct {
 	} `json:"default,omitempty"`
 
 	Addons []Addon `json:"addons,omitempty"`
+}
+
+func (d DynamicInfo) ImageMergeGallery() map[string]localutils.ImageSize {
+	return d.Image.Sizes
+}
+
+func (d DynamicInfo) ImageMergeURLs() []string { return d.Image.ImageUrls }
+
+func (d DynamicInfo) WithMergedImage(data []byte) interface{} {
+	d.Image.Bytes = data
+	return d
 }
 
 type Addon struct {
@@ -613,12 +571,16 @@ type DynamicDetail struct {
 		} `json:"decoration_card,omitempty"`
 	} `json:"author,omitempty"`
 	Reserve struct {
-		Title string `json:"title"`
-		Desc1 string `json:"desc1"`
-		Desc2 string `json:"desc2"`
-		Desc3 string `json:"desc3"`
+		Title   string `json:"title"`
+		Desc1   string `json:"desc1"`
+		Desc2   string `json:"desc2"`
+		Desc3   string `json:"desc3"`
+		SType   int    `json:"stype"` // 1=视频预约, 2=直播预约
+		JumpUrl string `json:"jump_url"`
+		State   int    `json:"state"` // 0=进行中, 1=直播中/已发布, 2=已结束
 	} `json:"reserve,omitempty"`
-	PGC struct {
+	Vote *VoteInfo `json:"vote,omitempty"`
+	PGC  struct {
 		Type     string `json:"type"`
 		Title    string `json:"title"`
 		CoverUrl string `json:"cover_url"`
@@ -658,6 +620,43 @@ type DynamicDetail struct {
 	Content   string `json:"content"`
 	// 表情包列表
 	Emojis []Emoji `json:"emojis,omitempty"`
+	// desc.rich_text_nodes 中 VIEW_PICTURE 节点的图片
+	DescViewPictures []DescViewPictures `json:"desc_view_pictures,omitempty"`
+	// desc.rich_text_nodes 中链接节点的引用（CV/BV/WEB 类型）
+	CVCards []CVCard `json:"cv_cards,omitempty"`
+}
+
+// CVCard desc.rich_text_nodes 中链接节点的引用信息（CV/BV/WEB 类型）
+type CVCard struct {
+	LinkType string `json:"link_type"` // 链接类型：RICH_TEXT_NODE_TYPE_CV, RICH_TEXT_NODE_TYPE_BV, RICH_TEXT_NODE_TYPE_WEB
+	JumpUrl  string `json:"jump_url"`  // 跳转链接
+	OrigText string `json:"orig_text"` // 原始文本
+	Rid      string `json:"rid"`       // 资源 ID（CV 为专栏 ID，BV 为视频 BV 号，WEB 可能为空）
+	Text     string `json:"text"`      // 显示文本
+	// Style 仅 WEB 类型有
+	Style *RichTextLinkStyle `json:"style,omitempty"`
+}
+
+// RichTextLinkStyle 链接样式（仅 WEB 类型使用）
+type RichTextLinkStyle struct {
+	FontLevel string `json:"font_level"` // 字体级别
+	FontSize  int    `json:"font_size"`  // 字体大小
+}
+
+// DescViewPictures desc.rich_text_nodes 中 VIEW_PICTURE 节点的图片信息
+type DescViewPictures struct {
+	JumpUrl string    `json:"jump_url"`
+	Rid     string    `json:"rid"`
+	Text    string    `json:"text"`
+	Pics    []PicInfo `json:"pics"`
+}
+
+// PicInfo VIEW_PICTURE 节点中的单张图片信息
+type PicInfo struct {
+	Height int    `json:"height"`
+	Size   int    `json:"size"`
+	Src    string `json:"src"`
+	Width  int    `json:"width"`
 }
 
 // Emoji 表情包结构
@@ -668,6 +667,29 @@ type Emoji struct {
 	JumpUrl   string `json:"jump_url"`
 	OrigText  string `json:"orig_text"`
 	PackageId int64  `json:"package_id"`
+}
+
+// VoteInfo 投票信息
+type VoteInfo struct {
+	VoteId    int64      `json:"vote_id"`
+	Title     string     `json:"title"`
+	Desc      string     `json:"desc"`
+	JoinNum   int        `json:"join_num"`
+	ChoiceCnt int        `json:"choice_cnt"`
+	EndTime   int64      `json:"end_time"`
+	Status    int        `json:"status"`
+	Button    VoteButton `json:"button"`
+}
+
+// VoteButton 投票按钮
+type VoteButton struct {
+	Type      int           `json:"type"`
+	JumpStyle VoteJumpStyle `json:"jump_style"`
+}
+
+// VoteJumpStyle 跳转样式
+type VoteJumpStyle struct {
+	Text string `json:"text"`
 }
 
 func (c *CacheCard) prepare() {
@@ -727,19 +749,7 @@ func (c *CacheCard) prepare() {
 				urls[index] = pic.GetImgSrc()
 			}
 			c.dynamic.Image.ImageUrls = urls
-			// 多图合一
-			if shouldCombineImage(origin.GetItem().GetPictures()) {
-				var urls = make([]string, len(origin.GetItem().GetPictures()))
-				for index, pic := range origin.GetItem().GetPictures() {
-					urls[index] = pic.GetImgSrc()
-				}
-				resultByte, err := urlsMergeImage(urls)
-				if err != nil {
-					log.Errorf("urlsMergeImage failed %v", err)
-				} else {
-					c.dynamic.Image.Bytes = resultByte
-				}
-			}
+			c.dynamic.Image.Sizes = imageGallerySizes(origin.GetItem().GetPictures())
 		case DynamicDescType_TextOnly:
 			c.dynamic.Type = DynamicDescType_TextOnly
 			c.dynamic.Content = replaseDesc(cardOrigin.GetItem().GetContent(), detail.Content)
@@ -934,19 +944,7 @@ func (c *CacheCard) prepare() {
 			urls[index] = pic.GetImgSrc()
 		}
 		c.dynamic.Image.ImageUrls = urls
-		// 多图合一
-		if shouldCombineImage(cardImage.GetItem().GetPictures()) {
-			var urls = make([]string, len(cardImage.GetItem().GetPictures()))
-			for index, pic := range cardImage.GetItem().GetPictures() {
-				urls[index] = pic.GetImgSrc()
-			}
-			resultByte, err := urlsMergeImage(urls)
-			if err != nil {
-				log.Errorf("urlsMergeImage failed %v", err)
-			} else {
-				c.dynamic.Image.Bytes = resultByte
-			}
-		}
+		c.dynamic.Image.Sizes = imageGallerySizes(cardImage.GetItem().GetPictures())
 	case DynamicDescType_TextOnly:
 		c.dynamic.Type = DynamicDescType_TextOnly
 		cardText, err := card.GetCardTextOnly()
@@ -1135,21 +1133,21 @@ func (c *CacheCard) prepare() {
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {
-	c.once.Do(func() {
-		c.prepare()
+	c.prepareOnce.Do(c.prepare)
+	c.renderOnce.Do(func() {
 		var data = map[string]interface{}{
-			"dynamic":     c.dynamic,
-			"msg":         c.orgMsg,
-			"group_code":  c.GroupCode,
-			"parse_post":  config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
-			"dynamic_raw": c.dynamicRaw,
+			"dynamic":      c.dynamic,
+			"msg":          c.orgMsg,
+			"compact_miss": c.compactMiss,
+			"group_code":   c.GroupCode,
+			"parse_post":   config.GlobalConfig.GetBool("bilibili.autoParsePosts"),
+			"dynamic_raw":  c.dynamicRaw,
 		}
 		var err error
 		c.msgCache, err = template.LoadAndExec("notify.group.bilibili.news.tmpl", data)
 		if err != nil {
 			logger.Errorf("bilibili: NewsInfo LoadAndExec error %v", err)
 		}
-		return
 	})
 	return c.msgCache
 }
@@ -1189,6 +1187,194 @@ func SecAnalysis(id string) (result map[string]interface{}) {
 		return
 	}
 	return
+}
+
+// parseEmojisFromRichTextNodes 解析 rich_text_nodes 中的表情包
+func parseEmojisFromRichTextNodes(richTextNodes []interface{}) []Emoji {
+	var emojis []Emoji
+	for _, node := range richTextNodes {
+		nodeMap, ok := node.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeType, ok := nodeMap["type"].(string)
+		if !ok || nodeType != "RICH_TEXT_NODE_TYPE_EMOJI" {
+			continue
+		}
+		emojiData, ok := nodeMap["emoji"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var e Emoji
+		if iconUrl, ok := emojiData["icon_url"].(string); ok {
+			e.IconUrl = iconUrl
+		}
+		if text, ok := emojiData["text"].(string); ok {
+			e.Text = text
+		}
+		if origText, ok := emojiData["orig_text"].(string); ok {
+			e.OrigText = origText
+		}
+		if jumpUrl, ok := emojiData["jump_url"].(string); ok {
+			e.JumpUrl = jumpUrl
+		}
+		if id, ok := emojiData["id"].(float64); ok {
+			e.Id = int64(id)
+		}
+		if packageId, ok := emojiData["package_id"].(float64); ok {
+			e.PackageId = int64(packageId)
+		}
+		emojis = append(emojis, e)
+	}
+	return emojis
+}
+
+// fetchViewPicsByRid 通过 rid 请求 API 获取 VIEW_PICTURE 节点的图片列表
+func fetchViewPicsByRid(rid string) []PicInfo {
+	url := BPath(PathWebDynamicDetailPic)
+	params := map[string]string{"id": rid}
+	var opts = []requests.Option{
+		requests.AddUAOption(),
+		requests.ProxyOption(proxy_pool.PreferNone),
+		requests.RetryOption(3),
+	}
+	opts = append(opts, GetVerifyOption()...)
+	var resp bytes.Buffer
+	if err := requests.Get(url, params, &resp, opts...); err != nil {
+		logger.WithField("rid", rid).Errorf("fetchViewPicsByRid get failed %v", err)
+		return nil
+	}
+	var raw struct {
+		Code int `json:"code"`
+		Data []struct {
+			Height float64 `json:"height"`
+			Size   float64 `json:"size"`
+			Src    string  `json:"src"`
+			Width  float64 `json:"width"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Bytes(), &raw); err != nil {
+		logger.WithField("rid", rid).Errorf("fetchViewPicsByRid unmarshal failed %v", err)
+		return nil
+	}
+	if raw.Code != 0 {
+		logger.WithField("rid", rid).Warnf("fetchViewPicsByRid code: %v", raw.Code)
+		return nil
+	}
+	pics := make([]PicInfo, 0, len(raw.Data))
+	for _, d := range raw.Data {
+		pics = append(pics, PicInfo{
+			Height: int(d.Height),
+			Size:   int(d.Size),
+			Src:    d.Src,
+			Width:  int(d.Width),
+		})
+	}
+	return pics
+}
+
+// parseViewPicturesFromRichTextNodes 解析 rich_text_nodes 中的 VIEW_PICTURE 节点图片
+func parseViewPicturesFromRichTextNodes(richTextNodes []interface{}) []DescViewPictures {
+	var viewPictures []DescViewPictures
+	for _, node := range richTextNodes {
+		nodeMap, ok := node.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeType, ok := nodeMap["type"].(string)
+		if !ok || nodeType != "RICH_TEXT_NODE_TYPE_VIEW_PICTURE" {
+			continue
+		}
+
+		var vp DescViewPictures
+		if jumpUrl, ok := nodeMap["jump_url"].(string); ok {
+			vp.JumpUrl = jumpUrl
+		}
+		if rid, ok := nodeMap["rid"].(string); ok {
+			vp.Rid = rid
+		}
+		if text, ok := nodeMap["text"].(string); ok {
+			vp.Text = text
+		}
+
+		if pics, ok := nodeMap["pics"].([]interface{}); ok {
+			for _, pic := range pics {
+				picMap, ok := pic.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				var p PicInfo
+				if height, ok := picMap["height"].(float64); ok {
+					p.Height = int(height)
+				}
+				if size, ok := picMap["size"].(float64); ok {
+					p.Size = int(size)
+				}
+				if src, ok := picMap["src"].(string); ok {
+					p.Src = src
+				}
+				if width, ok := picMap["width"].(float64); ok {
+					p.Width = int(width)
+				}
+				vp.Pics = append(vp.Pics, p)
+			}
+		}
+
+		// 节点本身无 pics 时通过 rid 二次请求 API 获取图片
+		if len(vp.Pics) == 0 && vp.Rid != "" {
+			vp.Pics = fetchViewPicsByRid(vp.Rid)
+		}
+
+		viewPictures = append(viewPictures, vp)
+	}
+	return viewPictures
+}
+
+// parseCVCardsFromRichTextNodes 解析 rich_text_nodes 中的链接节点（CV/BV/WEB 类型）
+func parseCVCardsFromRichTextNodes(richTextNodes []interface{}) []CVCard {
+	var cvCards []CVCard
+	for _, node := range richTextNodes {
+		nodeMap, ok := node.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodeType, ok := nodeMap["type"].(string)
+		if !ok {
+			continue
+		}
+		// 仅处理 CV、BV、WEB 类型
+		if nodeType != "RICH_TEXT_NODE_TYPE_CV" &&
+			nodeType != "RICH_TEXT_NODE_TYPE_BV" &&
+			nodeType != "RICH_TEXT_NODE_TYPE_WEB" {
+			continue
+		}
+		var cv CVCard
+		cv.LinkType = nodeType
+		if jumpUrl, ok := nodeMap["jump_url"].(string); ok {
+			cv.JumpUrl = jumpUrl
+		}
+		if origText, ok := nodeMap["orig_text"].(string); ok {
+			cv.OrigText = origText
+		}
+		if rid, ok := nodeMap["rid"].(string); ok {
+			cv.Rid = rid
+		}
+		if text, ok := nodeMap["text"].(string); ok {
+			cv.Text = text
+		}
+		// 解析 style（仅 WEB 类型有）
+		if style, ok := nodeMap["style"].(map[string]interface{}); ok {
+			cv.Style = &RichTextLinkStyle{}
+			if fontLevel, ok := style["font_level"].(string); ok {
+				cv.Style.FontLevel = fontLevel
+			}
+			if fontSize, ok := style["font_size"].(float64); ok {
+				cv.Style.FontSize = int(fontSize)
+			}
+		}
+		cvCards = append(cvCards, cv)
+	}
+	return cvCards
 }
 
 func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDetail) {
@@ -1290,6 +1476,12 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 			if text, ok := desc["text"].(string); ok {
 				res.Content = text
 			}
+			// 解析 desc 中的表情包
+			if richTextNodes, ok := desc["rich_text_nodes"].([]interface{}); ok {
+				res.Emojis = append(res.Emojis, parseEmojisFromRichTextNodes(richTextNodes)...)
+				res.DescViewPictures = append(res.DescViewPictures, parseViewPicturesFromRichTextNodes(richTextNodes)...)
+				res.CVCards = append(res.CVCards, parseCVCardsFromRichTextNodes(richTextNodes)...)
+			}
 		}
 
 		if major, ok := dynamic["major"].(map[string]interface{}); ok {
@@ -1302,34 +1494,8 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 					res.Content = text
 					// 解析表情包
 					if richTextNodes, ok := summary["rich_text_nodes"].([]interface{}); ok {
-						for _, node := range richTextNodes {
-							if nodeMap, ok := node.(map[string]interface{}); ok {
-								if nodeType, ok := nodeMap["type"].(string); ok && nodeType == "RICH_TEXT_NODE_TYPE_EMOJI" {
-									if emoji, ok := nodeMap["emoji"].(map[string]interface{}); ok {
-										emojiData := Emoji{}
-										if iconUrl, ok := emoji["icon_url"].(string); ok {
-											emojiData.IconUrl = iconUrl
-										}
-										if text, ok := emoji["text"].(string); ok {
-											emojiData.Text = text
-										}
-										if origText, ok := emoji["orig_text"].(string); ok {
-											emojiData.OrigText = origText
-										}
-										if jumpUrl, ok := emoji["jump_url"].(string); ok {
-											emojiData.JumpUrl = jumpUrl
-										}
-										if id, ok := emoji["id"].(float64); ok {
-											emojiData.Id = int64(id)
-										}
-										if packageId, ok := emoji["package_id"].(float64); ok {
-											emojiData.PackageId = int64(packageId)
-										}
-										res.Emojis = append(res.Emojis, emojiData)
-									}
-								}
-							}
-						}
+						res.Emojis = append(res.Emojis, parseEmojisFromRichTextNodes(richTextNodes)...)
+						res.CVCards = append(res.CVCards, parseCVCardsFromRichTextNodes(richTextNodes)...)
 					}
 				}
 			}
@@ -1384,6 +1550,51 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 					if reserve["desc3"] != nil {
 						res.Reserve.Desc3 = reserve["desc3"].(map[string]interface{})["text"].(string)
 					}
+					// 解析 SType 和 JumpUrl
+					if stype, ok := reserve["stype"].(float64); ok {
+						res.Reserve.SType = int(stype)
+					}
+					if jumpUrl, ok := reserve["jump_url"].(string); ok {
+						res.Reserve.JumpUrl = jumpUrl
+					}
+					// 计算预约状态
+					res.Reserve.State = calculateReserveState(reserve)
+				}
+			}
+			if additional["type"] == "ADDITIONAL_TYPE_VOTE" {
+				if vote, ok := additional["vote"].(map[string]interface{}); ok {
+					res.Vote = &VoteInfo{}
+					if voteId, ok := vote["vote_id"].(float64); ok {
+						res.Vote.VoteId = int64(voteId)
+					}
+					if title, ok := vote["title"].(string); ok {
+						res.Vote.Title = title
+					}
+					if desc, ok := vote["desc"].(string); ok {
+						res.Vote.Desc = desc
+					}
+					if joinNum, ok := vote["join_num"].(float64); ok {
+						res.Vote.JoinNum = int(joinNum)
+					}
+					if choiceCnt, ok := vote["choice_cnt"].(float64); ok {
+						res.Vote.ChoiceCnt = int(choiceCnt)
+					}
+					if endTime, ok := vote["end_time"].(float64); ok {
+						res.Vote.EndTime = int64(endTime)
+					}
+					if status, ok := vote["status"].(float64); ok {
+						res.Vote.Status = int(status)
+					}
+					if button, ok := vote["button"].(map[string]interface{}); ok {
+						if btnType, ok := button["type"].(float64); ok {
+							res.Vote.Button.Type = int(btnType)
+						}
+						if jumpStyle, ok := button["jump_style"].(map[string]interface{}); ok {
+							if text, ok := jumpStyle["text"].(string); ok {
+								res.Vote.Button.JumpStyle.Text = text
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1401,6 +1612,43 @@ func getDescContent(resp map[string]interface{}, repost bool) (result DynamicDet
 		}
 	}
 	return
+}
+
+// calculateReserveState 计算预约状态
+// State: 0=进行中, 1=直播中/已发布, 2=已结束
+func calculateReserveState(reserve map[string]interface{}) int {
+	stype, _ := reserve["stype"].(float64)
+
+	button, ok := reserve["button"].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+
+	buttonType, _ := button["type"].(float64)
+
+	if stype == 2 {
+		// 直播预约
+		if buttonType == 1 {
+			// button.type=1 表示正在直播
+			return 1
+		}
+		// button.type=2 需要检查 uncheck.disable
+		if uncheck, ok := button["uncheck"].(map[string]interface{}); ok {
+			if disable, ok := uncheck["disable"].(float64); ok && int(disable) == 1 {
+				return 2 // 已结束
+			}
+		}
+		return 0 // 进行中
+	} else if stype == 1 {
+		// 视频预约
+		if buttonType == 1 {
+			// button.type=1 + 有jump_url 表示视频已发布/已过期
+			return 1
+		}
+		return 0 // 进行中
+	}
+
+	return 0
 }
 
 func replaseDesc(text string, newText string) string {

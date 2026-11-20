@@ -2,7 +2,7 @@ package bilibili
 
 import (
 	"errors"
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
@@ -217,17 +217,17 @@ func (c *StateManager) GetLatestActive(mid int64) (int64, error) {
 	return c.GetInt64(c.ActiveTimestampKey(mid), localdb.IgnoreNotFoundOpt())
 }
 
-func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage) error {
-	tmp := &message.GroupMessage{
-		Id:        msg.Id,
+func (c *StateManager) SetNotifyMsg(notifyKey string, msg *adapter.GroupMessage) error {
+	tmp := &adapter.GroupMessage{
+		ID:        msg.ID,
 		GroupCode: msg.GroupCode,
 		Sender:    msg.Sender,
 		Time:      msg.Time,
-		Elements: localutils.MessageFilter(msg.Elements, func(e message.IMessageElement) bool {
-			return e.Type() == message.Text || e.Type() == message.Image
+		Elements: localutils.AdapterMessageFilter(msg.Elements, func(e adapter.IMessageElement) bool {
+			return e.Type() == adapter.ElementTypeText || e.Type() == adapter.ElementTypeImage
 		}),
 	}
-	value, err := localutils.SerializationGroupMsg(tmp)
+	value, err := localutils.SerializationAdapterGroupMsg(tmp)
 	if err != nil {
 		return err
 	}
@@ -235,12 +235,12 @@ func (c *StateManager) SetNotifyMsg(notifyKey string, msg *message.GroupMessage)
 		localdb.SetExpireOpt(CompactExpireTime), localdb.SetNoOverWriteOpt())
 }
 
-func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*message.GroupMessage, error) {
+func (c *StateManager) GetNotifyMsg(groupCode int64, notifyKey string) (*adapter.GroupMessage, error) {
 	value, err := c.Get(c.NotifyMsgKey(groupCode, notifyKey))
 	if err != nil {
 		return nil, err
 	}
-	return localutils.DeserializationGroupMsg(value)
+	return localutils.DeserializationAdapterGroupMsg(value)
 }
 
 func SetCookieInfo(username string, cookieInfo *LoginResponse_Data_CookieInfo) error {

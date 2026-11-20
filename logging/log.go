@@ -1,21 +1,44 @@
 package logging
 
 import (
-	"github.com/Mrs4s/MiraiGo/client"
-	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/config"
-	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/rifflock/lfshook"
-	"github.com/sirupsen/logrus"
 	"io"
+	"os"
 	"path"
 	"sync"
 	"time"
 
+	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
+	"github.com/cnxysoft/DDBOT-WSa/utils/qqlog"
+	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
+	"github.com/sirupsen/logrus"
+
 	"github.com/Sora233/MiraiGo-Template/bot"
 )
+
+// levelWriter 根据日志级别将输出分流到 stdout 或 stderr
+type levelWriter struct {
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func (w *levelWriter) Write(p []byte) (n int, err error) {
+	// logrus 在写入前会在消息前添加 "level=\"warn\" " 这样的前缀
+	// 通过检测前缀判断级别
+	if len(p) >= 7 && string(p[0:7]) == `level="` {
+		// 提取级别标识
+		rest := p[7:]
+		if len(rest) >= 4 {
+			level := string(rest[0:4])
+			if level == "warn" || level == "erro" || level == "fata" {
+				return w.stderr.Write(p)
+			}
+		}
+	}
+	return w.stdout.Write(p)
+}
 
 const moduleId = "ddbot.logging"
 
@@ -39,28 +62,33 @@ func (m *logging) MiraiGoModule() bot.ModuleInfo {
 }
 
 func (m *logging) Init() {
-	// create a new logger for qq log
-	writer, err := rotatelogs.New(
-		path.Join("qq-logs", "%Y-%m-%d.log"),
-		rotatelogs.WithMaxAge(7*24*time.Hour),
-		rotatelogs.WithRotationTime(24*time.Hour),
-	)
-	if err != nil {
-		logrus.WithError(err).Error("unable to write logs")
-		return
-	}
-	qqlog := logrus.New()
+	qqLogger := logrus.New()
+
 	if !config.GlobalConfig.GetBool("qq-logs.enabled") && !config.GlobalConfig.GetBool("qq-logs.enable") {
-		qqlog.Out = io.Discard
+		// 未启用时丢弃所有输出
+		qqLogger.Out = io.Discard
+		qqlog.Enabled = false
+	} else {
+		qqlog.Enabled = true
+		// 创建文件 writer
+		writer, err := rotatelogs.New(
+			path.Join("qq-logs", "%Y-%m-%d.log"),
+			rotatelogs.WithMaxAge(7*24*time.Hour),
+			rotatelogs.WithRotationTime(24*time.Hour),
+		)
+		if err != nil {
+			logrus.WithError(err).Error("unable to write logs")
+			return
+		}
+		// 使用 levelWriter 根据日志级别分流到 stdout/stderr，同时写入文件
+		lvWriter := &levelWriter{stdout: os.Stdout, stderr: os.Stderr}
+		qqLogger.SetOutput(io.MultiWriter(writer, lvWriter))
+		// 不再使用 lfshook，因为 SetOutput 的 MultiWriter 已经包含了文件写入
+		// lfshook 会导致同一日志被写入文件两次（MultiWriter 一份 + lfshook 一份）
 	}
-	qqlog.AddHook(lfshook.NewHook(writer, &logrus.TextFormatter{
-		FullTimestamp:    true,
-		PadLevelText:     true,
-		QuoteEmptyFields: true,
-		ForceQuote:       true,
-	}))
-	qqlog.SetLevel(logrus.DebugLevel)
-	logger = qqlog.WithField("module", moduleId)
+	qqLogger.SetLevel(logrus.DebugLevel)
+	logger = qqLogger.WithField("module", moduleId)
+	qqlog.Init(logger)
 }
 
 func (m *logging) PostInit() {
@@ -93,29 +121,19 @@ func (m *logging) Stop(b *bot.Bot, wg *sync.WaitGroup) {
 	// 在此处应该释放相应的资源或者对状态进行保存
 }
 
-func logGroupMessage(msg *message.GroupMessage) {
-	logger.WithFields(localutils.GroupLogFields(msg.GroupCode)).
-		WithFields(logrus.Fields{
-			"From":       "GroupMessage",
-			"MessageID":  msg.Id,
-			"MessageIID": msg.InternalId,
-			"SenderID":   msg.Sender.Uin,
-			"SenderName": msg.Sender.DisplayName(),
-		}).Info(msgstringer.MsgToString(msg.Elements))
+func logGroupMessage(msg *adapter.GroupMessage) {
+	name := msg.Sender.Card
+	if name == "" {
+		name = msg.Sender.Nickname
+	}
+	logger.Infof("收到群 %s(%d) 内 %s(%d) 的消息: %s (%d)", msg.GroupName, msg.GroupCode, name, msg.Sender.UserID, msgstringer.AdapterMsgToString(msg.Elements), msg.ID)
 }
 
-func logPrivateMessage(msg *message.PrivateMessage) {
-	logger.WithFields(logrus.Fields{
-		"From":       "PrivateMessage",
-		"MessageID":  msg.Id,
-		"MessageIID": msg.InternalId,
-		"SenderID":   msg.Sender.Uin,
-		"SenderName": msg.Sender.DisplayName(),
-		"Target":     msg.Target,
-	}).Info(msgstringer.MsgToString(msg.Elements))
+func logPrivateMessage(msg *adapter.PrivateMessage) {
+	logger.Infof("收到 %s(%d) 的私聊消息: %s (%d)", msg.Sender.Nickname, msg.Sender.UserID, msgstringer.AdapterMsgToString(msg.Elements), msg.ID)
 }
 
-func logFriendMessageRecallEvent(event *client.FriendMessageRecalledEvent) {
+func logFriendMessageRecallEvent(event *adapter.FriendMessageRecalledEvent) {
 	logger.WithFields(logrus.Fields{
 		"From":      "FriendsMessageRecall",
 		"MessageID": event.MessageId,
@@ -123,7 +141,7 @@ func logFriendMessageRecallEvent(event *client.FriendMessageRecalledEvent) {
 	}).Info("好友消息撤回")
 }
 
-func logGroupMessageRecallEvent(event *client.GroupMessageRecalledEvent) {
+func logGroupMessageRecallEvent(event *adapter.GroupMessageRecalledEvent) {
 	logger.WithFields(localutils.GroupLogFields(event.GroupCode)).
 		WithFields(logrus.Fields{
 			"From":       "GroupMessageRecall",
@@ -133,7 +151,7 @@ func logGroupMessageRecallEvent(event *client.GroupMessageRecalledEvent) {
 		}).Info("群消息撤回")
 }
 
-func logGroupMuteEvent(event *client.GroupMuteEvent) {
+func logGroupMuteEvent(event *adapter.GroupMuteEvent) {
 	muteLogger := logger.WithFields(localutils.GroupLogFields(event.GroupCode)).
 		WithFields(logrus.Fields{
 			"From":        "GroupMute",
@@ -148,7 +166,7 @@ func logGroupMuteEvent(event *client.GroupMuteEvent) {
 		}
 	} else {
 		gi := bot.Instance.FindGroup(event.GroupCode)
-		var mi *client.GroupMemberInfo
+		var mi *adapter.GroupMemberInfo
 		if gi != nil {
 			mi = gi.FindMember(event.TargetUin)
 			if mi != nil {
@@ -167,7 +185,7 @@ func logGroupMuteEvent(event *client.GroupMuteEvent) {
 	}
 }
 
-func logDisconnect(event *client.ClientDisconnectedEvent) {
+func logDisconnect(event *adapter.ClientDisconnectedEvent) {
 	logger.WithFields(logrus.Fields{
 		"From":   "Disconnected",
 		"Reason": event.Message,
@@ -175,35 +193,30 @@ func logDisconnect(event *client.ClientDisconnectedEvent) {
 }
 
 func registerLog(b *bot.Bot) {
-	b.GroupMessageRecalledEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupMessageRecalledEvent) {
+	b.GroupMessageRecalledEvent.Subscribe(func(event *adapter.GroupMessageRecalledEvent) {
 		logGroupMessageRecallEvent(event)
 	})
 
-	b.GroupMessageEvent.Subscribe(func(qqClient *client.QQClient, groupMessage *message.GroupMessage) {
-		logGroupMessage(groupMessage)
+	b.GroupMessageEvent.Subscribe(func(msg *adapter.GroupMessage) {
+		logGroupMessage(msg)
 	})
 
-	b.GroupMuteEvent.Subscribe(func(qqClient *client.QQClient, event *client.GroupMuteEvent) {
+	b.GroupMuteEvent.Subscribe(func(event *adapter.GroupMuteEvent) {
 		logGroupMuteEvent(event)
 	})
 
-	b.PrivateMessageEvent.Subscribe(func(qqClient *client.QQClient, privateMessage *message.PrivateMessage) {
+	b.PrivateMessageEvent.Subscribe(func(privateMessage *adapter.PrivateMessage) {
 		logPrivateMessage(privateMessage)
 	})
 
-	b.FriendMessageRecalledEvent.Subscribe(func(qqClient *client.QQClient, event *client.FriendMessageRecalledEvent) {
+	b.FriendMessageRecalledEvent.Subscribe(func(event *adapter.FriendMessageRecalledEvent) {
 		logFriendMessageRecallEvent(event)
 	})
 
-	b.DisconnectedEvent.Subscribe(func(qqClient *client.QQClient, event *client.ClientDisconnectedEvent) {
+	b.DisconnectedEvent.Subscribe(func(event *adapter.ClientDisconnectedEvent) {
 		logDisconnect(event)
 	})
 
-	b.SelfGroupMessageEvent.Subscribe(func(qqClient *client.QQClient, groupMessage *message.GroupMessage) {
-		logGroupMessage(groupMessage)
-	})
-
-	b.SelfPrivateMessageEvent.Subscribe(func(qqClient *client.QQClient, privateMessage *message.PrivateMessage) {
-		logPrivateMessage(privateMessage)
-	})
+	// Note: SelfGroupMessageEvent and SelfPrivateMessageEvent are not logged separately
+	// to avoid duplicate logs when bot sends messages
 }

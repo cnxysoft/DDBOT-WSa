@@ -2,10 +2,12 @@ package mmsg
 
 import (
 	"encoding/base64"
-	"github.com/Mrs4s/MiraiGo/message"
+	"os"
+	"strings"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"strings"
 )
 
 type RecordElement struct {
@@ -21,6 +23,17 @@ func NewRecord(url string, Buf ...any) *RecordElement {
 	}
 	if len(Buf) > 0 {
 		r.Buf = Buf[0].([]byte)
+	}
+	return r
+}
+
+func NewRecordByLocal(path string) *RecordElement {
+	r := &RecordElement{}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		r.Buf = b
+	} else {
+		logger.WithField("filepath", path).Errorf("ReadFile error %v", err)
 	}
 	return r
 }
@@ -44,19 +57,41 @@ func (r *RecordElement) Alternative(s string) *RecordElement {
 	return r
 }
 
-func (r *RecordElement) Type() message.ElementType {
+// GetFile 返回可用于发送/转发的文件字符串
+// 优先级：Url > base64(Buf) > alternative
+func (r *RecordElement) GetFile() string {
+	if r == nil {
+		return ""
+	}
+	if r.Url != "" {
+		if strings.HasPrefix(r.Url, "http://") || strings.HasPrefix(r.Url, "https://") {
+			return r.Url
+		}
+		return "file://" + strings.ReplaceAll(r.Url, `\`, `\\`)
+	}
+	if r.Buf != nil && len(r.Buf) > 0 {
+		return "base64://" + base64.StdEncoding.EncodeToString(r.Buf)
+	}
+	return r.alternative
+}
+
+func (r *RecordElement) Type() adapter.ElementType {
 	return Record
 }
 
-func (r *RecordElement) PackToElement(target Target) message.IMessageElement {
-	m := message.NewRecord("")
+func (r *RecordElement) ToSendingMessage() *adapter.SendingMessage {
+	return &adapter.SendingMessage{Elements: []adapter.IMessageElement{r}}
+}
+
+func (r *RecordElement) PackToElement(target Target) adapter.IMessageElement {
+	m := &adapter.VoiceSegment{}
 	if r == nil {
-		return message.NewText("[空语音]\n")
+		return &adapter.TextSegment{Content: "[空语音]\n"}
 	} else if r.Url != "" {
 		if strings.HasPrefix(r.Url, "http://") || strings.HasPrefix(r.Url, "https://") {
-			m.File = r.Url
+			m.Url = r.Url
 		} else {
-			m.File = "file://" + strings.ReplaceAll(r.Url, `\`, `\\`)
+			m.Url = "file://" + strings.ReplaceAll(r.Url, `\`, `\\`)
 		}
 		return m
 	} else if r.Buf == nil {
@@ -67,6 +102,6 @@ func (r *RecordElement) PackToElement(target Target) message.IMessageElement {
 	}
 	logger.Debugf("转换base64语音")
 	base64Record := base64.StdEncoding.EncodeToString(r.Buf) // 这里进行转换
-	m.File = "base64://" + base64Record
+	m.Url = "base64://" + base64Record
 	return m
 }

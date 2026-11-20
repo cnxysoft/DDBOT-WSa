@@ -19,6 +19,7 @@ var logger = utils.GetModuleLogger("youtube")
 type Concern struct {
 	*StateManager
 	cacheStartTs int64
+	notify       chan<- concern.Notify
 }
 
 func (c *Concern) Site() string {
@@ -51,11 +52,28 @@ func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype 
 		return nil, fmt.Errorf("查询channel信息失败 %v - %v", id, err)
 	}
 	for _, v := range info.VideoInfo {
-		c.StateManager.AddVideo(v)
+		if err := c.StateManager.AddVideo(v); err != nil {
+			log.WithError(err).WithField("video_id", v.VideoId).
+				Warn("youtube: AddVideo failed during Add()")
+		}
 	}
 	_, err = c.StateManager.AddGroupConcern(groupCode, id, ctype)
 	if err != nil {
 		return nil, err
+	}
+	if ctype.ContainAny(Live) && groupCode != 0 {
+		for _, living := range livingVideoInfos(info) {
+			living.liveStatusChanged = true
+			// Use a non-blocking send: the LSP notify channel is shared and may
+			// be saturated; blocking here would deadlock Add() and prevent any
+			// future subscription on this group from completing.
+			select {
+			case c.notify <- NewConcernNotify(groupCode, living):
+			default:
+				log.WithField("video_id", living.VideoId).
+					Warn("youtube notify channel full; drop immediate live notify")
+			}
+		}
 	}
 	return concern.NewIdentity(info.ChannelId, info.ChannelName), nil
 }
@@ -64,6 +82,14 @@ func (c *Concern) Remove(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, cty
 	id := _id.(string)
 	identity, _ := c.Get(id)
 	_, err := c.StateManager.RemoveGroupConcern(groupCode, id, ctype)
+	if err == nil {
+		allCtype, getErr := c.StateManager.GetConcern(id)
+		if getErr != nil || !allCtype.ContainAny(Live) {
+			if clearErr := c.StateManager.DeleteLiveState(id); clearErr != nil {
+				return identity, clearErr
+			}
+		}
+	}
 	if identity == nil {
 		identity = concern.NewIdentity(_id, "unknown")
 	}
@@ -165,7 +191,7 @@ func (c *Concern) filterCard(card *VideoInfo) bool {
 	} else {
 		tsLimit = 0
 	}
-	if card.VideoTimestamp < tsLimit {
+	if card.EffectiveTimestamp() < tsLimit {
 		return false
 	}
 	return true
@@ -179,10 +205,17 @@ func (c *Concern) freshInfo(channelId string) (result []*VideoInfo, err error) {
 		log.Errorf("load newInfo failed %v", err)
 		return
 	}
-	if oldInfo.VideoInfo == nil {
-		// first load, just notify if living
+	return c.diffInfo(oldInfo, newInfo), nil
+}
+
+func (c *Concern) diffInfo(oldInfo, newInfo *Info) (result []*VideoInfo) {
+	if newInfo == nil {
+		return nil
+	}
+	if oldInfo == nil || oldInfo.VideoInfo == nil {
+		// first load, only notify live items and mark active live status changes
 		for _, newV := range newInfo.VideoInfo {
-			if newV.IsLive() {
+			if shouldNotifyLive(newV) {
 				if newV.IsLiving() {
 					newV.liveStatusChanged = true
 				}
@@ -190,17 +223,28 @@ func (c *Concern) freshInfo(channelId string) (result []*VideoInfo, err error) {
 			}
 		}
 	} else {
-		var notifyCount = 0
+		var videoNotifyCount = 0
 		for _, newV := range newInfo.VideoInfo {
 			var found bool
 			for _, oldV := range oldInfo.VideoInfo {
 				if newV.VideoId == oldV.VideoId {
 					found = true
+					// Handle status transitions: live→video (offline) or video→live (started streaming)
 					if newV.IsVideo() && oldV.IsLive() {
-						// 应该是下播了吧？
+						// Live ended, notify as video
 						result = append(result, newV)
-					}
-					if newV.IsLive() && oldV.IsLive() {
+					} else if newV.IsLive() && oldV.IsVideo() {
+						if !shouldNotifyLive(newV) {
+							continue
+						}
+						if newV.IsLiving() {
+							newV.liveStatusChanged = true
+						}
+						result = append(result, newV)
+					} else if newV.IsLive() && oldV.IsLive() {
+						if !shouldNotifyLive(newV) {
+							continue
+						}
 						if newV.IsWaiting() && oldV.IsWaiting() && newV.VideoTimestamp != oldV.VideoTimestamp {
 							// live time changed, notify
 							result = append(result, newV)
@@ -216,24 +260,35 @@ func (c *Concern) freshInfo(channelId string) (result []*VideoInfo, err error) {
 				}
 			}
 			if !found {
-				if notifyCount == 0 {
-					if newV.IsLive() && newV.IsLiving() {
+				if shouldNotifyLive(newV) {
+					if newV.IsLiving() {
 						newV.liveStatusChanged = true
 					}
-					if newV.IsVideo() {
-						if c.filterCard(newV) {
-							result = append(result, newV)
-						}
-					} else {
-						result = append(result, newV)
-					}
-					notifyCount += 1
+					result = append(result, newV)
+					continue
+				}
+				if videoNotifyCount == 0 && c.filterCard(newV) {
+					result = append(result, newV)
+					videoNotifyCount += 1
 					// notify video most once
 				}
 			}
 		}
 	}
-	return
+	return result
+}
+
+func shouldNotifyLive(v *VideoInfo) bool {
+	if v == nil || !v.IsLive() {
+		return false
+	}
+	if v.IsWaiting() {
+		return true
+	}
+	if v.IsLiving() && (v.PublishTimestamp != 0 || v.DurationSeconds != 0) {
+		return false
+	}
+	return v.IsLiving()
 }
 
 func (c *Concern) FindInfo(channelId string, load bool, addMode bool) (*Info, error) {
@@ -244,7 +299,10 @@ func (c *Concern) FindInfo(channelId string, load bool, addMode bool) (*Info, er
 			return nil, err
 		}
 		info = NewInfo(vi, addMode)
-		c.StateManager.AddInfo(info)
+		if err := c.StateManager.AddInfo(info); err != nil {
+			logger.WithField("channel_id", channelId).
+				WithError(err).Warn("youtube: AddInfo failed during FindInfo()")
+		}
 	}
 
 	if info != nil {
@@ -262,8 +320,42 @@ func (c *Concern) FindOrLoad(channelId string, addMode bool) (*Info, error) {
 	}
 }
 
+func livingVideoInfos(info *Info) []*VideoInfo {
+	if info == nil {
+		return nil
+	}
+	var preferred []*VideoInfo
+	var fallback []*VideoInfo
+	preferredIndexByID := make(map[string]int)
+	fallbackIndexByID := make(map[string]int)
+	for _, v := range info.VideoInfo {
+		if !shouldNotifyLive(v) {
+			continue
+		}
+		target := &preferred
+		indexByID := preferredIndexByID
+		if v.HeaderSummary {
+			target = &fallback
+			indexByID = fallbackIndexByID
+		}
+		if idx, ok := indexByID[v.VideoId]; ok {
+			if videoInfoQualityScore(v) > videoInfoQualityScore((*target)[idx]) {
+				(*target)[idx] = v
+			}
+			continue
+		}
+		indexByID[v.VideoId] = len(*target)
+		*target = append(*target, v)
+	}
+	if len(preferred) > 0 {
+		return preferred
+	}
+	return fallback
+}
+
 func NewConcern(notify chan<- concern.Notify) *Concern {
 	return &Concern{
+		notify:       notify,
 		StateManager: NewStateManager(notify),
 	}
 }

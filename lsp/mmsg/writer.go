@@ -5,14 +5,14 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/samber/lo"
 )
 
 // MSG 线程不安全
 type MSG struct {
-	elements []message.IMessageElement
+	elements []adapter.IMessageElement
 	textBuf  strings.Builder
 }
 
@@ -20,13 +20,13 @@ func NewMSG() *MSG {
 	return &MSG{}
 }
 
-func NewMSGFromGroupMessage(gm *message.GroupMessage) *MSG {
+func NewMSGFromGroupMessage(gm *adapter.GroupMessage) *MSG {
 	return &MSG{
 		elements: gm.Elements,
 	}
 }
 
-func NewMSGFromPrivateMessage(pm *message.PrivateMessage) *MSG {
+func NewMSGFromPrivateMessage(pm *adapter.PrivateMessage) *MSG {
 	return &MSG{
 		elements: pm.Elements,
 	}
@@ -45,9 +45,9 @@ func NewTextf(format string, args ...interface{}) *MSG {
 }
 
 // Drop predicate返回true的元素被去掉
-func (m *MSG) Drop(predicate func(e message.IMessageElement, index int) bool) *MSG {
+func (m *MSG) Drop(predicate func(e adapter.IMessageElement, index int) bool) *MSG {
 	m.flushText()
-	m.elements = lo.Filter(m.elements, func(e message.IMessageElement, index int) bool {
+	m.elements = lo.Filter(m.elements, func(e adapter.IMessageElement, index int) bool {
 		return !predicate(e, index)
 	})
 	return m
@@ -66,15 +66,15 @@ func (m *MSG) Clear() *MSG {
 	return m
 }
 
-func (m *MSG) Append(elems ...message.IMessageElement) *MSG {
+func (m *MSG) Append(elems ...adapter.IMessageElement) *MSG {
 	if len(elems) == 0 {
 		return m
 	}
 	for _, e := range elems {
-		if e == nil {
+		if adapter.IsNilMessageElement(e) {
 			continue
 		}
-		if textE, ok := e.(*message.TextElement); ok {
+		if textE, ok := e.(*adapter.TextSegment); ok {
 			m.textBuf.WriteString(textE.Content)
 			continue
 		}
@@ -86,7 +86,7 @@ func (m *MSG) Append(elems ...message.IMessageElement) *MSG {
 
 func (m *MSG) flushText() {
 	if m.textBuf.Len() > 0 {
-		m.elements = append(m.elements, message.NewText(m.textBuf.String()))
+		m.elements = append(m.elements, &adapter.TextSegment{Content: m.textBuf.String()})
 		m.textBuf.Reset()
 	}
 }
@@ -171,7 +171,7 @@ func (m *MSG) At(target int64) *MSG {
 // AtAll 添加@全体成员，如果prepend设置为true，则会添加在消息最前面
 func (m *MSG) AtAll(prepend ...bool) *MSG {
 	if len(prepend) > 0 && prepend[0] {
-		m.elements = append([]message.IMessageElement{NewAt(0)}, m.elements...)
+		m.elements = append([]adapter.IMessageElement{NewAt(0)}, m.elements...)
 		return m
 	}
 	return m.Append(NewAt(0))
@@ -191,8 +191,8 @@ func (m *MSG) ImageByLocalWithResize(filepath, alternative string, width, height
 }
 
 // ToCombineMessage 总是返回 non-nil
-func (m *MSG) ToCombineMessage(target Target) *message.SendingMessage {
-	var result = message.NewSendingMessage()
+func (m *MSG) ToCombineMessage(target Target) *adapter.SendingMessage {
+	var result = &adapter.SendingMessage{}
 	sms := m.ToMessage(target)
 	for _, sm := range sms {
 		for _, e := range sm.Elements {
@@ -203,23 +203,25 @@ func (m *MSG) ToCombineMessage(target Target) *message.SendingMessage {
 }
 
 // ToMessage 返回消息用于发送
-func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
+func (m *MSG) ToMessage(target Target) []*adapter.SendingMessage {
 	if m == nil {
 		return nil
 	}
-	var result []*message.SendingMessage
+	var result []*adapter.SendingMessage
 	m.Cut()
-	var sending = message.NewSendingMessage()
+	var sending = &adapter.SendingMessage{}
+	var hadCustomElement bool
 	for _, e := range m.elements {
 		if custom, ok := e.(CustomElement); ok {
 			if e.Type() == Cut {
 				if len(sending.Elements) > 0 {
 					result = append(result, sending)
-					sending = message.NewSendingMessage()
+					sending = &adapter.SendingMessage{}
 				}
 			} else {
 				packed := custom.PackToElement(target)
 				if packed != nil {
+					hadCustomElement = true
 					sending.Append(packed)
 				}
 			}
@@ -227,14 +229,14 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 		}
 		sending.Append(e)
 	}
-	if len(sending.Elements) > 0 {
+	if len(sending.Elements) > 0 || hadCustomElement {
 		result = append(result, sending)
 	}
-	cleanText := func(m *message.SendingMessage) {
-		var lastText *message.TextElement
+	cleanText := func(s *adapter.SendingMessage) {
+		var lastText *adapter.TextSegment
 		lastIdx := -1
-		for idx, e := range m.Elements {
-			if t, ok := e.(*message.TextElement); ok {
+		for idx, e := range s.Elements {
+			if t, ok := e.(*adapter.TextSegment); ok {
 				lastText = t
 				lastIdx = idx
 			}
@@ -242,7 +244,7 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 		if lastText != nil {
 			lastText.Content = strings.TrimRightFunc(lastText.Content, unicode.IsSpace)
 			if lastText.Content == "" {
-				m.Elements = lo.Filter(m.Elements, func(_ message.IMessageElement, index int) bool {
+				s.Elements = lo.Filter(s.Elements, func(_ adapter.IMessageElement, index int) bool {
 					return index != lastIdx
 				})
 			}
@@ -251,7 +253,7 @@ func (m *MSG) ToMessage(target Target) []*message.SendingMessage {
 	if len(result) > 0 {
 		cleanText(result[len(result)-1])
 	}
-	result = lo.Filter(result, func(item *message.SendingMessage, _ int) bool {
+	result = lo.Filter(result, func(item *adapter.SendingMessage, _ int) bool {
 		return len(item.Elements) > 0
 	})
 	return result
@@ -265,7 +267,7 @@ func (m *MSG) Cut() *MSG {
 	return m
 }
 
-func (m *MSG) Elements() []message.IMessageElement {
+func (m *MSG) Elements() []adapter.IMessageElement {
 	m.flushText()
 	return m.elements
 }

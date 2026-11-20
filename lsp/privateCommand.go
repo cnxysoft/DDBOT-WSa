@@ -10,27 +10,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/sliceutil"
 	"github.com/alecthomas/kong"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
 	"github.com/sirupsen/logrus"
 )
 
 type LspPrivateCommand struct {
-	msg *message.PrivateMessage
+	msg *adapter.PrivateMessage
 
 	*Runtime
 }
 
-func NewLspPrivateCommand(l *Lsp, msg *message.PrivateMessage) *LspPrivateCommand {
+func NewLspPrivateCommand(l *Lsp, msg *adapter.PrivateMessage) *LspPrivateCommand {
 	c := &LspPrivateCommand{
 		msg:     msg,
 		Runtime: NewRuntime(l),
@@ -114,6 +115,10 @@ func (c *LspPrivateCommand) Execute() {
 		c.AbnormalConcernCheckCommand()
 	case CleanConcern:
 		c.CleanConcernCommand()
+	case ResubscribeCommand:
+		c.ResubscribeCommand()
+	case WbLoginCommand:
+		c.WbLoginCommand()
 	default:
 		if CheckCustomPrivateCommand(c.CommandName()) {
 			func() {
@@ -226,8 +231,8 @@ func (c *LspPrivateCommand) CleanConcernCommand() {
 	var cleanConcernCmd struct {
 		Abnormal   bool    `optional:"" help:"清除异常订阅"`
 		GroupCodes []int64 `optional:"" short:"g" help:"清除指定群的订阅，多个可用英文逗号隔开"`
-		Site       string  `optional:"" short:"s" help:"清除指定的网站订阅,默认为全部"`
-		Type       string  `optional:"" short:"t" help:"清除指定的订阅类型,默认为全部"`
+		Site       string  `optional:"" short:"s" help:"清除指定的网站订阅，默认为全部"`
+		Type       string  `optional:"" short:"t" help:"清除指定的订阅类型，默认为全部"`
 	}
 
 	_, output := c.parseCommandSyntax(&cleanConcernCmd, c.CommandName())
@@ -240,7 +245,138 @@ func (c *LspPrivateCommand) CleanConcernCommand() {
 
 	ICleanConcern(c.NewMessageContext(log), cleanConcernCmd.Abnormal,
 		cleanConcernCmd.GroupCodes, cleanConcernCmd.Site, cleanConcernCmd.Type)
+}
 
+func (c *LspPrivateCommand) ResubscribeCommand() {
+	log := c.DefaultLoggerWithCommand(c.CommandName())
+	log.Infof("run %v command", c.CommandName())
+	defer func() { log.Infof("%v command end", c.CommandName()) }()
+
+	if !c.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(c.uin()),
+	) {
+		c.noPermission()
+		return
+	}
+
+	var resubscribeCmd struct {
+		GroupCode int64 `required:"" short:"g" help:"要重新订阅的群号码"`
+	}
+
+	_, output := c.parseCommandSyntax(&resubscribeCmd, c.CommandName())
+	if output != "" {
+		c.textReply(output)
+	}
+	if c.exit {
+		return
+	}
+
+	// 调用微博 Concern 的一键重新订阅功能
+	weiboConcern, err := concern.GetConcernBySiteAndType("weibo", weibo.News)
+	if err != nil {
+		c.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	wc, ok := weiboConcern.(*weibo.Concern)
+	if !ok {
+		c.textReply("失败 - 类型转换错误")
+		return
+	}
+
+	count, err := wc.ResubscribeAll(c.NewMessageContext(log), resubscribeCmd.GroupCode)
+	if err != nil {
+		c.textReply(fmt.Sprintf("失败 - %v", err))
+		return
+	}
+
+	c.textSend(fmt.Sprintf("成功 - 已重新订阅 %d 个微博用户", count))
+}
+
+func (c *LspPrivateCommand) WbLoginCommand() {
+	log := c.DefaultLoggerWithCommand(c.CommandName())
+	log.Infof("run %v command", c.CommandName())
+	defer func() { log.Infof("%v command end", c.CommandName()) }()
+
+	if !c.l.PermissionStateManager.RequireAny(
+		permission.AdminRoleRequireOption(c.uin()),
+	) {
+		c.noPermission()
+		return
+	}
+
+	_, output := c.parseCommandSyntax(&struct{}{}, c.CommandName())
+	if output != "" {
+		c.textReply(output)
+	}
+	if c.exit {
+		return
+	}
+
+	// 检查是否启用了 qrlogin
+	if !weibo.GetQRLoginEnable() {
+		c.textReply("微博扫码登录未启用，请在 application.yaml 中设置 weibo.qrlogin: true")
+		return
+	}
+
+	// 启动扫码登录，获取 channel
+	resultChan, err := weibo.RunQRLoginForQQ(5 * time.Minute)
+	if err != nil {
+		log.Errorf("启动微博扫码登录失败：%v", err)
+		c.textReply(fmt.Sprintf("启动微博扫码登录失败：%v", err))
+		return
+	}
+
+	// 读取第一个结果（二维码图片）
+	firstResult, ok := <-resultChan
+	if !ok {
+		c.textReply("扫码登录异常终止")
+		return
+	}
+
+	if firstResult.Error != nil {
+		log.Errorf("获取二维码失败：%v", firstResult.Error)
+		c.textReply(fmt.Sprintf("获取二维码失败：%v", firstResult.Error))
+		return
+	}
+
+	// 发送二维码图片
+	if len(firstResult.QRCodeImage) > 0 {
+		m := mmsg.NewMSG()
+		m.Image(firstResult.QRCodeImage, "微博扫码二维码")
+		m.Textf("\n请在 5 分钟内使用微博 APP 扫码登录")
+		c.send(m)
+	} else {
+		c.textReply("获取二维码图片失败")
+		return
+	}
+
+	// 等待扫码结果
+	go func() {
+		for result := range resultChan {
+			if result.Error != nil {
+				log.Errorf("微博扫码登录失败：%v", result.Error)
+				c.textReply(fmt.Sprintf("微博扫码登录失败：%v", result.Error))
+				return
+			}
+
+			if result.Sub != "" {
+				log.Infof("微博扫码登录成功，SUB: %s...", result.Sub[:min(20, len(result.Sub))])
+				// 根据 RuntimeLoaded 和 PersistSuccess 分别回复
+				var msg string
+				switch {
+				case result.RuntimeLoaded && result.PersistSuccess:
+					msg = "微博扫码登录成功！\nSUB 已写入配置文件并立即生效。"
+				case result.RuntimeLoaded && !result.PersistSuccess:
+					msg = fmt.Sprintf("微博扫码登录成功！\n运行时已生效，但配置文件写入失败：%v\n请手动将 SUB 写入 application.yaml -> weibo.sub", result.PersistError)
+				case !result.RuntimeLoaded:
+					msg = "微博扫码登录成功，但运行时加载失败，请重启程序。"
+				}
+				c.textReply(msg)
+				return
+			}
+		}
+	}()
 }
 
 func (c *LspPrivateCommand) WhosyourdaddyCommand() {
@@ -359,6 +495,9 @@ func (c *LspPrivateCommand) ConfigCommand() {
 				Id string `arg:"" help:"配置的主播id"`
 			} `cmd:"" help:"查看当前过滤器" name:"show" group:"filter"`
 		} `cmd:"" help:"配置动态过滤器" name:"filter"`
+		WeiboAlert struct {
+			Action string `arg:"" optional:"" default:"show" enum:"show" help:"show=查看告警发送目标"`
+		} `cmd:"" help:"查看微博Cookie/SUB告警通知的发送对象" name:"weibo_alert"`
 		Group int64 `optional:"" short:"g" help:"要操作的QQ群号码"`
 	}
 
@@ -373,14 +512,18 @@ func (c *LspPrivateCommand) ConfigCommand() {
 	}
 
 	groupCode := configCmd.Group
-	if err := c.checkGroupCode(groupCode); err != nil {
-		c.textReply(err.Error())
-		return
-	}
 
 	kongPath := strings.Split(kongCtx.Command(), " ")
 
 	cmd := kongPath[0]
+
+	// weibo_alert 不需要群号校验，其他子命令需要
+	if cmd != "weibo_alert" {
+		if err := c.checkGroupCode(groupCode); err != nil {
+			c.textReply(err.Error())
+			return
+		}
+	}
 	log = log.WithFields(localutils.GroupLogFields(groupCode)).WithField("sub_command", cmd)
 
 	switch cmd {
@@ -458,6 +601,14 @@ func (c *LspPrivateCommand) ConfigCommand() {
 			log.WithField("filter_cmd", filterCmd).Errorf("unknown filter command")
 			c.textSend("未知的filter子命令")
 		}
+	case "weibo_alert":
+		if !c.l.PermissionStateManager.RequireAny(
+			permission.AdminRoleRequireOption(c.uin()),
+		) {
+			c.noPermission()
+			return
+		}
+		handleWeiboAlertShow(func(s string) { c.textSend(s) })
 	default:
 		c.textSend("暂未支持，你可以催作者GKD")
 	}
@@ -836,7 +987,11 @@ func (c *LspPrivateCommand) QuitCommand() {
 			return
 		}
 	} else {
-		gi.Quit()
+		if err := c.bot.SetGroupLeave(quitCmd.GroupCode, false); err != nil {
+			log.Errorf("退出群【%v】失败: %v", displayName, err)
+			c.textSend(fmt.Sprintf("退出群【%v】失败: %v", displayName, err))
+			return
+		}
 		log.Debugf("已退出群【%v】", displayName)
 		c.textSend(fmt.Sprintf("已退出群【%v】", displayName))
 	}
@@ -1099,7 +1254,7 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 			log.Info("确认拒绝全部好友申请")
 			for _, req := range requests {
 				log.Debugf("正在拒绝%v(%v)的好友申请", req.RequesterNick, req.RequesterUin)
-				c.bot.SolveFriendRequest(req, false)
+				c.bot.SolveFriendRequest(req.Flag, false)
 				if err := c.l.LspStateManager.DeleteNewFriendRequest(req.RequestId); err != nil {
 					log.Errorf("DeleteNewFriendRequest error %v", err)
 				}
@@ -1113,7 +1268,7 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 			// 接受全部！
 			for _, req := range requests {
 				log.Debugf("正在接受%v(%v)的好友申请", req.RequesterNick, req.RequesterUin)
-				c.bot.SolveFriendRequest(req, true)
+				c.bot.SolveFriendRequest(req.Flag, true)
 				if err := c.l.LspStateManager.DeleteNewFriendRequest(req.RequestId); err != nil {
 					log.Errorf("DeleteNewFriendRequest error %v", err)
 				}
@@ -1148,11 +1303,11 @@ func (c *LspPrivateCommand) FriendRequestCommand() {
 		})
 
 		if friendRequestCmd.Reject {
-			c.bot.SolveFriendRequest(request, false)
+			c.bot.SolveFriendRequest(request.Flag, false)
 			log.Info("拒绝好友申请")
 			c.textReply(fmt.Sprintf("成功 - 已拒绝 %v(%v) 的好友申请", request.RequesterNick, request.RequesterUin))
 		} else {
-			c.bot.SolveFriendRequest(request, true)
+			c.bot.SolveFriendRequest(request.Flag, true)
 			log.Info("接受好友申请")
 			c.textReply(fmt.Sprintf("成功 - 已接受 %v(%v) 的好友申请", request.RequesterNick, request.RequesterUin))
 		}
@@ -1385,7 +1540,7 @@ func (c *LspPrivateCommand) StatusCommand() {
 func (c *LspPrivateCommand) DebugCheck() bool {
 	var ok bool
 	if c.debug {
-		if sliceutil.Contains(config.GlobalConfig.GetStringSlice("debug.uin"), strconv.FormatInt(c.msg.Sender.Uin, 10)) {
+		if sliceutil.Contains(config.GlobalConfig.GetStringSlice("debug.uin"), strconv.FormatInt(c.msg.Sender.UserID, 10)) {
 			ok = true
 		}
 	} else {
@@ -1402,47 +1557,47 @@ func (c *LspPrivateCommand) DefaultLoggerWithCommand(command string) *logrus.Ent
 	return c.DefaultLogger().WithField("Command", command)
 }
 
-func (c *LspPrivateCommand) noPermission() *message.PrivateMessage {
+func (c *LspPrivateCommand) noPermission() *adapter.PrivateMessage {
 	return c.textReply("权限不够")
 }
 
-func (c *LspPrivateCommand) globalDisabledReply() *message.PrivateMessage {
+func (c *LspPrivateCommand) globalDisabledReply() *adapter.PrivateMessage {
 	return c.textReply("无法操作该命令，该命令已被管理员禁用")
 }
 
-func (c *LspPrivateCommand) disabledReply() *message.PrivateMessage {
+func (c *LspPrivateCommand) disabledReply() *adapter.PrivateMessage {
 	return c.textSend("该命令已被设置为disable，请设置enable后重试")
 }
 
-func (c *LspPrivateCommand) notImplReply() *message.PrivateMessage {
+func (c *LspPrivateCommand) notImplReply() *adapter.PrivateMessage {
 	return c.textReply("暂未实现，你可以催作者GKD")
 }
 
-func (c *LspPrivateCommand) textSend(text string) *message.PrivateMessage {
+func (c *LspPrivateCommand) textSend(text string) *adapter.PrivateMessage {
 	return c.send(mmsg.NewText(text))
 }
 
-func (c *LspPrivateCommand) textReply(text string) *message.PrivateMessage {
+func (c *LspPrivateCommand) textReply(text string) *adapter.PrivateMessage {
 	// 私聊reply效果不好
 	return c.send(mmsg.NewText(text))
 }
 
-func (c *LspPrivateCommand) textReplyF(format string, args ...interface{}) *message.PrivateMessage {
+func (c *LspPrivateCommand) textReplyF(format string, args ...interface{}) *adapter.PrivateMessage {
 	return c.send(mmsg.NewTextf(format, args...))
 }
 
-func (c *LspPrivateCommand) send(msg *mmsg.MSG) *message.PrivateMessage {
-	return c.l.PM(c.l.SendMsg(msg, mmsg.NewPrivateTarget(c.uin())))[0]
+func (c *LspPrivateCommand) send(msg *mmsg.MSG) *adapter.PrivateMessage {
+	return c.l.APM(c.l.SendMsg(msg, mmsg.NewPrivateTarget(c.uin())))[0]
 }
 
-func (c *LspPrivateCommand) sendChain(msg *mmsg.MSG) []*message.PrivateMessage {
-	return c.l.PM(c.l.SendMsg(msg, mmsg.NewPrivateTarget(c.uin())))
+func (c *LspPrivateCommand) sendChain(msg *mmsg.MSG) []*adapter.PrivateMessage {
+	return c.l.APM(c.l.SendMsg(msg, mmsg.NewPrivateTarget(c.uin())))
 }
 
 func (c *LspPrivateCommand) commonTemplateData() map[string]interface{} {
 	return map[string]interface{}{
 		"msg":         c.msg,
-		"member_code": c.sender().Uin,
+		"member_code": c.sender().UserID,
 		"member_name": c.sender().DisplayName(),
 		"command":     CommandMaps,
 	}
@@ -1463,11 +1618,15 @@ func (c *LspPrivateCommand) templateMsg(name string, data map[string]interface{}
 	return m
 }
 
-func (c *LspPrivateCommand) sender() *message.Sender {
-	return c.msg.Sender
+func (c *LspPrivateCommand) sender() *adapter.SenderInfo {
+	return &adapter.SenderInfo{
+		UserID:   c.msg.Sender.UserID,
+		Uin:      c.msg.Sender.UserID,
+		Nickname: c.msg.Sender.Nickname,
+	}
 }
 func (c *LspPrivateCommand) uin() int64 {
-	return c.sender().Uin
+	return c.sender().UserID
 }
 
 func (c *LspPrivateCommand) name() string {

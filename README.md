@@ -14,11 +14,13 @@
 
 </div>
 
-> ⚠️ **风险须知**：您正在查看 **next** 分支，此分支包含更多实验性功能，稳定性不如 master。生产环境建议使用 [master](https://github.com/cnxysoft/DDBOT-WSa) 稳定版。其他分支：[next-dev](https://github.com/cnxysoft/DDBOT-WSa/tree/next-dev)（开发前沿）—— [详细对比](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)
+> ⚠️ **风险须知**：您正在查看 **next-dev** 开发前沿分支，仅供测试，**请勿用于生产环境**。生产环境请使用 [master](https://github.com/cnxysoft/DDBOT-WSa) 稳定版。其他分支：[next](https://github.com/cnxysoft/DDBOT-WSa/tree/next)（更多功能）—— [详细对比](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/branches/)
 
 DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11 兼容实现端，把 B 站、斗鱼、虎牙、ACFun、YouTube、微博、推特、抖音等平台的直播/动态更新推送到 IM 群。
 
 兼容 LLOneBot / NapCat / Lagrange / Lagrange PMHQ / go-cqhttp 等 OneBot 11 实现端。
+
+> **连接方式可切换**：`application.yaml` 的 `adapter.mode` 支持 `onebot-v11`（默认）、`satori`、`qqofficial`（QQ 官方开放平台机器人）。切换方式、QQ 官方通道的必填项与已知限制见 [INSTALL.md](INSTALL.md) 的「连接方式：adapter.mode」一节。
 
 > DDBOT **不是聊天机器人**。它只在「订阅对象有更新」和「答复命令」时主动发言，交互被刻意设计成最小程度，正常聊天永远不会误触。
 
@@ -37,6 +39,7 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 - **模板系统**：基于 `text/template` 自定义所有推送/命令/事件格式，支持自定义命令和定时消息
 - **权限管理**：命令启用/禁用、单用户命令权限、角色权限
 - **插件扩展**：实现 `Concern` 接口即可接入任意订阅源，框架负责轮询、去重、限流、持久化
+- **Web 管理面板**（next-dev）：浏览器里完成初始化、管理订阅与权限、改配置、编辑模板、实时看日志，默认关闭，见 [Web 管理面板](#web-管理面板)
 
 ## 快速开始
 
@@ -56,6 +59,21 @@ DDBOT-WSa 是基于 DDBOT-ws 的修改版本，通过 WebSocket 连接 OneBot 11
 ```
 
 首次启动会生成默认配置（模板已启用），并显示 B 站扫码二维码，用 B 站 App 扫描登录即可开始订阅。不配 B 站账号时订阅数建议不超过 5 个。
+
+## Web 管理面板
+
+next-dev 内置一个网页管理面板，不用登录 QQ 就能在浏览器里管理 DDBOT。**默认关闭**，在 `application.yaml` 里打开后重启：
+
+```yaml
+admin:
+  enable: true
+  addr: "127.0.0.1:15631"   # 监听地址
+  token: ""                 # 访问密码；留空时第一次打开面板会进入初始化向导
+```
+
+重启后启动日志里会出现一行 `Web 管理面板已启动：http://127.0.0.1:15631/`，照着打开就行；面板没启用时，启动日志里也会有一行提示告诉你怎么开。
+
+> 只在 next-dev 可用，master / next 不含此功能。想从其它机器或手机访问，把 `addr` 改成 `0.0.0.0:15631` 并**务必设置 token**。完整说明见 [Web 管理面板](https://kizunerwe.github.io/DDBOT-WSa-docs/deploy/webui/)。
 
 ## 从纯血 DDBOT 迁移
 

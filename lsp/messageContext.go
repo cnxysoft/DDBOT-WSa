@@ -1,7 +1,7 @@
 package lsp
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/sirupsen/logrus"
 )
@@ -15,7 +15,7 @@ type MessageContext struct {
 	Lsp                   *Lsp
 	Log                   *logrus.Entry
 	Target                mmsg.Target
-	Sender                *message.Sender
+	Sender                *adapter.SenderInfo
 }
 
 func (c *MessageContext) TextSend(text string) interface{} {
@@ -46,7 +46,7 @@ func (c *MessageContext) GetTarget() mmsg.Target {
 	return c.Target
 }
 
-func (c *MessageContext) GetSender() *message.Sender {
+func (c *MessageContext) GetSender() *adapter.SenderInfo {
 	return c.Sender
 }
 

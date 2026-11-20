@@ -15,6 +15,10 @@ var (
 )
 
 func CheckUpdate() string {
+	return checkUpdate("https://api.github.com/repos/cnxysoft/DDBOT-WSa/releases/latest", requests.ProxyOption(proxy_pool.PreferOversea))
+}
+
+func checkUpdate(url string, options ...requests.Option) string {
 	defer func() {
 		if e := recover(); e != nil {
 			logrus.Errorf("更新检测失败：%v", e)
@@ -26,11 +30,11 @@ func CheckUpdate() string {
 	}
 	var opts = []requests.Option{
 		requests.TimeoutOption(time.Second * 3),
-		requests.ProxyOption(proxy_pool.PreferOversea),
 		requests.RetryOption(2),
 	}
+	opts = append(opts, options...)
 	var m map[string]interface{}
-	err := requests.Get("https://api.github.com/repos/cnxysoft/DDBOT-WSa/releases/latest", nil, &m, opts...)
+	err := requests.Get(url, nil, &m, opts...)
 	if err != nil {
 		logrus.Errorf("更新检测失败：%v", err)
 		return ""

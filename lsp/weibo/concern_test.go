@@ -1,64 +1,39 @@
 package weibo
 
-//const testId int64 = 1
-//
-//func TestConcern(t *testing.T) {
-//	logrus.SetLevel(logrus.TraceLevel)
-//	test.InitBuntdb(t)
-//	defer test.CloseBuntdb(t)
-//
-//	testEventChan := make(chan concern.Event, 16)
-//	testNotifyChan := make(chan concern.Notify)
-//
-//	c := NewConcern(testNotifyChan)
-//
-//	assert.NotNil(t, c.GetStateManager())
-//
-//	_, err := c.ParseId("1")
-//	assert.Nil(t, err)
-//
-//	c.StateManager.UseNotifyGeneratorFunc(c.notifyGenerator())
-//	c.StateManager.UseFreshFunc(func(ctx context.Context, eventChan chan<- concern.Event) {
-//		for {
-//			select {
-//			case e := <-testEventChan:
-//				if e != nil {
-//					eventChan <- e
-//				}
-//			case <-ctx.Done():
-//				return
-//			}
-//		}
-//	})
-//
-//	assert.Nil(t, c.StateManager.Start())
-//	defer c.Stop()
-//	defer close(testEventChan)
-//
-//	_, err = c.Add(nil, test.G1, testId, News)
-//	assert.Nil(t, err)
-//
-//	identityInfo, err := c.Get(testId)
-//	assert.Nil(t, err)
-//	assert.EqualValues(t, testId, identityInfo.GetUid())
-//
-//	newsInfo, err := c.freshNews(testId)
-//	assert.Nil(t, err)
-//	assert.NotNil(t, newsInfo)
-//	newsInfo.Cards = []*Card{
-//		{Mblogtype: CardType_Normal},
-//	}
-//
-//	testEventChan <- newsInfo
-//
-//	select {
-//	case notify := <-testNotifyChan:
-//		assert.Equal(t, test.G1, notify.GetGroupCode())
-//		assert.Equal(t, testId, notify.GetUid())
-//	case <-time.After(time.Second):
-//		assert.Fail(t, "no notify received")
-//	}
-//
-//	_, err = c.Remove(nil, test.G1, testId, News)
-//	assert.Nil(t, err)
-//}
+import (
+	"testing"
+
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+)
+
+func TestConcernTypesExcludesCookieAlert(t *testing.T) {
+	c := NewConcern(nil)
+
+	types := c.Types()
+
+	if len(types) != 1 || types[0] != News {
+		t.Fatalf("Types() = %v, want [%s]", types, News)
+	}
+	for _, typ := range types {
+		if typ == CookieAlert {
+			t.Fatalf("Types() contains internal alert type %s", CookieAlert)
+		}
+	}
+}
+
+func TestNotifyGeneratorHandlesCookieAlert(t *testing.T) {
+	c := NewConcern(nil)
+	alert := NewCookieAlertNotify(12345, false)
+
+	notifies := c.notifyGenerator()(12345, alert)
+
+	if len(notifies) != 1 {
+		t.Fatalf("notifyGenerator() produced %d notifications, want 1", len(notifies))
+	}
+	if notifies[0].Type() != concern_type.Type(CookieAlert) {
+		t.Fatalf("notify type = %s, want %s", notifies[0].Type(), CookieAlert)
+	}
+	if notifies[0].GetGroupCode() != 12345 {
+		t.Fatalf("notify group = %d, want 12345", notifies[0].GetGroupCode())
+	}
+}

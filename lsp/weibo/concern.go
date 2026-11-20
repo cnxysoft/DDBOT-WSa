@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/utils"
@@ -19,6 +20,26 @@ import (
 
 var online bool
 var logger = utils.GetModuleLogger("weibo-concern")
+
+// runtimeSUB 维护运行时 SUB，可被扫码登录更新，避免周期刷新使用过期值
+var (
+	runtimeSUB   string
+	runtimeSUBMu sync.RWMutex
+)
+
+// setRuntimeSUB 更新运行时 SUB
+func setRuntimeSUB(sub string) {
+	runtimeSUBMu.Lock()
+	runtimeSUB = sub
+	runtimeSUBMu.Unlock()
+}
+
+// getRuntimeSUB 获取当前运行时 SUB
+func getRuntimeSUB() string {
+	runtimeSUBMu.RLock()
+	defer runtimeSUBMu.RUnlock()
+	return runtimeSUB
+}
 
 type Concern struct {
 	*StateManager
@@ -44,65 +65,170 @@ func (c *Concern) GetStateManager() concern.IStateManager {
 func (c *Concern) Start() error {
 	mode := cfg.GetWeiboMode()
 	isGuest := strings.EqualFold(mode, "guest")
+	isAPI := cfg.IsWeiboAPIMode()
 	sub := ""
-	if !isGuest {
+
+	// API 模式：直接使用外部 API 获取数据，无需 Cookie
+	if isAPI {
+		apiURL := cfg.GetWeiboAPIModeBaseURL()
+		if apiURL == "" {
+			logger.Warn("API 模式但未配置 apiModeBaseURL，将关闭微博推送功能。")
+			return nil
+		}
+		logger.Info("微博运行模式：API 模式，将使用外部 API 获取数据")
+	} else if !isGuest {
+		// Login 模式：检查 cookie、autorefresh 或扫码登录
 		sub = GetSettingCookie()
 		if sub == "" {
-			if GetQRLoginEnable() {
+			// 如果启用了 autorefresh，尝试从 API 获取初始 SUB（仅内存使用）
+			if cfg.GetWeiboAutoRefresh() {
+				apiURL := cfg.GetWeiboCookieRefreshAPI()
+				if apiURL != "" {
+					logger.Info("检测到 weibo.sub 为空但已启用 autorefresh，尝试从 API 获取初始 SUB...")
+					cookies, err := FreshCookieFromAPI()
+					if err != nil {
+						logger.Errorf("从 API 获取初始 SUB 失败：%v", err)
+					} else {
+						apiSub := ExtractSUBFromCookies(cookies)
+						if apiSub != "" {
+							sub = apiSub
+							logger.Infof("从 API 成功获取初始 SUB（仅内存使用）：%s...", sub[:min(20, len(sub))])
+						} else {
+							logger.Warn("API 未返回有效的 SUB Cookie")
+						}
+					}
+				} else {
+					logger.Warn("weibo.autorefresh 已启用但未配置 cookieRefreshAPI")
+				}
+			}
+
+			// 如果仍然没有 SUB，尝试扫码登录
+			if sub == "" && GetQRLoginEnable() {
 				logger.Info("检测到 weibo.sub 为空，已启用 weibo.qrlogin，开始扫码登录以获取 SUB ...")
 				obtained, err := RunQRLogin(QRLoginOption{OutputDir: ".", AutoOpen: true})
 				if err != nil {
-					logger.Errorf("扫码登录获取微博SUB失败: %v", err)
-					logger.Warn("微博Cookie未设置，将关闭微博推送功能。")
+					logger.Errorf("扫码登录获取微博 SUB 失败：%v", err)
+					logger.Warn("微博 Cookie 未设置，将关闭微博推送功能。")
 					return nil
 				}
 				sub = obtained
-				logger.Infof("扫码登录成功，已获取 SUB。请写入 application.yaml -> weibo.sub 以便下次启动：%s", sub)
-			} else {
-				logger.Warn("微博Cookie未设置，将关闭微博推送功能。开启 weibo.qrlogin 可自动扫码获取。")
+				// 扫码成功后尝试持久化到配置文件
+				if err := WriteBackConfig(sub); err != nil {
+					logger.Warnf("扫码登录成功，但写入配置失败: %v，请手动写入 application.yaml -> weibo.sub", err)
+				} else {
+					logger.Infof("扫码登录成功，已写入 application.yaml -> weibo.sub")
+				}
+				// 扫码成功后立即加载 Cookie 到内存
+				if err := freshCookieOpt(sub); err != nil {
+					logger.Errorf("扫码登录成功，但加载 Cookie 到内存失败: %v", err)
+				}
+			}
+
+			// 如果仍然没有 SUB，模块关闭
+			if sub == "" {
+				logger.Warn("微博 Cookie 未设置，将关闭微博推送功能。可开启 weibo.qrlogin 扫码或配置 weibo.autorefresh + cookieRefreshAPI 自动获取。")
 				return nil
 			}
 		}
 	}
-	freshCookieOpt(sub)
 
-	if !isGuest {
-		// 测试微博cookie是否有效，并显示登录信息
+	// 初始化运行时 SUB（供周期刷新和扫码登录更新使用）
+	if sub != "" {
+		setRuntimeSUB(sub)
+	}
+
+	// API 模式：验证 API 连接是否正常
+	if isAPI {
+		testUid := int64(5462373877)
+		profileResp, err := ApiContainerGetIndexProfile(testUid)
+		if err != nil {
+			logger.Errorf("微博 API 模式验证失败 - %v，微博功能可能无法正常使用", err)
+		} else if profileResp.GetOk() != 1 {
+			logger.Errorf("微博 API 模式验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
+		} else {
+			logger.Info("微博启动成功，使用 API 模式")
+		}
+	}
+
+	// Login 模式下启动 SUB 自动刷新
+	if !isGuest && !isAPI {
+		StartSubAutoRefresh()
+	}
+
+	// 启动时立即刷新一次 Cookie（配置已加载，可以正确判断模式）
+	if !isAPI {
+		cookieHealthy.Store(false)
+		ForceFreshCookie()
+	}
+
+	if !isGuest && !isAPI {
+		// 测试微博 cookie 是否有效，并显示登录信息
 		go func() {
-			// 等待cookie刷新完成
+			// 等待 cookie 刷新完成
 			time.Sleep(2 * time.Second)
 
-			// 微博没有直接获取当前登录用户信息的API
-			// 通过访问一个测试用户页面来验证cookie有效性
-			testUid := int64(5462373877) // 捞穹苍的信息试试[doge]
+			testUid := int64(5462373877) // 捞穹苍的信息试试 [doge]
+
+			// 先测试 Profile API
 			profileResp, err := ApiContainerGetIndexProfile(testUid)
 			if err != nil {
-				logger.Errorf("微博Cookie验证失败 - %v，微博功能可能无法正常使用", err)
+				logger.Errorf("微博 Cookie 验证失败 - Profile API: %v，微博功能可能无法正常使用", err)
+				// 等待 WS 就绪后发送告警（带超时，不依赖 bot_online 事件）
+				go waitForWSAndAlert(false)
 				return
 			}
 
 			if profileResp.GetOk() != 1 {
-				logger.Errorf("微博Cookie验证失败 - 接口返回错误码：%v，微博功能可能无法正常使用", profileResp.GetOk())
+				logger.Errorf("微博 Cookie 验证失败 - Profile API 返回错误码: %v，微博功能可能无法正常使用", profileResp.GetOk())
+				go waitForWSAndAlert(false)
 				return
 			}
 
-			// 如果能够成功获取用户信息，说明cookie有效
+			// 再测试 Cards API（获取微博列表），这个 API 需要有效的登录 Cookie
+			cardsResp, err := ApiContainerGetIndexCards(testUid)
+			if err != nil {
+				logger.Errorf("微博 Cookie 验证失败 - Cards API: %v，Cookie 可能已失效", err)
+				go waitForWSAndAlert(false)
+				return
+			}
+
+			if cardsResp.GetOk() != 1 {
+				logger.Errorf("微博 Cookie 验证失败 - Cards API 返回错误码: %v，Cookie 可能已失效", cardsResp.GetOk())
+				go waitForWSAndAlert(false)
+				return
+			}
+
+			// 如果能够成功获取用户信息，说明 cookie 有效
 			if profileResp.GetData() != nil && profileResp.GetData().GetUser() != nil {
 				user := profileResp.GetData().GetUser()
-				logger.Infof("微博启动成功，Cookie验证通过 uid=%d name=%s",
+				logger.Infof("微博启动成功，Cookie 验证通过 uid=%d name=%s",
 					user.GetId(),
 					user.GetScreenName())
 			} else {
-				logger.Info("微博启动成功，Cookie验证通过")
+				logger.Info("微博启动成功，Cookie 验证通过")
 			}
 		}()
 	}
 
-	go func() {
-		for range time.Tick(time.Hour) {
-			freshCookieOpt(sub)
+	// Login/Guest 模式每小时刷新 Cookie（API 模式不需要）
+	// 使用运行时 SUB 而非启动时捕获的值，避免扫码登录后被旧值覆盖
+	if !isAPI {
+		go func() {
+			for range time.Tick(time.Hour) {
+				currentSub := getRuntimeSUB()
+				if err := freshCookieOpt(currentSub); err != nil {
+					logger.Errorf("周期刷新 Cookie 失败: %v", err)
+				}
+			}
+		}()
+	}
+	// Guest 模式：验证 interval 最低限制为 60s
+	if isGuest {
+		interval := cfg.GetEmitIntervalForSite("weibo")
+		if interval > 0 && interval < time.Minute {
+			logger.Warnf("微博 Guest 模式 interval 配置低于最低限制 60s，已自动调整为 60s")
 		}
-	}()
+	}
 	// 使用 EmitQueue 进行轮询，间隔由 weibo.interval 配置控制
 	c.StateManager.UseEmitQueueWithSiteInterval("weibo")
 	c.StateManager.UseFreshFunc(c.EmitQueueFresher(func(p concern_type.Type, id interface{}) ([]concern.Event, error) {
@@ -138,9 +264,39 @@ func (c *Concern) Start() error {
 func (c *Concern) Stop() {
 	logger.Tracef("正在停止%v concern", Site)
 	logger.Tracef("正在停止%v StateManager", Site)
+
+	// 停止 Cookie 监控
+	StopCookieRefreshMonitor()
+
+	// 停止 SUB 自动刷新
+	StopSubAutoRefresh()
+
 	c.StateManager.Stop()
-	logger.Tracef("%v StateManager已停止", Site)
-	logger.Tracef("%v concern已停止", Site)
+	logger.Tracef("%v StateManager 已停止", Site)
+	logger.Tracef("%v concern 已停止", Site)
+}
+
+// waitForWSAndAlert 等待 WS 就绪后发送 Cookie 告警，带 5 分钟超时
+// 不依赖 bot_online 事件，直接轮询 WS 连接状态
+func waitForWSAndAlert(isRecovery bool) {
+	timeout := time.After(5 * time.Minute)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if canDeliverMessage() {
+				if cfg.GetWeiboCookieAlertEnabled() {
+					sendCookieAlertToAllGroups(isRecovery)
+				}
+				return
+			}
+		case <-timeout:
+			logger.Warn("等待 WS 就绪超时（5分钟），Cookie 告警未发送")
+			return
+		}
+	}
 }
 
 func (c *Concern) Add(ctx mmsg.IMsgCtx, groupCode int64, _id interface{}, ctype concern_type.Type) (concern.IdentityInfo, error) {
@@ -233,6 +389,11 @@ func (c *Concern) freshNews(uid int64) (*NewsInfo, error) {
 	cardResp, err := ApiContainerGetIndexCards(uid)
 	if err != nil {
 		log.Errorf("ApiContainerGetIndexCards error %v", err)
+		// 如果是 JSON 解析错误（收到 HTML），可能是用户隐私设置或账号异常
+		if strings.Contains(err.Error(), "invalid character '<'") {
+			logger.Warnf("uid=%d: 无法获取微博数据，该用户可能设置了隐私保护、已注销或被封禁", uid)
+			logger.Warnf("uid=%d: 建议取消订阅该用户", uid)
+		}
 		return nil, err
 	}
 	if cardResp.GetOk() != 1 {
@@ -308,9 +469,98 @@ func (c *Concern) notifyGenerator() concern.NotifyGeneratorFunc {
 					result = append(result, n)
 				}
 			}
+		case *CookieAlertNotify:
+			result = append(result, news)
+		case *SUBExpiredNotify:
+			result = append(result, news)
 		}
 		return result
 	}
+}
+
+// ResubscribeAll 一键重新发起群组的所有微博订阅
+// 会先删除该群当前所有订阅，然后重新添加
+func (c *Concern) ResubscribeAll(ctx mmsg.IMsgCtx, groupCode int64) (int, error) {
+	log := logger.WithFields(localutils.GroupLogFields(groupCode))
+	log.Info("开始一键重新订阅")
+
+	// 1. 获取该群所有微博订阅
+	_, ids, ctypes, err := c.StateManager.ListConcernState(func(gc int64, id interface{}, ct concern_type.Type) bool {
+		return gc == groupCode && ct.ContainAny(News)
+	})
+	if err != nil {
+		log.Errorf("获取订阅列表失败：%v", err)
+		return 0, err
+	}
+
+	if len(ids) == 0 {
+		log.Info("该群暂无微博订阅")
+		return 0, nil
+	}
+
+	log.Infof("找到 %d 个微博订阅", len(ids))
+
+	// 2. 保存订阅 ID 和类型列表
+	type subItem struct {
+		id int64
+		ct concern_type.Type
+	}
+	var subList []subItem
+	for i, id := range ids {
+		subList = append(subList, subItem{
+			id: id.(int64),
+			ct: ctypes[i],
+		})
+	}
+
+	// 3. 删除所有订阅（从数据库中移除）
+	log.Debug("开始删除旧订阅")
+	for _, item := range subList {
+		_, err := c.Remove(ctx, groupCode, item.id, item.ct)
+		if err != nil {
+			log.Errorf("删除订阅失败 uid=%d: %v", item.id, err)
+		} else {
+			log.Debugf("已删除订阅 uid=%d", item.id)
+		}
+	}
+
+	// 4. 重新添加订阅
+	log.Debug("开始重新添加订阅")
+	var successCount int
+	for _, item := range subList {
+		uid := item.id
+		log.Debugf("正在重新订阅用户 %d/%d: uid=%d", successCount+1, len(subList), uid)
+
+		// 刷新用户信息
+		_, err := c.FindOrLoadUserInfo(uid)
+		if err != nil {
+			log.Errorf("刷新用户信息失败 uid=%d: %v", uid, err)
+			continue
+		}
+
+		// 验证用户微博是否可访问
+		cardResp, err := ApiContainerGetIndexCards(uid)
+		if err != nil {
+			log.Errorf("验证用户微博失败 uid=%d: %v", uid, err)
+			continue
+		}
+		if cardResp.GetOk() != 1 {
+			log.Errorf("用户微博不可访问 uid=%d: ok=%d", uid, cardResp.GetOk())
+			continue
+		}
+
+		// 添加订阅到数据库
+		_, err = c.Add(ctx, groupCode, uid, item.ct)
+		if err != nil {
+			log.Errorf("添加订阅失败 uid=%d: %v", uid, err)
+			continue
+		}
+
+		successCount++
+	}
+
+	log.Infof("一键重新订阅完成，成功 %d/%d", successCount, len(subList))
+	return successCount, nil
 }
 
 func (c *Concern) FindUserInfo(uid int64, load bool) (*UserInfo, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"compress/zlib"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/andybalholm/brotli"
@@ -24,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -31,6 +33,10 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 func FilePathWalkDir(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		// WalkDir 在 root 无效或项不可访问时 err != nil 且 d 可能为 nil，必须先检查
+		if err != nil {
+			return err
+		}
 		if !d.IsDir() {
 			files = append(files, path)
 		}
@@ -271,17 +277,22 @@ func HtmlDecoder(ContentEncoding string, resp bytes.Buffer) ([]byte, error) {
 	var body []byte
 	if encoding := ContentEncoding; encoding != "" {
 		body = resp.Bytes()
+		var err error
 		switch encoding {
 		case "gzip":
-			body, _ = decompressGzip(body)
+			body, err = decompressGzip(body)
 		case "deflate":
-			body, _ = decompressDeflate(body)
+			body, err = decompressDeflate(body)
 		case "br":
-			body, _ = decompressBrotli(body)
+			body, err = decompressBrotli(body)
 		case "zstd":
-			body, _ = decompressZstd(body)
+			body, err = decompressZstd(body)
 		default:
 			logger.Warnf("不支持的压缩格式: %s", encoding)
+		}
+		// 解压失败不再静默吞掉错误返回坏数据
+		if err != nil {
+			return nil, err
 		}
 	} else {
 		body = resp.Bytes()
@@ -292,9 +303,17 @@ func HtmlDecoder(ContentEncoding string, resp bytes.Buffer) ([]byte, error) {
 // 解压HTTP数据
 func decompressGzip(data []byte) ([]byte, error) {
 	var b bytes.Buffer
-	r, _ := gzip.NewReader(bytes.NewReader(data))
-	_, _ = io.Copy(&b, r)
-	r.Close()
+	r, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(&b, r); err != nil {
+		r.Close()
+		return nil, err
+	}
+	if err := r.Close(); err != nil {
+		return nil, err
+	}
 	return b.Bytes(), nil
 }
 
@@ -462,35 +481,71 @@ func ExecWithElevation(cmd string, args []string, wait bool) ([]byte, error) {
 		errors.New("failed to execute elevated command with all available methods")
 }
 
+// toUTF16LE 将字符串编码为 UTF-16LE 字节序列（PowerShell -EncodedCommand 要求的格式）
+func toUTF16LE(s string) []byte {
+	runes := utf16.Encode([]rune(s))
+	b := make([]byte, 0, len(runes)*2)
+	for _, r := range runes {
+		b = append(b, byte(r), byte(r>>8))
+	}
+	return b
+}
+
+// escapePS singleQuoted 转义 PowerShell 单引号字符串内容（' 需双写为 ”）
+func psSingleQuoted(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// buildDotnetArguments 按 .NET ProcessStartInfo.Arguments 的解析规则将参数列表转为字符串：
+// 参数整体用双引号包裹，内嵌双引号转义为 \"，引号前的反斜杠需成倍转义，尾部反斜杠双写
+func buildDotnetArguments(args []string) string {
+	escapedArgs := make([]string, 0, len(args))
+	for _, arg := range args {
+		var sb strings.Builder
+		sb.WriteByte('"')
+		backslashes := 0
+		for i := 0; i < len(arg); i++ {
+			c := arg[i]
+			switch c {
+			case '\\':
+				backslashes++
+			case '"':
+				sb.WriteString(strings.Repeat(`\`, backslashes*2+1))
+				backslashes = 0
+				sb.WriteByte(c)
+			default:
+				sb.WriteString(strings.Repeat(`\`, backslashes))
+				backslashes = 0
+				sb.WriteByte(c)
+			}
+		}
+		sb.WriteString(strings.Repeat(`\`, backslashes*2))
+		sb.WriteByte('"')
+		escapedArgs = append(escapedArgs, sb.String())
+	}
+	return strings.Join(escapedArgs, " ")
+}
+
 // execWithPowerShell 使用 PowerShell 执行需要提升权限的命令
 func execWithPowerShell(cmdPath string, args []string, wait bool) ([]byte, error) {
-	// 构建参数字符串，正确处理带空格的参数
-	var escapedArgs []string
-	for _, arg := range args {
-		// 简单处理参数中的特殊字符
-		escapedArg := strings.ReplaceAll(arg, "\"", "\\\"")
-		if strings.Contains(arg, " ") {
-			escapedArgs = append(escapedArgs, "\""+escapedArg+"\"")
-		} else {
-			escapedArgs = append(escapedArgs, escapedArg)
-		}
-	}
+	// 安全修复：原实现将参数经 " 转义后直接拼接进 PowerShell 脚本（该转义在 PS 中无效），
+	// 参数含引号或 $() 即可注入任意命令。现改为：
+	// 1) 参数按 .NET Arguments 规则转义后作为独立字符串交给 ProcessStartInfo.Arguments
+	// 2) 脚本经 -EncodedCommand (Base64/UTF-16LE) 传递，杜绝命令行层面的解析注入
+	argLine := buildDotnetArguments(args)
 
-	argLine := strings.Join(escapedArgs, " ")
-
-	// 构建 PowerShell 命令
-	// 注意：在 PowerShell 中，Go 的 true/false 需要转换为 $true/$false
+	// PowerShell 单引号字符串中只需转义单引号，双引号/美元符均无特殊含义
 	psWait := "$false"
 	if wait {
 		psWait = "$true"
 	}
-	
+
 	psCommand := fmt.Sprintf(`
 		$ErrorActionPreference = "Stop"
 		try {
 			$psi = New-Object System.Diagnostics.ProcessStartInfo
-			$psi.FileName = "%s"
-			$psi.Arguments = "%s"
+			$psi.FileName = %s
+			$psi.Arguments = %s
 			$psi.Verb = "runas"
 			$psi.WindowStyle = "Hidden"
 			$psi.UseShellExecute = $true
@@ -505,10 +560,11 @@ func execWithPowerShell(cmdPath string, args []string, wait bool) ([]byte, error
 			Write-Output "Error: $($_.Exception.Message)"
 			Exit 1
 		}
-	`, strings.ReplaceAll(cmdPath, "\"", "\\\""), argLine, psWait)
+	`, psSingleQuoted(cmdPath), psSingleQuoted(argLine), psWait)
 
-	// 使用 PowerShell 启动一个提升权限的进程
-	psCmd := exec.Command("powershell", "-ExecutionPolicy", "Bypass", "-Command", psCommand)
+	// 使用 -EncodedCommand 启动提升权限的进程
+	encoded := base64.StdEncoding.EncodeToString(toUTF16LE(psCommand))
+	psCmd := exec.Command("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
 
 	// 如果不需要等待，直接启动进程
 	if !wait {

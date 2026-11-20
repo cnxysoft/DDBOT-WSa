@@ -2,8 +2,11 @@ package template
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,6 +89,13 @@ func TestTimeFuncs(t *testing.T) {
 	assert.Equal(t, expected.Unix(), ts)
 }
 
+func TestFormatDuration(t *testing.T) {
+	assert.Equal(t, "", formatDuration(0))
+	assert.Equal(t, "59秒", formatDuration(59))
+	assert.Equal(t, "2分钟27秒", formatDuration(int64(147)))
+	assert.Equal(t, "3小时13分钟0秒", formatDuration("11580"))
+}
+
 func TestFileFuncs(t *testing.T) {
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
@@ -113,6 +123,13 @@ func TestFileFuncs(t *testing.T) {
 	// 验证追加内容
 	data = openFile(tempFile)
 	assert.Equal(t, []byte(content+"\nnew line"), data)
+
+	// updateFile 应能创建不存在的调试文件并写入内容。
+	debugFile := filepath.Join(tempDir, "debug.json")
+	err = updateFile(debugFile, "debug data")
+	assert.NoError(t, err)
+	data = openFile(debugFile)
+	assert.Equal(t, []byte("debug data"), data)
 
 	// 测试delFile
 	err = delFile(tempFile)
@@ -192,6 +209,89 @@ func TestPicFuncs(t *testing.T) {
 	assert.NotEmpty(t, e.Buf)
 }
 
+func TestPicFuncs_WithParamsAndAlternative(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/gif")
+		_, _ = w.Write([]byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"))
+	}))
+	defer server.Close()
+
+	e := pic(server.URL, "alt text", map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.Equal(t, server.URL, e.Url)
+	assert.Nil(t, e.Buf)
+
+	e = pic(server.URL, "alt text", map[string]interface{}{
+		DDBOT_REQ_FETCH: "local",
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+}
+
+func TestPicxFuncs(t *testing.T) {
+	var hitCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hitCount, 1)
+		w.Header().Set("Content-Type", "image/gif")
+		_, _ = w.Write([]byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"))
+	}))
+	defer server.Close()
+
+	e := picx(server.URL, map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+
+	e = picx(server.URL, "alt text")
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+
+	e = pic(server.URL, "alt text", fetchLocal(), proxyNone())
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+
+	e = picx(server.URL, proxyNone())
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&hitCount))
+}
+
+func TestPicmFuncs_MergeImageList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/gif")
+		_, _ = w.Write([]byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"))
+	}))
+	defer server.Close()
+
+	e := picm([]string{
+		server.URL + "/1",
+		server.URL + "/2",
+		server.URL + "/3",
+		server.URL + "/4",
+	}, "merged")
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+
+	e = picmx([]interface{}{
+		server.URL + "/1",
+		server.URL + "/2",
+		server.URL + "/3",
+		server.URL + "/4",
+	}, "merged", proxyNone())
+	assert.NotNil(t, e)
+	assert.NotEmpty(t, e.Buf)
+	assert.True(t, e.IsMerged())
+	// A partial load leaving only one valid source retains the original media
+	// behavior, including GIFs, rather than labeling it as a generated JPEG.
+	e = picm([]interface{}{[]byte("GIF89a"), make(chan int)})
+	assert.Equal(t, []byte("GIF89a"), e.Buf)
+	assert.False(t, e.IsMerged())
+}
+
 func TestVideoFuncs(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "ddbot_video_test")
 	assert.Nil(t, err)
@@ -207,8 +307,7 @@ func TestVideoFuncs(t *testing.T) {
 	// 测试video函数
 	e := video(videoFile)
 	assert.NotNil(t, e)
-	assert.EqualValues(t, videoFile, e.Url)
-	//assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
+	assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
 
 	// 测试videoUri函数
 	e = videoUri(tempDir)
@@ -220,6 +319,30 @@ func TestVideoFuncs(t *testing.T) {
 	e = video(b64)
 	assert.NotNil(t, e)
 	assert.NotEmpty(t, e.Buf)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte{4, 5, 6, 7})
+	}))
+	defer server.Close()
+
+	e = video(server.URL, map[string]interface{}{
+		DDBOT_REQ_FETCH: "local",
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
+
+	e = video(server.URL, "alt text", map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.Equal(t, server.URL, e.Url)
+	assert.Nil(t, e.Buf)
+
+	e = videox(server.URL, "alt text")
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{4, 5, 6, 7}, e.Buf)
 }
 
 func TestRecordFuncs(t *testing.T) {
@@ -237,8 +360,7 @@ func TestRecordFuncs(t *testing.T) {
 	// 测试record函数
 	e := record(recordFile)
 	assert.NotNil(t, e)
-	assert.EqualValues(t, recordFile, e.Url)
-	//assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
+	assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
 
 	// 测试recordUri函数
 	e = recordUri(tempDir)
@@ -250,6 +372,57 @@ func TestRecordFuncs(t *testing.T) {
 	e = record(b64)
 	assert.NotNil(t, e)
 	assert.NotEmpty(t, e.Buf)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte{8, 9, 10, 11})
+	}))
+	defer server.Close()
+
+	e = record(server.URL, map[string]interface{}{
+		DDBOT_REQ_FETCH: "local",
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
+
+	e = record(server.URL, "alt text", map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.Equal(t, server.URL, e.Url)
+	assert.Nil(t, e.Buf)
+
+	e = recordx(server.URL, "alt text")
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{8, 9, 10, 11}, e.Buf)
+}
+
+func TestFilexFuncs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="sample.bin"`)
+		_, _ = w.Write([]byte{12, 13, 14, 15})
+	}))
+	defer server.Close()
+
+	e := file(server.URL, map[string]interface{}{
+		DDBOT_REQ_FETCH: "local",
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{12, 13, 14, 15}, e.Buf)
+
+	e = file(server.URL, "alt text", map[string]interface{}{
+		DDBOT_REQ_PROXY: "prefer_none",
+	})
+	assert.NotNil(t, e)
+	assert.Equal(t, server.URL, e.Url)
+	assert.Nil(t, e.Buf)
+
+	e = filex(server.URL, "alt text")
+	assert.NotNil(t, e)
+	assert.EqualValues(t, []byte{12, 13, 14, 15}, e.Buf)
 }
 
 func TestCooldownFuncs(t *testing.T) {
@@ -340,7 +513,7 @@ func runTemplateWithExt(template string, data map[string]interface{}) (string, e
 	var m = mmsg.NewMSG()
 	var tmpl = Must(New("").Funcs(FuncMap(funcsExt)).Parse(template))
 	var err = tmpl.Execute(m, data)
-	return msgstringer.MsgToString(m.Elements()), err
+	return msgstringer.AdapterMsgToString(m.Elements()), err
 }
 
 // 辅助函数：比较年月日和时分

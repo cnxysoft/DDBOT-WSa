@@ -48,7 +48,7 @@ func (c *Concern) Stop() {
 }
 
 func (c *Concern) Start() error {
-	c.UseEmitQueue()
+	c.UseEmitQueueWithSiteInterval(Site)
 	c.StateManager.UseNotifyGeneratorFunc(c.notifyGenerator())
 	c.StateManager.UseFreshFunc(c.fresh())
 	return c.StateManager.Start()

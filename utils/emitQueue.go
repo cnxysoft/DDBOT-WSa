@@ -2,10 +2,12 @@ package utils
 
 import (
 	"container/list"
-	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
-	"go.uber.org/atomic"
+	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
+	"go.uber.org/atomic"
 )
 
 type EmitE struct {
@@ -130,7 +132,7 @@ func (q *EmitQueue) core() {
 		} else {
 			q.cond.L.Unlock()
 		}
-		q.waitTimer.Reset(q.TimeInterval)
+		q.waitTimer.Reset(q.nextInterval())
 	}
 }
 
@@ -157,4 +159,16 @@ func NewEmitQueue(c chan<- *EmitE, interval time.Duration) *EmitQueue {
 		TimeInterval: interval,
 	}
 	return q
+}
+
+func (q *EmitQueue) nextInterval() time.Duration {
+	if q.TimeInterval <= 0 {
+		return q.TimeInterval
+	}
+	jitterRange := q.TimeInterval / 2
+	if jitterRange <= 0 {
+		return q.TimeInterval
+	}
+	jitter := time.Duration(rand.Int63n(int64(jitterRange)))
+	return q.TimeInterval + jitter - (q.TimeInterval / 4)
 }

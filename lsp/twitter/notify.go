@@ -8,32 +8,35 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/ffmpeg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // TwitterDynamic 推文动态数据结构，用于模板渲染
 type TwitterDynamic struct {
-	User          TwitterUser    `json:"user"`
-	Type          int            `json:"type"`
-	Content       string         `json:"content"`
-	Date          string         `json:"date"`
-	Url           string         `json:"url"`
-	Media         []TwitterMedia `json:"media"`
-	IsRetweet     bool           `json:"is_retweet"`
-	WithQuote     bool           `json:"with_quote"`
-	Retweet       TwitterRetweet `json:"retweet"`
-	Quote         TwitterQuote   `json:"quote"`
-	ShouldCompact bool           `json:"should_compact"`
-	CompactKey    string         `json:"compact_key"`
+	User            TwitterUser    `json:"user"`
+	Type            int            `json:"type"`
+	Content         string         `json:"content"`
+	TranslatedText  string         `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string         `json:"translation_lang,omitempty"` // 翻译源语言
+	Date            string         `json:"date"`
+	Url             string         `json:"url"`
+	Media           []TwitterMedia `json:"media"`
+	IsRetweet       bool           `json:"is_retweet"`
+	WithQuote       bool           `json:"with_quote"`
+	Retweet         TwitterRetweet `json:"retweet"`
+	Quote           TwitterQuote   `json:"quote"`
+	ShouldCompact   bool           `json:"should_compact"`
+	CompactKey      string         `json:"compact_key"`
 }
 
 // TwitterUser 用户信息
@@ -58,10 +61,12 @@ type TwitterRetweet struct {
 
 // TwitterQuote 引用信息
 type TwitterQuote struct {
-	User    TwitterUser    `json:"user"`
-	Content string         `json:"content"`
-	Media   []TwitterMedia `json:"media"`
-	Date    string         `json:"date"`
+	User            TwitterUser    `json:"user"`
+	Content         string         `json:"content"`
+	TranslatedText  string         `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string         `json:"translation_lang,omitempty"` // 翻译源语言
+	Media           []TwitterMedia `json:"media"`
+	Date            string         `json:"date"`
 }
 
 type ConcernNewsNotify struct {
@@ -80,6 +85,53 @@ func (n *ConcernNewsNotify) ToMessage() (m *mmsg.MSG) {
 	return n.GetMSG(n)
 }
 
+// TextFilterContent 返回模板中的动态文字，供 text/not_text 规则匹配。
+// 这里不调用 ToMessage，避免在 NotifyBeforeCallback 设置紧凑状态前缓存模板渲染结果。
+func (n *ConcernNewsNotify) TextFilterContent() string {
+	if n == nil || n.NewsInfo == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, 12)
+	appendText := func(values ...string) {
+		for _, value := range values {
+			if value != "" {
+				parts = append(parts, value)
+			}
+		}
+	}
+
+	if n.UserInfo != nil {
+		appendText(n.UserInfo.Name, n.UserInfo.Id)
+	}
+	if n.Tweet == nil {
+		return strings.Join(parts, "\n")
+	}
+
+	tweet := n.Tweet
+	appendText(tweet.Content, tweet.Url)
+	createdAt := tweet.CreatedAt
+	if TwitterMode != ModeAPI && tweet.IsRetweet {
+		createdAt = time.Now().UTC()
+	}
+	if !createdAt.IsZero() {
+		appendText(CSTTime(createdAt).Format(time.DateTime))
+	}
+	if (tweet.IsRetweet || tweet.QuoteTweet != nil) && tweet.OrgUser != nil {
+		appendText(tweet.OrgUser.Name, tweet.OrgUser.ScreenName)
+	}
+	if quote := tweet.QuoteTweet; quote != nil {
+		appendText(quote.Content)
+		if !quote.CreatedAt.IsZero() {
+			appendText(CSTTime(quote.CreatedAt).Format(time.DateTime))
+		}
+		if quote.OrgUser != nil {
+			appendText(quote.OrgUser.Name, quote.OrgUser.ScreenName)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // buildTwitterDynamic 构建TwitterDynamic数据
 func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 	dynamic := TwitterDynamic{}
@@ -95,39 +147,38 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 	dynamic.ShouldCompact = n.shouldCompact
 	dynamic.CompactKey = n.compactKey
 
+	// 翻译推文内容：读取 fetch 阶段异步预翻译的缓存，避免在推送路径上同步调用网络 API
+	// 翻译未启用时直接跳过，避免每条文外推文都打一次告警日志
+	if IsTranslateEnabled() && ShouldTranslate(n.Tweet.Content, n.Tweet.TranslationLang) {
+		if result := n.Tweet.WaitTranslation(getTranslationBatchWait()); result != nil {
+			dynamic.TranslatedText = result.TranslatedText
+			dynamic.TranslationLang = result.SourceLang
+			// 同时更新到Tweet对象，供后续使用
+			n.Tweet.TranslatedText = result.TranslatedText
+			n.Tweet.TranslationLang = result.SourceLang
+		} else {
+			logger.WithField("TweetId", n.Tweet.ID).
+				Warn("推文翻译缓存未就绪，本次推送不带翻译")
+		}
+	}
+
 	// 时间处理
 	var createdAt time.Time
-	if n.Tweet.RtType() == RETWEET {
-		createdAt = time.Now().UTC()
-	} else {
+	if TwitterMode == ModeAPI {
 		createdAt = n.Tweet.CreatedAt
+	} else {
+		if n.Tweet.IsRetweet {
+			createdAt = time.Now().UTC()
+		} else {
+			createdAt = n.Tweet.CreatedAt
+		}
 	}
 	dynamic.Date = CSTTime(createdAt).Format(time.DateTime)
 
 	// 媒体处理
 	dynamic.Media = make([]TwitterMedia, 0, len(n.Tweet.Media))
 	for _, media := range n.Tweet.Media {
-		processedUrl := n.processMediaUrl(media.Url, media.Type)
-
-		// 处理媒体文件，下载并保存到本地
-		localPath, err := n.processMediaFile(media)
-		if err != nil {
-			logger.WithField("mediaUrl", media.Url).
-				WithField("mediaType", media.Type).
-				Errorf("processMediaFile failed, will use URL directly: %v", err)
-		}
-
-		mediaBytes, err := os.ReadFile(localPath)
-		if err != nil {
-			logger.WithField("localPath", localPath).
-				Errorf("ReadFile failed: %v", err)
-		}
-
-		dynamic.Media = append(dynamic.Media, TwitterMedia{
-			Type:   media.Type,
-			Url:    processedUrl,
-			Base64: base64.StdEncoding.EncodeToString(mediaBytes),
-		})
+		dynamic.Media = append(dynamic.Media, n.buildMedia(media))
 	}
 
 	// 转发信息
@@ -148,27 +199,7 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 		quote := n.Tweet.QuoteTweet
 		quoteMedia := make([]TwitterMedia, 0, len(quote.Media))
 		for _, media := range quote.Media {
-			processedUrl := n.processMediaUrl(media.Url, media.Type)
-
-			// 处理引用的媒体文件，下载并保存到本地
-			localPath, err := n.processMediaFile(media)
-			if err != nil {
-				logger.WithField("mediaUrl", media.Url).
-					WithField("mediaType", media.Type).
-					Errorf("processMediaFile for quote tweet failed, will use URL directly: %v", err)
-			}
-
-			mediaBytes, err := os.ReadFile(localPath)
-			if err != nil {
-				logger.WithField("localPath", localPath).
-					Errorf("ReadFile failed: %v", err)
-			}
-
-			quoteMedia = append(quoteMedia, TwitterMedia{
-				Type:   media.Type,
-				Url:    processedUrl,
-				Base64: base64.StdEncoding.EncodeToString(mediaBytes),
-			})
+			quoteMedia = append(quoteMedia, n.buildMedia(media))
 		}
 		dynamic.Quote = TwitterQuote{
 			User: TwitterUser{
@@ -179,9 +210,37 @@ func (n *ConcernNewsNotify) buildTwitterDynamic() TwitterDynamic {
 			Media:   quoteMedia,
 			Date:    CSTTime(quote.CreatedAt).Format(time.DateTime),
 		}
+		// 读取 fetch 阶段异步预翻译的引用推文结果
+		if IsTranslateEnabled() && ShouldTranslate(quote.Content, quote.TranslationLang) {
+			if result := quote.WaitTranslation(getTranslationBatchWait()); result != nil {
+				dynamic.Quote.TranslatedText = result.TranslatedText
+				dynamic.Quote.TranslationLang = result.SourceLang
+			} else {
+				logger.WithField("TweetId", quote.ID).
+					Warn("引用推文翻译缓存未就绪，本次推送不带翻译")
+			}
+		}
 	}
 
 	return dynamic
+}
+
+func (n *ConcernNewsNotify) buildMedia(media *Media) TwitterMedia {
+	result := TwitterMedia{Type: media.Type, Url: n.processMediaUrl(media.Url, media.Type)}
+	localPath, err := n.processMediaFile(media)
+	if err != nil {
+		// The downloader records the failure once. Keep the URL for the template,
+		// without trying to read an empty path and logging a second error.
+		return result
+	}
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		mediaLogEntry(result.Url, media.Type).WithField("stage", "read").
+			WithError(err).Warn("Twitter 媒体文件读取失败，回退到 URL")
+		return result
+	}
+	result.Base64 = base64.StdEncoding.EncodeToString(data)
+	return result
 }
 
 // processMediaUrl 处理媒体URL，确保返回完整的HTTP URL
@@ -251,10 +310,10 @@ func (n *ConcernNewsNotify) processMediaFile(media *Media) (string, error) {
 
 	// 根据媒体类型选择不同的处理方式
 	switch media.Type {
-	case "image":
+	case "image", "photo":
 		// 处理图片文件
 		localPath, err = n.processImageFile(mediaUrl)
-	case "gif":
+	case "gif", "animated_gif":
 		// 处理GIF文件
 		localPath, err = n.processGifFile(mediaUrl)
 	case "video", "video(m3u8)":
@@ -263,12 +322,10 @@ func (n *ConcernNewsNotify) processMediaFile(media *Media) (string, error) {
 	default:
 		// 不支持的媒体类型
 		err = fmt.Errorf("unsupported media type: %s", media.Type)
+		mediaLogEntry(mediaUrl, media.Type).WithError(err).Warn("Twitter 媒体类型不支持，回退到 URL")
 	}
 
 	if err != nil {
-		logger.WithField("mediaUrl", mediaUrl).
-			WithField("mediaType", media.Type).
-			Errorf("processMediaFile failed: %v", err)
 		return "", err
 	}
 
@@ -281,41 +338,21 @@ func (n *ConcernNewsNotify) processImageFile(url string) (string, error) {
 	finalURL := NormalizeMediaURLToPBSOrig(url)
 
 	// 尝试下载最佳质量的图片
-	filePath, err := tryDownloadBestImage(finalURL)
-	if err != nil {
-		logger.WithField("url", url).Errorf("tryDownloadBestImage failed: %v", err)
-		return "", err
-	}
-
-	return filePath, nil
+	return tryDownloadBestImage(finalURL)
 }
 
 // processGifFile 处理GIF文件，下载并保存到本地
 func (n *ConcernNewsNotify) processGifFile(url string) (string, error) {
 	// GIF文件处理逻辑，复用原始代码中的实现
 	// 确保保留动画效果
-	filePath, err := downloadMedia(url, true)
-	if err != nil {
-		logger.WithField("url", url).Errorf("downloadMedia failed: %v", err)
-		return "", err
-	}
-
-	return filePath, nil
+	return downloadMedia(url, true)
 }
 
 // processVideoFile 处理视频文件，下载并保存到本地
 func (n *ConcernNewsNotify) processVideoFile(url string, mediaType string) (string, error) {
 	// 视频文件处理逻辑，复用原始代码中的实现
 	// 支持直接MP4和M3U8格式
-	filePath, err := downloadMedia(url, false)
-	if err != nil {
-		logger.WithField("url", url).
-			WithField("mediaType", mediaType).
-			Errorf("downloadMedia failed: %v", err)
-		return "", err
-	}
-
-	return filePath, nil
+	return downloadMedia(url, false)
 }
 
 // fallbackMSG 模板加载失败时的回退消息生成
@@ -332,7 +369,11 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		// 通过回复之前消息的方式简化推送
 		msg, _ := n.concern.GetNotifyMsg(n.GroupCode, n.compactKey)
 		if msg != nil {
-			m.Append(message.NewReply(msg))
+			var sender int64
+			if msg.Sender != nil {
+				sender = msg.Sender.UserID
+			}
+			m.Append(&adapter.ReplySegment{ReplySeq: int32(msg.ID), Id: strconv.Itoa(int(msg.ID)), Sender: sender, Time: int32(msg.Time)})
 		}
 		logger.WithField("compact_key", n.compactKey).Debug("compact notify")
 		Tips := "转发"
@@ -352,6 +393,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 			CSTTime(time.Now().UTC()).Format(time.DateTime),
 			n.Tweet.Content,
 		)
+		// 添加翻译内容
+		if n.Tweet.TranslatedText != "" {
+			m.Textf("[翻译] %s\n", n.Tweet.TranslatedText)
+		}
 		addTweetUrl(m, n.Tweet.Url, &addedUrl)
 	} else {
 		// 构造消息
@@ -360,7 +405,11 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 		}
 		var CreatedAt time.Time
 		if n.Tweet.RtType() == RETWEET {
-			CreatedAt = time.Now().UTC()
+			if TwitterMode == ModeAPI {
+				CreatedAt = n.Tweet.CreatedAt
+			} else {
+				CreatedAt = time.Now().UTC()
+			}
 			OrgUserName := "Unknown User"
 			if n.Tweet.OrgUser != nil {
 				OrgUserName = n.Tweet.OrgUser.Name
@@ -378,6 +427,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 				content += "\n"
 			}
 			m.Text(content)
+			// 添加翻译内容
+			if n.Tweet.TranslatedText != "" {
+				m.Textf("[翻译] %s\n", n.Tweet.TranslatedText)
+			}
 		}
 		// msg加入媒体
 		addMedia(n.Tweet, m, true, &addedUrl)
@@ -401,6 +454,10 @@ func (n *ConcernNewsNotify) fallbackMSG() *mmsg.MSG {
 			// msg加入推文
 			if QuoteTweet.Content != "" {
 				m.Text(QuoteTweet.Content + "\n")
+				// 添加引用推文的翻译
+				if QuoteTweet.TranslatedText != "" {
+					m.Textf("[翻译] %s\n", QuoteTweet.TranslatedText)
+				}
 			}
 			// msg加入媒体
 			addMedia(QuoteTweet, m, false, &addedUrl)
@@ -439,18 +496,16 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 		if strings.HasPrefix(unescape, "/") {
 			Url, err = setMirrorHost(tweet.MirrorHost, *m)
 			if err != nil {
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recoverd %v", err)
+				mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+					WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 				continue
 			}
 			if Url.Hostname() != "" {
 				if Url.Hostname() == XImgHost || Url.Hostname() == XVideoHost {
 					unescape, err = processMediaURL(m.Url)
 					if err != nil {
-						logger.WithField("stack", string(debug.Stack())).
-							WithField("tweetId", tweet.ID).
-							Errorf("concern notify recoverd: %v", err)
+						mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+							WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 						continue
 					}
 				}
@@ -458,12 +513,16 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 		} else {
 			UrlStr, err := processMediaURL(unescape)
 			if err != nil {
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recoverd: %v", err)
+				mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+					WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 				continue
 			}
 			Url, err = url.Parse(UrlStr)
+			if err != nil {
+				mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+					WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
+				continue
+			}
 		}
 
 		switch m.Type {
@@ -475,9 +534,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 			}
 			fullURL, err := Url.Parse(unescape)
 			if err != nil {
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recovered %v", err)
+				mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+					WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 				break
 			}
 
@@ -486,10 +544,6 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 			filePath, derr := tryDownloadBestImage(finalURL)
 			if derr != nil {
 				// 下载失败 → 兜底仍以 URL 方式发送，避免消息丢失
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("download orig image failed: %v", derr)
-
 				var opts []requests.Option
 				if tweet.MirrorHost == "nitter.privacyredirect.com" {
 					opts = []requests.Option{
@@ -522,9 +576,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 				idx := strings.Index(unescape, "video.twimg.com")
 				unescape, err = processMediaURL(unescape[idx:])
 				if err != nil {
-					logger.WithField("stack", string(debug.Stack())).
-						WithField("tweetId", tweet.ID).
-						Errorf("concern notify recoverd: %v", err)
+					mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+						WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 					continue
 				}
 				m.Url = unescape
@@ -543,9 +596,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 				idx := strings.Index(unescape, "video.twimg.com")
 				unescape, err = processMediaURL(unescape[idx:])
 				if err != nil {
-					logger.WithField("stack", string(debug.Stack())).
-						WithField("tweetId", tweet.ID).
-						Errorf("concern notify recoverd: %v", err)
+					mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+						WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 					continue
 				}
 				m.Url = "https://" + unescape
@@ -553,9 +605,6 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 			// 下载并转码
 			filePath, err := downloadMedia(m.Url, true)
 			if err != nil {
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recoverd: %v", err)
 				continue
 			}
 			message.Append(mmsg.NewImageByLocal(filePath))
@@ -571,9 +620,8 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 				idx := strings.Index(unescape, "https%3A%2F%2F")
 				unescape, err = processMediaURL(unescape[idx:])
 				if err != nil {
-					logger.WithField("stack", string(debug.Stack())).
-						WithField("tweetId", tweet.ID).
-						Errorf("concern notify recoverd: %v", err)
+					mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+						WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
 					continue
 				}
 				idx = findNthIndex(unescape, '?', 1)
@@ -584,18 +632,15 @@ func addMedia(tweet *Tweet, message *mmsg.MSG, mainTweet bool, addedUrl *bool) {
 			} else {
 				fullURL, err = Url.Parse(unescape)
 				if err != nil {
-					logger.WithField("stack", string(debug.Stack())).
-						WithField("tweetId", tweet.ID).
-						Errorf("concern notify recoverd %v", err)
+					mediaLogEntry(m.Url, m.Type).WithField("tweetId", tweet.ID).
+						WithField("stage", "parse").WithError(err).Warn("Twitter 媒体 URL 解析失败")
+					continue
 				}
 				m.Url = fullURL.String()
 			}
 			// 下载并转码
 			filePath, err := downloadMedia(m.Url, false)
 			if err != nil {
-				logger.WithField("stack", string(debug.Stack())).
-					WithField("tweetId", tweet.ID).
-					Errorf("concern notify recoverd: %v", err)
 				continue
 			}
 			if mainTweet {
@@ -624,8 +669,37 @@ func addTweetUrl(msg *mmsg.MSG, url string, added *bool) {
 	}
 }
 
-func downloadMedia(Url string, IsGif bool) (string, error) {
+func mediaLogEntry(mediaURL, mediaType string) *logrus.Entry {
+	mediaHost := ""
+	if parsed, err := url.Parse(mediaURL); err == nil {
+		mediaHost = parsed.Host
+	}
+	return logger.WithFields(logrus.Fields{
+		"stage": "media", "media_host": mediaHost, "media_type": mediaType,
+	})
+}
+
+func logMediaResult(entry *logrus.Entry, started time.Time, path string, err error) {
+	entry = entry.WithField("duration_ms", time.Since(started).Milliseconds())
+	if err != nil {
+		entry.WithError(err).Warn("Twitter 媒体下载转换失败，回退到 URL")
+		return
+	}
+	if info, statErr := os.Stat(path); statErr == nil {
+		entry.WithField("bytes", info.Size()).Debug("Twitter 媒体下载转换成功")
+	}
+}
+
+func downloadMedia(Url string, IsGif bool) (path string, err error) {
+	started := time.Now()
+	fileExt := "mp4"
+	if IsGif {
+		fileExt = "gif"
+	}
 	var proxyStr string
+	defer func() {
+		logMediaResult(mediaLogEntry(Url, fileExt).WithField("via_proxy", proxyStr != ""), started, path, err)
+	}()
 	proxy, err := proxy_pool.Get(proxy_pool.PreferOversea)
 	if err != nil {
 		if err != proxy_pool.ErrNil {
@@ -635,36 +709,29 @@ func downloadMedia(Url string, IsGif bool) (string, error) {
 	} else {
 		proxyStr = proxy.ProxyString()
 	}
-	if _, err = os.Stat("./res"); os.IsNotExist(err) {
-		if err = os.MkdirAll("./res", 0755); err != nil {
-			return "", err
-		}
+	if err = os.MkdirAll("./tmp", 0755); err != nil {
+		return "", err
 	}
-	fileExt := "mp4"
-	if IsGif {
-		fileExt = "gif"
-	}
-	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + fileExt)
-
-	if IsGif {
-		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
-	} else {
-		err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
-	}
+	filePath, err := filepath.Abs("./tmp/" + uuid.New().String() + "." + fileExt)
 	if err != nil {
+		return "", err
+	}
+	err = ffmpeg.ConvMediaWithProxy(Url, filePath, proxyStr, fileExt)
+	if err != nil {
+		os.Remove(filePath)
 		return "", err
 	}
 	go func(path string) {
 		time.Sleep(time.Second * 180)
-		logger.Debugf("Delete temporary files: %s", path)
-		err := os.Remove(path)
-		if err != nil {
-			logger.WithField("stack", string(debug.Stack())).
-				WithField("filePath", path).
-				Errorf("Delete temporary files error: %v", err)
-		}
+		removeTemporaryMedia(path)
 	}(filePath)
 	return filePath, nil
+}
+
+func removeTemporaryMedia(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		logger.WithField("filePath", path).WithError(err).Warn("Twitter 临时媒体文件清理失败")
+	}
 }
 
 //func convMediaWithProxy(Url, outputPath, proxyURL, Type string) error {
@@ -843,7 +910,9 @@ func NormalizeMediaURLToPBSOrig(src string) string {
 
 // ======== 按 orig/large/medium 下载到本地文件（兜底） ========
 
-func tryDownloadBestImage(finalURL string) (string, error) {
+func tryDownloadBestImage(finalURL string) (path string, err error) {
+	started := time.Now()
+	defer func() { logMediaResult(mediaLogEntry(finalURL, "image"), started, path, err) }()
 	// 优先 orig
 	candidates := []string{NormalizeMediaURLToPBSOrig(finalURL)}
 
@@ -874,7 +943,7 @@ func tryDownloadBestImage(finalURL string) (string, error) {
 	return "", lastErr
 }
 
-// ======== 下载图片到 ./res/<uuid>.<ext> 并异步清理 ========
+// ======== 下载图片到 ./tmp/<uuid>.<ext> 并异步清理 ========
 
 func downloadImageLocal(imgURL string) (string, error) {
 	var buf bytes.Buffer
@@ -885,8 +954,8 @@ func downloadImageLocal(imgURL string) (string, error) {
 		return "", err
 	}
 
-	if _, err := os.Stat("./res"); os.IsNotExist(err) {
-		if err = os.MkdirAll("./res", 0755); err != nil {
+	if _, err := os.Stat("./tmp"); os.IsNotExist(err) {
+		if err = os.MkdirAll("./tmp", 0755); err != nil {
 			return "", err
 		}
 	}
@@ -923,7 +992,7 @@ func downloadImageLocal(imgURL string) (string, error) {
 		}
 	}
 
-	filePath, _ := filepath.Abs("./res/" + uuid.New().String() + "." + ext)
+	filePath, _ := filepath.Abs("./tmp/" + uuid.New().String() + "." + ext)
 	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
 		return "", err
 	}
@@ -931,11 +1000,7 @@ func downloadImageLocal(imgURL string) (string, error) {
 	// 180 秒后清理临时文件（与你现有 downloadMedia 一致）
 	go func(path string) {
 		time.Sleep(time.Second * 180)
-		logger.Debugf("Delete temporary image: %s", path)
-		if err := os.Remove(path); err != nil {
-			logger.WithField("filePath", path).
-				Errorf("Delete temporary image error: %v", err)
-		}
+		removeTemporaryMedia(path)
 	}(filePath)
 
 	return filePath, nil

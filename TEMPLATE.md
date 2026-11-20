@@ -15,6 +15,8 @@ template:
 
 如果配置成功，启动时将显示日志信息：`已启用模板`。
 
+> **注意：这是覆盖任何模板的前提。** 开关关着的时候，内置模板（编译进二进制的那份）照常可用，但工作目录下的 `template/*.tmpl` **完全不加载**——覆盖文件写了也不生效，而且不会有任何模板相关报错。所有「自定义 / 覆盖模板」的操作都必须在 `template.enable: true` 下才生效。
+
 配置成功后，DDBOT将会自动创建一个`template`文件夹，用于存放所有的模板文件。
 
 DDBOT会**监控**该文件夹目录，这意味着对模板的创建/修改/删除等操作，无需重启BOT即可生效，DDBOT会自动使用最新的模板。
@@ -851,6 +853,73 @@ abort也支持图片参数
 
 *以下为DDBOT-WSa新增*
 
+- 解析B站专栏内容 `{{ parseBiliPost "url" }}`
+
+解析B站专栏/opus页面HTML，返回 `[]PostElement` 数组，适用于 Type=64（专栏）动态的完整内容解析。
+
+**PostElement 结构：**
+
+| 字段 | 类型 | 说明 |
+|-----|------|-----|
+| Ele | string | text时为文本内容；image时为图片URL；collection时为篇数；dynamic-card/link-card时为跳转URL |
+| Type | string | text / image / collection / dynamic-card / link-card |
+| Url | string | collection时为文集URL；dynamic-card/link-card时为跳转URL |
+| Desc | string | image时为图注；dynamic-card/link-card时为动态标题 |
+| Image | string | dynamic-card/link-card时为封面图URL |
+
+**元素类型说明：**
+
+- `text`：h1/h2/p/blockquote 等文本，Ele 为文本内容
+- `image`：图片，Ele=图片URL，Desc=可选图注
+- `collection`：收录于文集，Ele=篇数（如 `"1"`），Url=文集链接
+- `dynamic-card`：嵌入的B站动态，通过 `.opus-tag.tag-dynamic` 判断，Ele=跳转URL，Desc=动态标题，Image=封面图URL
+- `link-card`：其他类型卡片（扩展用），结构同 dynamic-card
+
+**如何区分头图和普通图片：**
+
+在 `parseBiliPost` 返回的 `image` 类型元素中，可以通过 `Desc` 字段的值来区分：
+
+- **头图**：`Desc` 字段的值为 `"top__album__cover"`
+- **正文图片**：`Desc` 字段为空字符串或其他值
+
+示例：只发送头图，不发送正文图片
+```gotemplate
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if and (eq $v.Type "image") (eq $v.Desc "top__album__cover") -}}
+        {{ pic $v.Ele -}}
+    {{ end -}}
+{{ end -}}
+```
+
+示例：只发送普通图片（排除头图）
+```gotemplate
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if and (eq $v.Type "image") (ne $v.Desc "top__album__cover") -}}
+        {{ pic $v.Ele -}}
+    {{ end -}}
+{{ end -}}
+```
+
+```
+{{ range $v := parseBiliPost $PostUrl -}}
+    {{ if eq $v.Type "text" -}}
+        {{ printf "%v\n" $v.Ele -}}
+    {{ else if eq $v.Type "image" -}}
+        {{ pic $v.Ele -}}
+        {{ if ne $v.Desc "" -}}
+            {{ printf "%v\n" $v.Desc -}}
+        {{ end -}}
+    {{ else if eq $v.Type "collection" -}}
+        {{ printf "收录于文集，共%v篇\n链接：%v\n" $v.Ele $v.Url -}}
+    {{ else if eq $v.Type "dynamic-card" -}}
+        {{ if ne $v.Image "" -}}
+            {{ pic $v.Image -}}
+        {{ end -}}
+        {{ printf "%v\n%v\n" $v.Ele $v.Desc -}}
+    {{ end -}}
+{{ end -}}
+```
+
 - 获取Unix时间戳 `{{ getUnixTime 1640995200 "2006-01-02 15:04:05" }}`
 
 将Unix时间戳转换为指定格式的时间字符串
@@ -1277,6 +1346,64 @@ GetIgnoreExpire: Get配置，忽略key的过期时间，如果key曾经设置过
 {{ $duration := newDuration }}
 ```
 
+### 有序集合（Sorted Set）函数
+
+基于 buntdb 的有序集合，支持按分数（score）范围查询，适用于定时任务、优先级队列等场景。
+
+存储格式：`ss:{setName}:{member}`，索引类型为 `IndexFloat`，支持高效的 O(log n) 范围查询。
+
+`ZAdd` - 添加成员到有序集合
+```text
+{{ ZAdd "MySet" "member1" 100.0 }}
+{{ ZAdd "ReserveList" $key (getTime $date "unix") }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| member | string | 成员标识 |
+| score | number/string | 分数值（支持 float64、string、int 等类型，内部自动转换） |
+
+`ZRangeByScore` - 根据分数范围获取成员
+```text
+{{ $list := ZRangeByScore "ReserveList" 0 (getTime "now" "unix") }}
+{{ range $list }}
+    {{ .member }} - {{ .score }}
+{{ end }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| min | number/string | 最小分数（支持 string 类型，内部自动转换为 float64） |
+| max | number/string | 最大分数 |
+
+返回：`[]map[string]interface{}`，每个元素包含 `member`（成员）和 `score`（分数）字段。
+
+`ZRem` - 移除有序集合中的成员
+```text
+{{ ZRem "ReserveList" "member1" "member2" }}
+```
+
+| 参数 | 类型 | 说明 |
+|-----|------|-----|
+| setName | string | 有序集合名称 |
+| members | ...string | 要移除的成员（可变参数） |
+
+**使用示例：定时任务**
+```text
+{{- /* 获取所有已到期的预约项 */ -}}
+{{ $dueList := ZRangeByScore "ReserveList" -9223372036854775808 (getTime "now" "unix") }}
+{{ range $dueList }}
+    {{ $data := getJson .member }}
+    {{ if $data }}
+        {{ /* 发送通知 */ }}
+    {{ end }}
+    {{ ZRem "ReserveList" .member }}
+    {{ del .member }}
+{{ end }}
+```
+
 ## 当前支持的命令模板
 
 命令通用模板变量：
@@ -1554,6 +1681,33 @@ ACFUN-{{ .name }}直播结束了
 
 </details>
 
+- bot被拉进群
+
+模板名：`trigger.group.bot_joined.tmpl`
+
+| 模板变量       | 类型     | 含义         |
+|------------|--------|------------|
+| group_code | int64  | 群号码        |
+| group_name | string | 群名称        |
+| bot_code   | int64  | 机器人自己的QQ号  |
+| bot_name   | string | 机器人自己的名字（取值链：bot 昵称 → 适配器自报的 /users/@me 名字 → 群成员表，取不到为空串） |
+
+机器人被拉进群时发送一条**自我介绍**（自报家门，告诉这个群它能干什么 —— 不是欢迎某个人）。**只有 `adapter.mode: qqofficial` 会触发**：onebot / satori 通道没有这条能力，行为与以前完全一样。
+
+这条消息走的是进群事件的**被动回复通道**（event_id），所以在没有「允许机器人主动在群聊内发言」的群里也发得出去。同一次进群，adapter 会**先**发一条由 `qqofficial.join-intro-tip` 配置的短提示，**再**发这条模板文案：两条在同一次调用里按顺序发出、共用同一个 event_id（不靠运气）。短提示发送失败不影响这条；模板为空时只发短提示。
+
+**不写内容就是不发：** 内置的 `trigger.group.bot_joined.tmpl` 是 0 字节空模板，所以默认情况下进群只发短提示（短提示也没配就一条都不发）。想让它说话，除了写模板内容，还必须开 `template.enable: true`（见本文开头「配置」），否则你写的 `template/trigger.group.bot_joined.tmpl` 根本不会被加载。
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
 - bot添加新好友
 
 模板名：`trigger.private.new_friend_added.tmpl`
@@ -1684,6 +1838,48 @@ ACFUN-{{ .name }}直播结束了
 
 </details>
 
+- 好友消息撤回事件
+
+模板名：`trigger.private.friend_recall.tmpl`
+
+| 模板变量        | 类型     | 含义           |
+|---------------|--------|--------------|
+| friend_code   | int64  | 撤回消息的好友QQ号 |
+| friend_name   | string | 撤回消息的好友昵称  |
+| message_id    | int32  | 被撤回的消息ID   |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群成员头衔变更事件
+
+模板名：`trigger.group.special_title_updated.tmpl`
+
+| 模板变量        | 类型     | 含义            |
+|---------------|--------|----------------|
+| group_code    | int64  | 发生事件的群号码  |
+| group_name    | string | 发生事件的群名称  |
+| member_code   | int64  | 头衔变更的用户QQ号 |
+| member_name   | string | 头衔变更的用户昵称  |
+| new_title     | string | 新的头衔        |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
 - 群名片变更事件
 
 模板名：`trigger.group.admin_changed.tmpl`
@@ -1706,3 +1902,296 @@ ACFUN-{{ .name }}直播结束了
 ```
 
 </details>
+
+- 群消息表情回应事件
+
+模板名：`trigger.group.emoji_like.tmpl`
+
+| 模板变量        | 类型     | 含义           |
+|---------------|--------|--------------|
+| group_code    | int64  | 发生事件的群号码   |
+| member_code   | int64  | 表情回应的用户QQ号 |
+| member_name   | string | 表情回应的用户昵称 |
+| message_id    | int64  | 被表情回应的消息ID |
+| emoji_id      | string | 表情ID         |
+| emoji_count   | int    | 表情数量        |
+| is_add        | bool   | 是否是添加       |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群戳一戳撤回事件
+
+模板名：`trigger.group.poke_recall.tmpl`
+
+| 模板变量         | 类型     | 含义           |
+|---------------|--------|--------------|
+| group_code    | int64  | 发生事件的群号码   |
+| group_name    | string | 发生事件的群名称   |
+| member_code   | int64  | 发送戳一戳的用户QQ号 |
+| member_name   | string | 发送戳一戳的用户昵称 |
+| receiver_code | int64  | 被戳的用户QQ号    |
+| receiver_name | string | 被戳的用户昵称    |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 个人信息点赞事件
+
+模板名：`trigger.private.profile_like.tmpl`
+
+| 模板变量         | 类型     | 含义          |
+|---------------|--------|-------------|
+| operator_id   | int64  | 点赞的用户QQ号  |
+| operator_nick | string | 点赞用户的昵称  |
+| times         | int    | 点赞次数      |
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送消息*
+
+```text
+```
+
+</details>
+
+- 群消息事件（通用消息处理模板）
+
+模板名：`trigger.group.message.tmpl`
+
+**说明**：此模板会在**所有群消息**的命令执行完成后触发，适用于消息日志记录、关键字捕获、命令调用统计等场景。
+
+| 模板变量        | 类型                   | 含义                                       |
+|-------------|----------------------|------------------------------------------|
+| msg         | *message.GroupMessage | 完整的群消息对象                              |
+| group_code  | int64                | 群号码                                      |
+| group_name  | string               | 群名称                                      |
+| member_code | int64                | 发送者QQ号                                  |
+| member_name | string               | 发送者昵称                                   |
+| isCommand   | bool                 | 消息是否带有命令前缀（如`/roll`）                    |
+| isMatched   | bool                 | 命令是否匹配到了处理函数（仅当`isCommand`为true时有意义）    |
+| commandName | string               | 命令名称（无前缀），未带命令前缀时为空字符串                  |
+| raw_message | *message.GroupMessage | 完整的群消息对象（与`msg`相同）                      |
+| command     | map[string]string    | 所有命令名称的映射（便于在模板中获取命令前缀等配置）               |
+
+**使用方式**：
+
+1. 在 `template` 目录下创建 `trigger.group.message.tmpl` 文件
+2. 只要此文件存在（内容不限），就会在所有群消息处理完成后执行
+3. 文件为空时，模板不产生任何输出，不发送消息
+
+**示例用途**：
+
+- 记录所有群消息到外部系统
+- 关键字监听和自动回复
+- 命令使用统计
+- 消息日志
+
+<details>
+  <summary>默认模板</summary>
+
+*该模板默认为空，即不发送任何消息。只有当用户在 `template` 目录下创建了此文件后才会生效。*
+
+```text
+```
+
+</details>
+
+## 模板函数补充
+
+### formatDuration
+
+用法：
+
+```gotemplate
+{{ formatDuration 147 }}
+{{ formatDuration .duration_seconds }}
+```
+
+说明：
+
+- 将“秒数”格式化为易读的时长文本。
+- 这是模板基础能力，可被任意模板直接复用。
+
+支持的参数类型：
+
+- `int`
+- `int32`
+- `int64`
+- `uint`
+- `uint32`
+- `uint64`
+- `string`，内容需为十进制秒数
+
+返回规则：
+
+- 大于等于 `1` 小时：`3小时13分钟0秒`
+- 大于等于 `1` 分钟且小于 `1` 小时：`2分钟27秒`
+- 小于 `1` 分钟：`59秒`
+- 小于等于 `0` 或无法解析：返回空字符串
+
+示例：
+
+```gotemplate
+时长：{{ formatDuration 147 }}
+```
+
+```gotemplate
+{{ if gt .duration_seconds 0 -}}
+时长：{{ formatDuration .duration_seconds }}
+{{ end -}}
+```
+
+### 资源函数与 x 后缀
+
+为了兼顾性能和可控性，模板中的远程资源函数分为两类：
+
+- 默认函数：默认把 URL 交给 QQBOT 处理下载。
+- `x` 后缀函数：作为便捷版，默认由 DDBOT 先下载资源，再投递给 QQBOT。
+
+另外，还可以通过 `DDBOT_REQ_FETCH` 显式控制“谁来下载”：
+
+- `DDBOT_REQ_FETCH=remote`
+  - 交给 QQBOT 下载
+- `DDBOT_REQ_FETCH=local`
+  - 由 DDBOT 先下载再发送
+
+为了让模板更简洁，也提供了几个零参数 helper：
+
+- `fetchLocal`
+  - 等价于 `(dict "DDBOT_REQ_FETCH" "local")`
+- `fetchRemote`
+  - 等价于 `(dict "DDBOT_REQ_FETCH" "remote")`
+- `proxyNone`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_none")`
+- `proxyMainland`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_mainland")`
+- `proxyOversea`
+  - 等价于 `(dict "DDBOT_REQ_PROXY" "prefer_oversea")`
+
+通知模板（`notify.group.<站点>.*.tmpl`，私聊同理）支持共享图片合并配置；自定义覆盖模板也走同一入口：
+
+```yaml
+# 全局默认继承；任一选项显式设置后，覆盖所有站点的相应选项。
+imageMerge:
+  mode: inherit
+  layout: inherit
+  maxWidth: 0   # 0 继承；默认 1440
+  maxHeight: 0  # 0 继承；默认 16000
+
+# 示例：只为微博开启长图，其他站点保留原有行为。
+weibo:
+  imageMerge:
+    mode: always
+    layout: long
+    maxHeight: 28000 # 可选：减少长图分页数量；不设置则保留 16000
+```
+
+`mode` 支持 `off`（关闭）、`auto`（原 B 站自动判断规则）、`only9`（恰好九张）、
+`always`（两张起合并）和 `inherit`（继承默认值）；`layout` 支持 `grid`（原九宫格裁剪排版）、
+`long`（按顺序纵向排列，不裁掉内容）和 `inherit`。两项分别按“全局显式值 > 站点显式值 > 默认值”解析。
+B 站默认仍仅对原动态图片组应用 `auto/grid`，兼容 `bilibili.imageMergeMode`；其他站点默认关闭。
+新配置位于站点段的 `imageMerge.mode/layout`；它优先于 B 站旧键。配置重载影响后续新渲染的通知。
+WebUI 的“配置 → 基础 → 图片合并（全局覆盖）”可设置全局覆盖值，各站点的“配置 → 图片合并”
+可设置站点选项。默认选择继承；仅修改布局不会自动开启合并，需同时选择合适的合并条件。
+高级尺寸选项 `maxWidth/maxHeight` 分别解析为“全局非零值 > 站点非零值 > 默认值”，
+`0`、`inherit` 或未设置均表示继承。允许 1–29999 的整数，超出上限按 29999 处理；
+无效值记录告警并保留默认值。单独设置尺寸不会开启合并或改变 B 站原图片组的默认范围。
+
+自动合并只处理连续图片组；文本、视频、`cut` 等元素以及 GIF 分隔图片组，保持消息顺序。
+原始单图和 GIF 不重编码。启用合并时，DDBOT 需要先下载图片；加载、解码或合并失败会记录日志并保留原图片组。
+已经使用 `picm` / `picmx` 显式拼接的图片不会再参与自动合并。
+
+合并产物逐张检查实际 JPEG 大小，严格小于 30,000,000 字节。
+当前 QQ 官方 Adapter 的本地媒体直传只支持最多 5MiB，拼接时会读取实际运行通道的
+更小字节预算（而非仅检查配置中的 `adapter.mode`），在投递前完成拆分或缩小。
+这与 QQ 图片大小兼容策略分别处理；原始单图仍沿用适配器既有行为。
+长图默认最大宽度 1440、每页高度 16000、每页 2400 万像素。
+显式配置超过默认尺寸时，单边仍最多 29999，每页像素预算最多提高到 4800 万；
+例如 1440×28000 可以减少消息条数，但会提高内存开销。这些是项目处理预算，
+不是 QQ 官方分辨率承诺，当前实测范围见 `adapter/MEDIA_LIMITS.md`。
+长图超出高度、像素或编码字节预算会自动拆成多张，保持顺序；
+不同宽高的图片按各自比例缩小，窄图居中留白且不放大；长图不裁掉内容。
+编码先尝试质量 100，再尝试 90。九宫格保留原排版，超限时分页或降低分辨率。
+源图超过 6400 万像素时放弃该组自动合并，沿用原图投递。
+QQ 单图字节预算与 OneBot JSON/Base64 的传输预算分别处理；不会在发送结果不明时重试拼接投递。
+
+当前约定如下：
+
+- `pic`
+  - `http/https` URL：直接投递 URL 给 QQBOT 下载
+  - 本地路径 / base64：由 DDBOT 本地读取后发送
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则改为 DDBOT 先下载再发送
+- `picx`
+  - 远程 URL：由 DDBOT 先下载再发送
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+- `picm`
+  - `[]string` / `[]interface{}` / `[][]byte` 图片列表：由 DDBOT 下载并合并为单张拼图发送
+- `picmx`
+  - 是 `picm` 的境外资源便捷版
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+  - `picm` / `picmx` 保持显式单张九宫格接口；超大图集需要多页时返回失败，避免丢失后续图片
+- `video` / `record` / `file`
+  - 默认保持原有行为，远程 URL 直接交给 QQBOT 下载
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则切换为“DDBOT 先下载再发送”
+- `videox` / `recordx` / `filex`
+  - 远程 URL：由 DDBOT 先下载再发送
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+- `remoteDownloadFile`
+  - 默认保持原有行为，远程 URL 直接交给 QQBOT 下载
+  - 如果显式传入 `DDBOT_REQ_FETCH=local`，则改为 DDBOT 先下载后投递
+- `remoteDownloadFilex`
+  - 是 `remoteDownloadFile` 的便捷版
+  - 默认自动补 `DDBOT_REQ_FETCH=local`
+  - 默认自动补 `DDBOT_REQ_PROXY=prefer_oversea`
+
+示例：
+
+```gotemplate
+{{ pic .cover }}
+{{ picx .cover }}
+{{ picx .cover "封面" }}
+{{ picm .image_urls "拼图" }}
+{{ picmx .image_urls "拼图" }}
+```
+
+```gotemplate
+{{ pic .cover (fetchLocal) (proxyNone) }}
+{{ pic .cover (fetchLocal) (proxyMainland) }}
+{{ picm .image_urls "拼图" }}
+{{ picmx .image_urls "拼图" }}
+{{ video .video_url }}
+{{ videox .video_url }}
+{{ recordx .audio_url }}
+{{ filex .file_url "附件" }}
+```
+
+```gotemplate
+{{ pic .cover (fetchRemote) }}
+{{ video .video_url (fetchLocal) (proxyNone) }}
+{{ remoteDownloadFilex .file_url (dict "name" "sample.zip") }}
+```
+
+说明：
+
+- `x` 后缀主打“小白友好”，适合 YouTube、X、Twitter 等需要代理或经常被 QQBOT 侧下载失败的资源。
+- 如果你明确知道当前部署环境不需要代理，可以继续使用默认函数，或在参数里显式覆盖 `DDBOT_REQ_PROXY`。
+- 如果你想“不走代理，但仍由 DDBOT 本地下载后再发”，推荐写法是 `(fetchLocal) (proxyNone)`。

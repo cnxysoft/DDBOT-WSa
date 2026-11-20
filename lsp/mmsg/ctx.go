@@ -1,7 +1,7 @@
 package mmsg
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/sirupsen/logrus"
 )
 
@@ -13,5 +13,5 @@ type IMsgCtx interface {
 	NoPermissionReply() interface{}
 	GetLog() *logrus.Entry
 	GetTarget() Target
-	GetSender() *message.Sender
+	GetSender() *adapter.SenderInfo
 }

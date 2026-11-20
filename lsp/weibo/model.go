@@ -290,7 +290,6 @@ func (c *CacheCard) GetMSG() *mmsg.MSG {
 			// 如果模板加载失败，回退到默认消息
 			c.fallbackMSG()
 		}
-		return
 	})
 	return c.msgCache
 }
@@ -491,5 +490,103 @@ func findVideoForMix(Item []*Card_MixMediaInfo_Items, m *mmsg.MSG) {
 				time.Unix(video.GetMediaInfo().GetVideoPublishTime(), 0).Format(time.DateTime),
 				video.GetMediaInfo().GetOnlineUsers())
 		}
+	}
+}
+
+// CookieAlertNotify Cookie 失效时的告警通知
+type CookieAlertNotify struct {
+	GroupCode  int64
+	Message    string
+	IsRecovery bool
+}
+
+func (n *CookieAlertNotify) Site() string {
+	return Site
+}
+
+func (n *CookieAlertNotify) Type() concern_type.Type {
+	return CookieAlert
+}
+
+func (n *CookieAlertNotify) GetUid() interface{} {
+	return int64(0)
+}
+
+func (n *CookieAlertNotify) GetGroupCode() int64 {
+	return n.GroupCode
+}
+
+func (n *CookieAlertNotify) Logger() *logrus.Entry {
+	return logger.WithFields(logrus.Fields{
+		"Site":       Site,
+		"GroupCode":  n.GroupCode,
+		"IsRecovery": n.IsRecovery,
+	})
+}
+
+func (n *CookieAlertNotify) ToMessage() *mmsg.MSG {
+	m := mmsg.NewMSG()
+	m.Textf("[微博Cookie告警] %s", n.Message)
+	if n.IsRecovery {
+		m.Textf("\n✓ Cookie已自动恢复，订阅推送将正常工作")
+	} else {
+		m.Textf("\n⚠ Cookie获取失败，微博订阅可能无法正常推送")
+		m.Textf("\nBot会继续自动重试，无需手动操作")
+	}
+	return m
+}
+
+func NewCookieAlertNotify(groupCode int64, isRecovery bool) *CookieAlertNotify {
+	msg := "微博Cookie状态异常"
+	if isRecovery {
+		msg = "微博Cookie已恢复正常"
+	}
+	return &CookieAlertNotify{
+		GroupCode:  groupCode,
+		Message:    msg,
+		IsRecovery: isRecovery,
+	}
+}
+
+// SUBExpiredNotify SUB 过期告警通知
+type SUBExpiredNotify struct {
+	GroupCode int64
+}
+
+func (n *SUBExpiredNotify) Site() string {
+	return Site
+}
+
+func (n *SUBExpiredNotify) Type() concern_type.Type {
+	return CookieAlert
+}
+
+func (n *SUBExpiredNotify) GetUid() interface{} {
+	return int64(0)
+}
+
+func (n *SUBExpiredNotify) GetGroupCode() int64 {
+	return n.GroupCode
+}
+
+func (n *SUBExpiredNotify) Logger() *logrus.Entry {
+	return logger.WithFields(logrus.Fields{
+		"Site":      Site,
+		"GroupCode": n.GroupCode,
+	})
+}
+
+func (n *SUBExpiredNotify) ToMessage() *mmsg.MSG {
+	m := mmsg.NewMSG()
+	m.Textf("[微博SUB过期告警]")
+	m.Textf("\n⚠ 检测到微博 SUB（登录凭证）可能已过期")
+	m.Textf("\n微博订阅推送可能无法正常工作")
+	m.Textf("\n请联系管理员重新登陆")
+	return m
+}
+
+func NewSUBExpiredNotify(groupCode int64) *SUBExpiredNotify {
+	return &SUBExpiredNotify{
+		GroupCode: groupCode,
 	}
 }

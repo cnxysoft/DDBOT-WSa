@@ -7,31 +7,43 @@ on:
     branches:
       - '**'
 
+env:
+  FFMPEG_STATIC_RELEASE: v7.1.5-1
+  LLVM_MINGW_ASSET: llvm-mingw-20261104-ucrt-ubuntu-22.04-x86_64.tar.xz
+  LLVM_MINGW_SHA256: 919380403de87dca3c581c2053230cd298af5e891286628ba0613b7fed370926
+  LLVM_MINGW_MSVCRT_ASSET: llvm-mingw-20261104-msvcrt-ubuntu-22.04-x86_64.tar.xz
+  LLVM_MINGW_MSVCRT_SHA256: 6e3342e2e0dfa56e9178f3c34b198f278bd5e603db4a759455d1439cc2230630
+
 jobs:
   # run unittest
   test:
-    runs-on: ubuntu-latest
-    env:
-      RUNNER_TOOL_CACHE: /toolcache
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        go: [ '1.23.4' ]
+        go: [ '1.26.2' ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup FFMPEG static library for tests
         run: |
           mkdir -p ffmpeg/ffmpeg-static
           cd ffmpeg/ffmpeg-static
           PLATFORM_FILE="ffmpeg-linux-amd64.zip"
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           unzip -o "$PLATFORM_FILE" -d .
           ls -la
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          cache-dependency-path: |
+            **/go.sum
+            .github/ffmpeg-static-*.sha256
       - name: Run tests with cgo
         env:
           CGO_ENABLED: 1
@@ -41,6 +53,23 @@ jobs:
           go test -v -coverprofile=profile.cov ./...
       - name: go vet
         run: |
+          go vet ./...
+      - name: Install FFmpeg for CLI pipeline tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          command -v ffmpeg
+      - name: Run Twitter, template and FFmpeg tests with CLI backend
+        env:
+          CGO_ENABLED: 0
+          DDBOT_REQUIRE_MEDIA_TESTS: 1
+        run: |
+          go test -v ./lsp/twitter ./lsp/template ./ffmpeg
+          go vet ./lsp/twitter ./lsp/template ./ffmpeg
+      - name: Run adapter module tests and vet
+        working-directory: adapter
+        run: |
+          go test ./...
           go vet ./...
       - name: Generate HTML report
         run: go tool cover -html=profile.cov -o coverage.html
@@ -54,56 +83,52 @@ jobs:
   build:
     needs: test
     name: Build binary CI
-    env:
-      RUNNER_TOOL_CACHE: /toolcache
     strategy:
       matrix:
         include:
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: linux
             goarch: amd64
-            runner: ubuntu-latest
-          - go: '1.23.4'
+            runner: ubuntu-22.04
+          - go: '1.26.2'
             goos: linux
             goarch: 386
-            runner: ubuntu-latest
-          - go: '1.23.4'
+            runner: ubuntu-22.04
+          - go: '1.26.2'
             goos: linux
             goarch: arm
-            runner: ubuntu-latest
-          - go: '1.23.4'
+            runner: ubuntu-22.04
+          - go: '1.26.2'
             goos: linux
             goarch: arm64
-            runner: ubuntu-latest
-          - go: '1.23.4'
+            runner: ubuntu-22.04
+          - go: '1.26.2'
             goos: windows
             goarch: 386
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: amd64
             runner: ubuntu-latest
-          - go: '1.23.4'
-            goos: windows
-            goarch: arm
-            runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: windows
             goarch: arm64
             runner: ubuntu-latest
-          - go: '1.23.4'
+          - go: '1.26.2'
             goos: darwin
             goarch: amd64
-            runner: macos-latest
-          - go: '1.23.4'
+            # Standard Intel runners can build both Darwin architectures with clang.
+            # Avoid the ARM hosted-runner capacity limit behind macos-latest.
+            runner: macos-26-intel
+          - go: '1.26.2'
             goos: darwin
             goarch: arm64
-            runner: macos-latest
+            runner: macos-26-intel
       fail-fast: true
     runs-on: ${{ matrix.runner }}
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup FFMPEG static library for current platform
         run: |
@@ -115,7 +140,11 @@ jobs:
           export PLATFORM_FILE="ffmpeg-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           
           echo "Downloading $PLATFORM_FILE for ${{ matrix.goos }}/${{ matrix.goarch }}..."
-          curl -L -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/latest/download/$PLATFORM_FILE"
+          curl --fail --location --retry 3 -o "$PLATFORM_FILE" "https://github.com/cnxysoft/ffmpeg-static/releases/download/${{ env.FFMPEG_STATIC_RELEASE }}/$PLATFORM_FILE"
+          CHECKSUM_FILE="${{ github.workspace }}/.github/ffmpeg-static-${{ env.FFMPEG_STATIC_RELEASE }}.sha256"
+          EXPECTED_SHA256=$(awk -v name="$PLATFORM_FILE" '$2 == name {print $1}' "$CHECKSUM_FILE")
+          test -n "$EXPECTED_SHA256"
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$PLATFORM_FILE" | shasum -a 256 -c -
           
           echo "Verifying $PLATFORM_FILE..."
           if [ -f "$PLATFORM_FILE" ]; then
@@ -141,11 +170,19 @@ jobs:
       - name: Setup LLVM-mingw toolchain
         if: matrix.goos == 'windows'
         run: |
-          mkdir -p /tmp/llvm-mingw
-          cd /tmp/llvm-mingw
-          curl -L -o llvm-mingw.tar.xz "https://github.com/mstorsjo/llvm-mingw/releases/download/20240820/llvm-mingw-20240820-ucrt-ubuntu-20.04-x86_64.tar.xz"
-          tar -xf llvm-mingw.tar.xz
-          export LLVM_MINGW_PATH=$(find /tmp/llvm-mingw -type d -name "llvm-mingw-*" -maxdepth 1)
+          set -euo pipefail
+          # The published 32-bit libraries use MSVCRT; amd64/ARM64 use UCRT.
+          if [ "${{ matrix.goarch }}" = "386" ]; then
+            LLVM_MINGW_ASSET="$LLVM_MINGW_MSVCRT_ASSET"
+            LLVM_MINGW_SHA256="$LLVM_MINGW_MSVCRT_SHA256"
+          fi
+          TOOLCHAIN_DIR="${RUNNER_TEMP}/ddbot-llvm-mingw"
+          mkdir -p "$TOOLCHAIN_DIR"
+          cd "$TOOLCHAIN_DIR"
+          curl --fail --location --retry 3 -o "$LLVM_MINGW_ASSET" "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/$LLVM_MINGW_ASSET"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$LLVM_MINGW_ASSET" | shasum -a 256 -c -
+          tar -xf "$LLVM_MINGW_ASSET"
+          export LLVM_MINGW_PATH="$TOOLCHAIN_DIR/${LLVM_MINGW_ASSET%.tar.xz}"
           echo "$LLVM_MINGW_PATH/bin" >> $GITHUB_PATH
           echo "LLVM_MINGW_PATH=$LLVM_MINGW_PATH" >> $GITHUB_ENV
 
@@ -166,10 +203,12 @@ jobs:
           esac
 
       - name: Setup Go environment
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache-dependency-path: "**/*.sum"
+          cache-dependency-path: |
+            **/*.sum
+            .github/ffmpeg-static-*.sha256
       
       - name: Set env
         run: |
@@ -178,13 +217,14 @@ jobs:
       
       - name: Build CLI version (no cgo)
         env:
+          CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           export BINARY_NAME="DDBOT"
           if [ "$GOOS" = "windows" ]; then export BINARY_NAME="$BINARY_NAME-cli.exe"; else export BINARY_NAME="$BINARY_NAME-cli"; fi
           echo "Building CLI version: $BINARY_NAME for $GOOS/$GOARCH"
-          go build -v -trimpath -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
+          go build -v -trimpath -pgo=auto -o "$BINARY_NAME" -ldflags="-s -w -X 'github.com/cnxysoft/DDBOT-WSa/lsp.BuildTime=${{ env.BUILD_TIME }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.CommitId=${{ github.sha }}' -X 'github.com/cnxysoft/DDBOT-WSa/lsp.Tags=${{ env.Tags }}'" github.com/cnxysoft/DDBOT-WSa/cmd
       
       - name: Build CGO version
         if: ${{ !(matrix.goos == 'windows' && matrix.goarch == 'arm') }}
@@ -200,9 +240,9 @@ jobs:
           # set CC per target - use exact cross-compiler executable names (no extra flags in CC)
           if [ "$GOOS" = "windows" ]; then
             case "$GOARCH" in
-              amd64)  export CC="x86_64-w64-mingw32-gcc"; export CXX="x86_64-w64-mingw32-g++" ;;
-              386)    export CC="i686-w64-mingw32-gcc"; export CXX="i686-w64-mingw32-g++" ;;
-              arm64)  export CC="aarch64-w64-mingw32-gcc"; export CXX="aarch64-w64-mingw32-g++" ;;
+              amd64)  export CC="x86_64-w64-mingw32-clang"; export CXX="x86_64-w64-mingw32-clang++" ;;
+              386)    export CC="i686-w64-mingw32-clang"; export CXX="i686-w64-mingw32-clang++" ;;
+              arm64)  export CC="aarch64-w64-mingw32-clang"; export CXX="aarch64-w64-mingw32-clang++" ;;
               arm)    # likely unsupported in many toolchains: fallback or error out
                     echo "Warning: windows/arm cross-compiler may not be available; ensure toolchain exists"
                     export CC="${CC:-armv7-w64-mingw32-gcc}"
@@ -227,7 +267,7 @@ jobs:
 
           case "${GOOS}_${GOARCH}" in
             windows_arm|windows_386|windows_arm64)
-              # use internal link mode (no external extldflags) to avoid unsupported reloc on some windows/arm toolchains
+              # Package cgo flags already request static runtime libraries.
               GO_LDFLAGS="-linkmode external -s -w ${COMMON_XFLAGS}"
               ;;
             darwin_amd64|darwin_arm64)
@@ -248,7 +288,43 @@ jobs:
 
           # use env form to avoid writing go env -w
           env GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED="$CGO_ENABLED" CC="$CC" \
-            go build -v -trimpath -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
+            go build -v -trimpath -pgo=auto -tags cgo -o "${BINARY_NAME}" -ldflags "${GO_LDFLAGS}" github.com/cnxysoft/DDBOT-WSa/cmd
+
+      - name: Check Linux runtime dependencies
+        if: matrix.goos == 'linux'
+        run: |
+          python3 - "${{ matrix.goarch }}" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          arch = sys.argv[1]
+          for backend in ("cli", "cgo"):
+              binary = "DDBOT-" + backend
+              info = subprocess.check_output(["go", "version", "-m", binary], text=True)
+              assert f"CGO_ENABLED={int(backend == 'cgo')}" in info, info
+              program = subprocess.check_output(["readelf", "-lW", binary], text=True)
+              dynamic = subprocess.check_output(["readelf", "-dW", binary], text=True)
+              assert not re.search(r"Shared library: \[lib(?:av|swscale|ssl|crypto|x264)", dynamic), dynamic
+              if backend == "cli" or arch != "386":
+                  assert "INTERP" not in program, program
+                  print(f"PASS {binary}: static executable")
+              else:
+                  versions = subprocess.check_output(["readelf", "--version-info", binary], text=True)
+                  required = {tuple(map(int, v.split("."))) for v in re.findall(r"\bGLIBC_(\d+(?:\.\d+)+)", versions)}
+                  assert required and max(required) <= (2, 35), versions
+                  print(f"PASS {binary}: highest GLIBC symbol " + ".".join(map(str, max(required))))
+          PY
+
+      - name: Check macOS target architectures
+        if: matrix.goos == 'darwin'
+        run: |
+          case "${{ matrix.goarch }}" in
+            amd64) DARWIN_ARCH=x86_64 ;;
+            arm64) DARWIN_ARCH=arm64 ;;
+          esac
+          lipo DDBOT-cli -verify_arch "$DARWIN_ARCH"
+          lipo DDBOT-cgo -verify_arch "$DARWIN_ARCH"
 
       - name: List build artifacts
         run: ls -la
@@ -260,3 +336,112 @@ jobs:
           path: |
             ./DDBOT-cli*
             ./DDBOT-cgo*
+
+  # Generate build report with download links
+  report:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Generate Build Summary
+        run: |
+          echo "# DDBOT-WSa Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Check build job status
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ **Build**: Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Build**: Failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Note**: DDBOT's Twitter subscription feature depends on FFmpeg. The CGO version bundles FFmpeg statically and runs without external dependencies. The CLI version does not include FFmpeg and requires it to be installed in the system PATH." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Define all platforms
+          platforms=(
+            "linux:amd64:Linux:x86_64"
+            "linux:386:Linux:i386"
+            "linux:arm:Linux:ARM"
+            "linux:arm64:Linux:ARM64"
+            "windows:386:Windows:i386"
+            "windows:amd64:Windows:x86_64"
+            "windows:arm64:Windows:ARM64"
+            "darwin:amd64:macOS:x86_64"
+            "darwin:arm64:macOS:ARM64"
+          )
+
+          RUN_ID=${{ github.run_id }}
+          REPO=${{ github.repository }}
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Download Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fetch artifact list with download URLs
+          ARTIFACTS_JSON=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$REPO/actions/runs/$RUN_ID/artifacts")
+
+          echo "| Platform | Architecture | Type | Filename | Download |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------------|------|----------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          for p in "${platforms[@]}"; do
+            IFS=':' read -r goos goarch display_name arch_display <<< "$p"
+            artifact_name="${goos}_${goarch}"
+
+            # CLI binary
+            if [ "$goos" == "windows" ]; then
+              cli_name="DDBOT-cli.exe"
+              cgo_name="DDBOT-cgo.exe"
+            else
+              cli_name="DDBOT-cli"
+              cgo_name="DDBOT-cgo"
+            fi
+
+            # Get artifact ID for this platform
+            artifact_id=$(echo "$ARTIFACTS_JSON" | jq -r ".artifacts[] | select(.name == \"$artifact_name\") | .id")
+            if [ -n "$artifact_id" ] && [ "$artifact_id" != "null" ]; then
+              download_url="[Download](https://github.com/$REPO/actions/runs/$RUN_ID/artifacts/$artifact_id)"
+            else
+              download_url="-"
+            fi
+
+            echo "| $display_name | $arch_display | CLI | \`$cli_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
+
+            # Skip CGO for windows/arm as it's not built
+            if [ "$goos" == "windows" ] && [ "$goarch" == "arm" ]; then
+              continue
+            fi
+            echo "| $display_name | $arch_display | CGO | \`$cgo_name\` | $download_url |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Generate JSON Report Data
+        if: needs.build.result == 'success'
+        run: |
+          # Output machine-readable report data for downstream use
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
+          echo "REPO=${{ github.repository }}" >> $GITHUB_ENV
+          echo "COMMIT_SHA=${{ github.sha }}" >> $GITHUB_ENV
+          echo "BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Upload Report Data
+        if: needs.build.result == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: $GITHUB_ENV
+          retention-days: 90

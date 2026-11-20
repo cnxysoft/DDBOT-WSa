@@ -1,7 +1,7 @@
 package mmsg
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -22,11 +22,11 @@ func TestTyped(t *testing.T) {
 	m.Append(NewTypedElement().OnGroup(nil))
 	m.Append(NewTypedElement().OnPrivate(nil))
 
-	pt := NewPrivateElement(message.NewText("testpe"))
+	pt := NewPrivateElement(&adapter.TextSegment{Content: "testpe"})
 	assert.Nil(t, pt.PackToElement(NewGroupTarget(test.ID1)))
 	assert.NotNil(t, pt.PackToElement(NewPrivateTarget(test.ID1)))
 
-	gt := NewGroupElement(message.NewText("testge"))
+	gt := NewGroupElement(&adapter.TextSegment{Content: "testge"})
 	assert.Nil(t, gt.PackToElement(NewPrivateTarget(test.ID2)))
 	assert.NotNil(t, gt.PackToElement(NewGroupTarget(test.ID2)))
 }

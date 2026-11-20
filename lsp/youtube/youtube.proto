@@ -13,4 +13,5 @@ enum VideoType {
     FirstLive = 0;
     Live = 1;
     Video = 2;
+    Shorts = 3;
 }

@@ -1,7 +1,7 @@
 package mmsg
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -20,7 +20,7 @@ func TestMSG(t *testing.T) {
 	m.Text("2")
 	m.Text("3")
 	m.AtAll()
-	m.Append(message.NewText("test"))
+	m.Append(&adapter.TextSegment{Content: "test"})
 	m.Append(nil)
 	m.Append()
 	m.Image(nil, "")
@@ -33,7 +33,7 @@ func TestMSG(t *testing.T) {
 	m.ImageByLocal("", "[img]")
 	m.ImageByLocalWithNorm("", "[img]")
 	m.ImageByLocalWithResize("", "[img]", 200, 200)
-	m.Append(NewTypedElement().OnPrivate(message.NewText("test")))
+	m.Append(NewTypedElement().OnPrivate(&adapter.TextSegment{Content: "test"}))
 	m.Append(NewTypedElement())
 	m.Append(NewTypedElement().OnGroup(NewImage(nil)))
 	m = m.Clone()

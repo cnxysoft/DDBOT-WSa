@@ -72,7 +72,7 @@ func TestWeiboJsonIdCompatMessageRender(t *testing.T) {
 	assert.NoError(t, err)
 
 	msg := NewCacheCard(&card, "compat-user", 54321).GetMSG()
-	text := msgstringer.MsgToString(msg.Elements())
+	text := msgstringer.AdapterMsgToString(msg.Elements())
 	assert.NotEmpty(t, text)
 }
 
@@ -310,6 +310,6 @@ func TestWeiboTopicCoverSkipped(t *testing.T) {
 
 	card.PageInfo = nil
 	msg := NewCacheCard(&card, "outer-user", 3001).GetMSG()
-	text := msgstringer.MsgToString(msg.Elements())
+	text := msgstringer.AdapterMsgToString(msg.Elements())
 	assert.NotContains(t, text, "[图片]")
 }

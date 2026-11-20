@@ -26,6 +26,12 @@ type Notify interface {
 	ToMessage() *mmsg.MSG
 }
 
+// TextFilterContentProvider 允许通知直接提供关键词过滤文本，避免为了过滤而提前渲染消息。
+// 未实现该接口的通知仍使用 ToMessage 的文本内容。
+type TextFilterContentProvider interface {
+	TextFilterContent() string
+}
+
 // Concern 是DDBOT的一个完整订阅模块，包含一个订阅源的全部信息
 // 当一个 Concern 编写完成后，需要使用 concern.RegisterConcern 向DDBOT注册才能生效
 type Concern interface {
@@ -58,6 +64,10 @@ type Concern interface {
 }
 
 // IdentityInfo 表示订阅对象的信息，包括名字，ID
+type LocalSubscribedIDResolver interface {
+	ResolveSubscribedID(groupCode int64, rawID string, ctype concern_type.Type) (interface{}, error)
+}
+
 type IdentityInfo interface {
 	// GetUid 返回订阅对象的id
 	GetUid() interface{}

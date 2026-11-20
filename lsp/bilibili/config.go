@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
@@ -34,7 +34,7 @@ func (g *GroupConcernConfig) Validate() error {
 			return concern.ErrConfigNotSupported
 		}
 	}
-	return nil
+	return g.GetGroupConcernFilter().ValidateTextConflict()
 }
 
 func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {
@@ -67,8 +67,8 @@ func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {
 	}
 }
 
-func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *message.GroupMessage) {
-	if inotify.Type() != News || msg == nil || msg.Id == -1 {
+func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *adapter.GroupMessage) {
+	if inotify.Type() != News || msg == nil || msg.ID == -1 {
 		return
 	}
 	notify := inotify.(*ConcernNewsNotify)
@@ -104,7 +104,7 @@ func (g *GroupConcernConfig) FilterHook(notify concern.Notify) (hook *concern.Ho
 		}
 
 		logger := notify.Logger().WithField("FilterRules", g.GetGroupConcernFilter().RulesNormalized())
-		msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
+		msgString := msgstringer.AdapterMsgToString(notify.ToMessage().Elements())
 
 		for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
 			switch rule.Type {
@@ -195,15 +195,17 @@ const (
 	Tougao        = "投稿"
 	Wenzi         = "文字"
 	Tupian        = "图片"
+	Yinpin        = "音频"
 	Zhibofenxiang = "直播分享"
 )
 
 var PredefinedType = map[string][]DynamicDescType{
 	Zhuanlan:      {DynamicDescType_WithPost},
 	Zhuanfa:       {DynamicDescType_WithOrigin},
-	Tougao:        {DynamicDescType_WithVideo, DynamicDescType_WithMusic, DynamicDescType_WithPost},
+	Tougao:        {DynamicDescType_WithVideo},
 	Wenzi:         {DynamicDescType_TextOnly},
 	Tupian:        {DynamicDescType_WithImage},
+	Yinpin:        {DynamicDescType_WithMusic},
 	Zhibofenxiang: {DynamicDescType_WithLive, DynamicDescType_WithLiveV2},
 }
 

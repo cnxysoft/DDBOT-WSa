@@ -1,0 +1,506 @@
+package adapter
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+)
+
+type MessageType string
+
+const (
+	MessageTypePrivate MessageType = "private"
+	MessageTypeGroup   MessageType = "group"
+)
+
+type PostType string
+
+const (
+	PostTypeMessage     PostType = "message"
+	PostTypeMetaEvent   PostType = "meta_event"
+	PostTypeNotice      PostType = "notice"
+	PostTypeRequest     PostType = "request"
+	PostTypeMessageSent PostType = "message_sent"
+)
+
+type AdapterConfig struct {
+	Mode    string
+	WSMode  string
+	WSAddr  string
+	Token   string
+	Timeout time.Duration
+}
+
+type GroupMessageEvent struct {
+	MessageID  int64
+	GroupID    int64
+	UserID     int64
+	RawMessage string
+	Message    []MessageSegment
+	Time       int64
+	SelfID     int64
+}
+
+type PrivateMessageEvent struct {
+	MessageID  int64
+	UserID     int64
+	RawMessage string
+	Message    []MessageSegment
+	Time       int64
+	SelfID     int64
+	TargetID   int64
+}
+
+type MessageSegment struct {
+	Type string                 `json:"type"`
+	Data map[string]interface{} `json:"data"`
+}
+
+type MetaEvent struct {
+	MetaEventType string
+	Time          int64
+	SelfID        int64
+	Status        map[string]interface{}
+	Interval      int64
+}
+
+type NoticeEvent struct {
+	NoticeType   string
+	Time         int64
+	SelfID       int64
+	GroupID      int64
+	UserID       int64
+	OperatorID   int64
+	Duration     int32
+	SubType      string
+	Title        string
+	MessageID    int64
+	File         GroupFile
+	EmojiId      string
+	EmojiCount   int
+	OperatorNick string
+	Times        int
+	CardNew      string
+	CardOld      string
+}
+
+type RequestEvent struct {
+	RequestType string
+	Time        int64
+	SelfID      int64
+	GroupID     int64
+	UserID      int64
+	Comment     string
+	Flag        string
+	SubType     string
+}
+
+type GroupFile struct {
+	GroupCode     int64  `json:"group_id,omitempty"`
+	FileId        string `json:"file_id,omitempty"`
+	FileName      string `json:"file_name,omitempty"`
+	BusId         int32  `json:"busid,omitempty"`
+	FileSize      int64  `json:"file_size,omitempty"`
+	UploadTime    int64  `json:"upload_time,omitempty"`
+	DeadTime      int64  `json:"dead_time,omitempty"`
+	ModifyTime    int64  `json:"modify_time,omitempty"`
+	DownloadTimes int64  `json:"download_times,omitempty"`
+	Uploader      int64  `json:"uploader,omitempty"`
+	UploaderName  string `json:"uploader_name,omitempty"`
+	AltFildId     string `json:"id,omitempty"`
+	AltFileSize   int64  `json:"size,omitempty"`
+	AltFileName   string `json:"name,omitempty"`
+	FileUrl       string `json:"file_url,omitempty"`
+	AltFileUrl    string `json:"url,omitempty"`
+}
+
+type MemberPermission int
+
+const (
+	Member        MemberPermission = 3
+	Administrator MemberPermission = 2
+	Owner         MemberPermission = 1
+)
+
+type GroupMemberInfo struct {
+	Group           *GroupInfo
+	Uin             int64
+	Nickname        string
+	CardName        string
+	JoinTime        int64
+	LastSentTime    int64
+	LastSpeakTime   int64
+	SpecialTitle    string
+	ShutUpTimestamp int64
+	Permission      MemberPermission
+	Level           int
+	Gender          byte
+
+	GroupID         int64
+	UserID          int64
+	Card            string
+	Sex             string
+	Age             int
+	Area            string
+	Level_          interface{}
+	QQLevel         int16
+	TitleExpireTime int64
+	Unfriendly      bool
+	CardChangeable  bool
+	IsRobot         bool
+	Role            string
+	Title           string
+}
+
+func (g *GroupMemberInfo) DisplayName() string {
+	if g.CardName != "" {
+		return g.CardName
+	}
+	return g.Nickname
+}
+
+func (g *GroupMemberInfo) IsAdminOrOwner() bool {
+	return g.Permission == Administrator || g.Permission == Owner
+}
+
+func (g *GroupMemberInfo) Poke() {
+	// Poke is handled by the messenger/adapter
+}
+
+type GroupInfo struct {
+	Uin             int64
+	Code            int64
+	Name            string
+	MemberCount     int
+	MaxMemberCount  int
+	GroupCreateTime int64
+	GroupLevel      int
+	Members         []*GroupMemberInfo
+	Client          interface{}
+
+	GroupID          int64
+	GroupName        string
+	OwnerUin         int64
+	MaxMemberCount_  int
+	GroupCreateTime_ int64
+	GroupLevel_      int
+}
+
+func (g *GroupInfo) FindMember(uin int64) *GroupMemberInfo {
+	for _, m := range g.Members {
+		if m.Uin == uin {
+			return m
+		}
+	}
+	return nil
+}
+
+func (g *GroupInfo) Quit() error {
+	// Implemented by messenger
+	return nil
+}
+
+type FriendInfo struct {
+	Uin      int64
+	Nickname string
+	Remark   string
+	FaceId   int
+	Client   interface{}
+
+	UserID int64
+	Sex    string
+	Level  int
+}
+
+func (f *FriendInfo) Poke() {
+	// Poke is handled by the messenger/adapter
+}
+
+type Adapter interface {
+	Start() error
+	Stop() error
+
+	SendApi(action string, params map[string]interface{}) (interface{}, error)
+	SendGroupMessage(groupID int64, message interface{}) (int32, error)
+	SendPrivateMessage(userID int64, message interface{}) (int32, error)
+
+	GetSelfID() int64
+	GetAdapterName() string
+	IsConnected() bool
+
+	OnGroupMessage(handler func(*GroupMessageEvent))
+	OnPrivateMessage(handler func(*PrivateMessageEvent))
+	OnMetaEvent(handler func(*MetaEvent))
+	OnNoticeEvent(handler func(*NoticeEvent))
+	OnRequestEvent(handler func(*RequestEvent))
+
+	GetGroupList() ([]*GroupInfo, error)
+	GetGroupMemberList(groupID int64) ([]*GroupMemberInfo, error)
+	GetFriendList() ([]*FriendInfo, error)
+	GetStrangerInfo(userID int64) (map[string]interface{}, error)
+	GetGroupInfo(groupID int64) (*GroupInfo, error)
+
+	GetGroupMemberInfo(groupID, userID int64) (*GroupMemberInfo, error)
+
+	DownloadFile(url, base64, name string, headers []string) (string, error)
+	GetFileUrl(groupCode int64, fileId string) string
+	GetMsg(msgId int32) (*GetMsgResult, error)
+	GetMsgOrg(msgId int32) (interface{}, error)
+	RecallMsg(msgId int32) error
+
+	GroupPoke(groupCode, target int64) error
+	FriendPoke(target int64) error
+	SetGroupBan(groupCode, memberUin int64, duration int64) error
+	SetGroupWholeBan(groupCode int64, enable bool) error
+	KickGroupMember(groupCode int64, memberUin int64, rejectAddRequest bool) error
+	SetGroupLeave(groupCode int64, isDismiss bool) error
+	SetGroupAdmin(groupCode, memberUin int64, enable bool) error
+	EditGroupCard(groupCode, memberUin int64, card string) error
+	EditGroupTitle(groupCode, memberUin int64, title string) error
+
+	// SendGroupForwardMessage 发送群合并转发消息
+	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{...}}}
+	// options 顶层参数: prompt, source, summary, news (可选)
+	SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+	// SendPrivateForwardMessage 发送私聊合并转发消息
+	SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+}
+
+type EventCallback func(interface{})
+
+type EventDispatcher struct {
+	handlers map[string][]EventCallback
+}
+
+func NewEventDispatcher() *EventDispatcher {
+	return &EventDispatcher{
+		handlers: make(map[string][]EventCallback),
+	}
+}
+
+func (ed *EventDispatcher) Register(eventType string, callback EventCallback) {
+	ed.handlers[eventType] = append(ed.handlers[eventType], callback)
+}
+
+func (ed *EventDispatcher) Dispatch(eventType string, event interface{}) {
+	if callbacks, exists := ed.handlers[eventType]; exists {
+		for _, callback := range callbacks {
+			callback(event)
+		}
+	}
+}
+
+type SendResponse struct {
+	MessageID int32
+	Error     error
+}
+
+type GetMsgResult struct {
+	MessageID  int64
+	GroupID    int64
+	UserID     int64
+	RawMessage string
+	Elements   []IMessageElement
+	Time       int64
+	Sender     *SenderInfo
+}
+
+// SenderInfo 描述消息发送者信息。
+//
+// 注意：Uin 与 UserID 是同义字段，值始终保持一致。
+// 保留 Uin 是为了向后兼容早期模板中的 `.msg.Sender.Uin` 写法，
+// 新代码请优先使用 UserID。
+type SenderInfo struct {
+	UserID   int64
+	Uin      int64
+	Nickname string
+	Card     string
+	Role     string
+}
+
+// DisplayName returns the display name for the sender.
+func (s *SenderInfo) DisplayName() string {
+	if s.Card != "" {
+		return s.Card
+	}
+	return s.Nickname
+}
+
+// ForwardOptions 合并转发消息的顶层参数
+// 对应 onebot-v11 send_group_forward_msg API 的顶层字段
+type ForwardOptions struct {
+	Prompt  string   // 转发消息外显标题 (LLOneBot/NapCatQQ 支持)
+	Source  string   // 转发来源 (LLOneBot/NapCatQQ 支持)
+	Summary string   // 转发摘要 (LLOneBot/NapCatQQ 支持)
+	News    []string // 转发预览文本列表 (LLOneBot/NapCatQQ 支持)
+}
+
+// ConvertToMessageElements converts []MessageSegment to []adapter.IMessageElement
+func ConvertToMessageElements(segments []MessageSegment) []IMessageElement {
+	var elements []IMessageElement
+
+	for _, seg := range segments {
+		switch seg.Type {
+		case "text":
+			if text, ok := seg.Data["text"].(string); ok {
+				elements = append(elements, &TextSegment{Content: text})
+			}
+		case "at":
+			var target int64
+			if qq, ok := seg.Data["qq"].(float64); ok {
+				target = int64(qq)
+			} else if qq, ok := seg.Data["qq"].(string); ok {
+				if qq == "all" {
+					target = 0
+				} else if n, err := strconv.ParseInt(qq, 10, 64); err == nil {
+					target = n
+				}
+			}
+			if target != 0 || seg.Data["qq"] == "all" {
+				elements = append(elements, &AtSegment{Target: target})
+			}
+		case "face":
+			var faceId int64
+			if id, ok := seg.Data["id"].(float64); ok {
+				faceId = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				faceId, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if faceId != 0 {
+				elements = append(elements, &FaceSegment{Index: int32(faceId)})
+			}
+		case "image":
+			elements = append(elements, &ImageSegment{
+				Url:  interfaceString(seg.Data["url"]),
+				File: interfaceString(seg.Data["file"]),
+			})
+		case "record":
+			elements = append(elements, &VoiceSegment{
+				Url:  interfaceString(seg.Data["url"]),
+				Name: interfaceString(seg.Data["file"]),
+			})
+		case "reply":
+			var replySeq int64
+			if id, ok := seg.Data["id"].(float64); ok {
+				replySeq = int64(id)
+			} else if id, ok := seg.Data["id"].(string); ok {
+				replySeq, _ = strconv.ParseInt(id, 10, 64)
+			}
+			if replySeq != 0 {
+				elements = append(elements, &ReplySegment{ReplySeq: int32(replySeq)})
+			}
+		case "json":
+			if data, ok := seg.Data["data"].(string); ok {
+				elements = append(elements, &JsonSegment{Content: data})
+			}
+		case "forward":
+			if id, ok := seg.Data["id"].(string); ok {
+				elements = append(elements, &ForwardSegment{ResId: id})
+			}
+		case "file":
+			elements = append(elements, &FileSegment{
+				Name: interfaceString(seg.Data["name"]),
+				Id:   interfaceString(seg.Data["id"]),
+				Url:  interfaceString(seg.Data["url"]),
+			})
+		}
+	}
+
+	return elements
+}
+
+func ParseMessageSegments(msg interface{}) []MessageSegment {
+	var segments []MessageSegment
+
+	switch m := msg.(type) {
+	case string:
+		segments = append(segments, MessageSegment{
+			Type: "text",
+			Data: map[string]interface{}{"text": m},
+		})
+	case []MessageSegment:
+		segments = m
+	case []interface{}:
+		for _, item := range m {
+			if seg, ok := item.(MessageSegment); ok {
+				segments = append(segments, seg)
+			} else if segMap, ok := item.(map[string]interface{}); ok {
+				segType, _ := segMap["type"].(string)
+				segData, _ := segMap["data"].(map[string]interface{})
+				segments = append(segments, MessageSegment{
+					Type: segType,
+					Data: segData,
+				})
+			}
+		}
+	}
+
+	return segments
+}
+
+func interfaceString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case int:
+		return strconv.Itoa(val)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
+func BuildMessageParams(message interface{}) map[string]interface{} {
+	params := make(map[string]interface{})
+
+	switch msg := message.(type) {
+	case string:
+		params["message"] = msg
+	case []MessageSegment:
+		params["message"] = msg
+	case []interface{}:
+		params["message"] = msg
+	default:
+		params["message"] = msg
+	}
+
+	return params
+}
+
+type BotCaller interface {
+	FindFriend(uin int64) *FriendInfo
+	FindGroup(code int64) *GroupInfo
+	GetGroupList() []*GroupInfo
+	GetFriendList() []*FriendInfo
+	GetUin() int64
+	DownloadFile(url, base64, name string, headers []string) (string, error)
+	GetFileUrl(groupCode int64, fileId string) string
+	GetMsg(msgId int32) (*GetMsgResult, error)
+	GetMsgOrg(msgId int32) (interface{}, error)
+	RecallMsg(msgId int32) error
+	SendApi(api string, params map[string]interface{}) (interface{}, error)
+	GroupPoke(groupCode, target int64) error
+	FriendPoke(target int64) error
+	EditGroupCard(groupCode, memberUin int64, card string) error
+	SetGroupLeave(groupCode int64, isDismiss bool) error
+	// SetGroupAddRequest 处理加群请求
+	// flag: 从事件中获取
+	// approve: 是否同意
+	// reason: 拒绝原因（同意时忽略）
+	SetGroupAddRequest(flag string, approve bool, reason string) error
+	// SetFriendAddRequest 处理好友请求
+	// flag: 从事件中获取
+	// approve: 是否同意
+	SetFriendAddRequest(flag string, approve bool) error
+	// SendGroupForwardMessage 发送群合并转发消息
+	// nodes 格式: []map[string]interface{}{{type: "node", data: map[string]interface{}{id: "msgId"}}}
+	// options 顶层参数: prompt, source, summary, news (可选)
+	SendGroupForwardMessage(groupCode int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+	// SendPrivateForwardMessage 发送私聊合并转发消息
+	SendPrivateForwardMessage(userID int64, nodes []map[string]interface{}, options *ForwardOptions) (int32, string, error)
+}

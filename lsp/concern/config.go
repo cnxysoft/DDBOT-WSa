@@ -39,7 +39,7 @@ func (g *GroupConcernConfig) Validate() error {
 			return ErrConfigNotSupported
 		}
 	}
-	return nil
+	return g.GetGroupConcernFilter().ValidateTextConflict()
 }
 
 // FilterHook 默认支持filter text配置，其他为Pass，可以重写这个函数实现自定义的过滤
@@ -50,7 +50,12 @@ func (g *GroupConcernConfig) FilterHook(notify Notify) *HookResult {
 	}
 	var combinedResult = new(HookResult)
 	combinedResult.Pass = true
-	msgString := msgstringer.MsgToString(notify.ToMessage().Elements())
+	var msgString string
+	if provider, ok := notify.(TextFilterContentProvider); ok {
+		msgString = provider.TextFilterContent()
+	} else {
+		msgString = msgstringer.AdapterMsgToString(notify.ToMessage().Elements())
+	}
 	logger := notify.Logger().WithField("FilterRules", g.GetGroupConcernFilter().RulesNormalized())
 	for _, rule := range g.GetGroupConcernFilter().RulesNormalized() {
 		switch rule.Type {

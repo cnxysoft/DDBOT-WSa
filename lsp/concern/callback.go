@@ -1,6 +1,6 @@
 package concern
 
-import "github.com/Mrs4s/MiraiGo/message"
+import "github.com/cnxysoft/DDBOT-WSa/adapter"
 
 // ICallback 定义了一些针对 Notify 推送前后的 callback
 type ICallback interface {
@@ -9,7 +9,7 @@ type ICallback interface {
 	// b站推送使用了这个callback进行缩略推送
 	NotifyBeforeCallback(notify Notify)
 	// NotifyAfterCallback 会在 Notify 推送后第一时间进行调用
-	NotifyAfterCallback(notify Notify, message *message.GroupMessage)
+	NotifyAfterCallback(notify Notify, message *adapter.GroupMessage)
 }
 
 // DefaultCallback ICallback 的默认实现，默认为空
@@ -21,5 +21,5 @@ func (d DefaultCallback) NotifyBeforeCallback(notify Notify) {
 }
 
 // NotifyAfterCallback stub
-func (d DefaultCallback) NotifyAfterCallback(notify Notify, message *message.GroupMessage) {
+func (d DefaultCallback) NotifyAfterCallback(notify Notify, message *adapter.GroupMessage) {
 }

@@ -14,6 +14,7 @@ import (
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/permission"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitter"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
@@ -29,6 +30,7 @@ func main() {
 	var cli struct {
 		Play         bool  `optional:"" help:"运行play函数，适用于测试和开发"`
 		Debug        bool  `optional:"" help:"启动debug模式"`
+		Online       bool  `optional:"" help:"跳过等待bot上线，直接启动订阅系统（调试用）"`
 		SetAdmin     int64 `optional:"" xor:"c" help:"设置admin权限"`
 		Version      bool  `optional:"" xor:"c" short:"v" help:"打印版本信息"`
 		SyncBilibili bool  `optional:"" xor:"c" help:"同步b站帐号的关注，适用于更换或迁移b站帐号的时候"`
@@ -80,6 +82,7 @@ func main() {
 	fmt.Println("DDBOT交流群：755612788（已满）、980848391")
 	fmt.Println("二次修改:https://github.com/Hoshinonyaruko/DDBOT-ws")
 	fmt.Println("三次修改:https://github.com/cnxysoft/DDBOT-WSa")
+	fmt.Println("文档站:https://kizunerwe.github.io/DDBOT-WSa-docs/")
 	fmt.Println("本分支版本主要以修复功能并接入OneBot协议的BOT框架为目的")
 	fmt.Println("主流框架：LLOneBot、NapCat、Lagrange")
 	fmt.Println("LLOneBot:https://llonebot.github.io/")
@@ -89,6 +92,10 @@ func main() {
 	if cli.Debug {
 		lsp.Debug = true
 		go http.ListenAndServe("localhost:6060", nil)
+	}
+
+	if cli.Online {
+		lsp.SkipOnlineCheck = true
 	}
 
 	if cli.Play {

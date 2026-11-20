@@ -37,6 +37,8 @@ var CommandMaps = map[string]string{
 	"NoUpdateCommand":      NoUpdateCommand,
 	"AbnormalConcernCheck": AbnormalConcernCheck,
 	"CleanConcern":         CleanConcern,
+	"WbLoginCommand":       WbLoginCommand,
+	"ScanCommand":          ScanCommand,
 }
 
 const (
@@ -55,6 +57,8 @@ const (
 	ReverseCommand = "倒放"
 	HelpCommand    = "help"
 	ConfigCommand  = "config"
+	ScanCommand    = "刷新" // 手动触发订阅刷新（支持英文别名 scan）
+	ScanEnCommand  = "scan"
 )
 
 // private command
@@ -74,6 +78,8 @@ const (
 	NoUpdateCommand      = "退订更新"
 	AbnormalConcernCheck = "检测异常订阅"
 	CleanConcern         = "清除订阅"
+	ResubscribeCommand   = "重新订阅" // 微博一键重新订阅
+	WbLoginCommand       = "wb登陆" // 微博扫码登录
 )
 
 var allGroupCommand = [...]string{
@@ -82,8 +88,9 @@ var allGroupCommand = [...]string{
 	ListCommand, SetuCommand, HuangtuCommand,
 	EnableCommand, DisableCommand,
 	ReverseCommand, ConfigCommand,
-	HelpCommand, ScoreCommand, AdminCommand,
+	HelpCommand, ScoreCommand,
 	SilenceCommand, NoUpdateCommand, CleanConcern,
+	ScanCommand, ScanEnCommand,
 }
 
 var allPrivateOperate = [...]string{
@@ -94,7 +101,7 @@ var allPrivateOperate = [...]string{
 	WhosyourdaddyCommand, QuitCommand, ModeCommand,
 	GroupRequestCommand, FriendRequestCommand, AdminCommand,
 	SilenceCommand, NoUpdateCommand, AbnormalConcernCheck,
-	CleanConcern,
+	CleanConcern, WbLoginCommand,
 }
 
 var nonOprateable = [...]string{
@@ -104,6 +111,16 @@ var nonOprateable = [...]string{
 	GroupRequestCommand, FriendRequestCommand, AdminCommand,
 	SilenceCommand, NoUpdateCommand, AbnormalConcernCheck,
 	CleanConcern,
+}
+
+// AllGroupCommands 返回群命令列表（副本，供 admin API 使用）
+func AllGroupCommands() []string {
+	return append([]string{}, allGroupCommand[:]...)
+}
+
+// AllPrivateCommands 返回私聊管理命令列表（副本，供 admin API 使用）
+func AllPrivateCommands() []string {
+	return append([]string{}, allPrivateOperate[:]...)
 }
 
 func CheckValidCommand(command string) bool {

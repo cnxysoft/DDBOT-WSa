@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Sora233/MiraiGo-Template/config"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
 	"github.com/cnxysoft/DDBOT-WSa/requests"
 	jsoniter "github.com/json-iterator/go"
@@ -20,7 +21,6 @@ const (
 	Site         = "bilibili"
 	BaseHost     = "https://api.bilibili.com"
 	BaseLiveHost = "https://api.live.bilibili.com"
-	BaseVCHost   = "https://api.vc.bilibili.com"
 	VideoView    = "https://www.bilibili.com/video"
 	DynamicView  = "https://www.bilibili.com/opus"
 	PassportHost = "https://passport.bilibili.com"
@@ -34,22 +34,22 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 var BasePath = map[string]string{
 	PathXSpaceAccInfo:                   BaseHost,
-	PathDynamicSrvSpaceHistory:          BaseVCHost,
-	PathDynamicSrvDynamicNew:            BaseVCHost,
 	PathRelationModify:                  BaseHost,
 	PathRelationFeedList:                BaseLiveHost,
-	PathGetAttentionList:                BaseVCHost,
+	PathGetAttentionList:                BaseHost,
 	PathPassportLoginWebKey:             PassportHost,
 	PathPassportLoginOAuth2Login:        PassportHost,
 	PathQRLoginGenerateQR:               PassportHost,
 	PathQRLoginOAuth2Login:              PassportHost,
 	PathXRelationStat:                   BaseHost,
 	PathXWebInterfaceNav:                BaseHost,
-	PathDynamicSrvDynamicHistory:        BaseVCHost,
 	PathGetPlayTogetherUserAnchorInfoV2: BaseLiveHost,
 	PathRoomInfo:                        BaseLiveHost,
 	PathWebAreaList:                     BaseLiveHost,
 	PathWebDynamicDetail:                BaseHost,
+	PathWebDynamicDetailPic:             BaseHost,
+	PathWebDynamicFeedAll:               BaseHost,
+	PathWebDynamicFeedSpace:             BaseHost,
 }
 
 type VerifyInfo struct {
@@ -102,7 +102,9 @@ func Init() {
 		logger.Info("B站扫码登陆已开启")
 		go func() {
 			for {
-				GetQRResp, err := GetQRCode()
+				// 创建扫码会话，预访问 bilibili.com 获取 buvid3/buvid4
+				session := NewQRLoginSession()
+				GetQRResp, err := GetQRCode(session)
 				if err != nil {
 					logger.Errorf("生成登陆二维码失败 - %v", err)
 					time.Sleep(time.Second * 5)
@@ -111,32 +113,61 @@ func Init() {
 				logger.Info("已生成二维码，请扫码登陆~")
 				for {
 					time.Sleep(time.Second * 5)
-					CheckResp, err := QRLoginCheck(GetQRResp.Data.QrcodeKey)
+					CheckResp, err := QRLoginCheck(session, GetQRResp.Data.QrcodeKey)
 					if err != nil {
-						if err.Error() == "二维码已失效" {
-							logger.Warnf("%v - 重新生成二维码", err)
-							break
+						logger.Errorf("轮询扫码状态失败 - %v", err)
+						continue
+					}
+					switch CheckResp.Data.Code {
+					case QRPollSuccess:
+						// 登录成功，优先从 cookie jar 提取，fallback 从 data.url 提取
+						cookies, err := GetCookiesFromJar(session)
+						if err != nil {
+							logger.Warnf("从 cookie jar 提取失败，尝试从 data.url 提取: %v", err)
+							cookies, err = GetCookies(CheckResp.Data.Url)
+							if err != nil {
+								logger.Errorf("解析 Cookies 失败 - %v", err)
+								continue
+							}
 						}
-						continue
+						// 先用临时凭据验证登录状态，确认 isLogin=true 后再提交内存与配置文件，
+						// 避免二维码返回无效 Cookie 时覆盖原有有效配置
+						SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
+						navResp, err := XWebInterfaceNav(true)
+						if err != nil {
+							logger.Errorf("验证扫码登录结果失败，token 可能无效: %v", err)
+							continue
+						}
+						if navResp.GetCode() != 0 || !navResp.GetData().GetIsLogin() {
+							logger.Errorf("扫码登录验证失败，token 无效: code=%d isLogin=%v", navResp.GetCode(), navResp.GetData().GetIsLogin())
+							continue
+						}
+						config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
+						config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
+						if err := cfg.WriteConfigKeyValue("bilibili.SESSDATA", cookies.SESSDATA); err != nil {
+							logger.Errorf("保存 SESSDATA 到配置文件失败 - %v", err)
+						}
+						if err := cfg.WriteConfigKeyValue("bilibili.bili_jct", cookies.BILI_JCT); err != nil {
+							logger.Errorf("保存 bili_jct 到配置文件失败 - %v", err)
+						}
+						FreshSelfInfo()
+						logger.Info("B站扫码登陆成功，请重启DDBOT-WSa")
+						logger.Info("正在退出...")
+						time.Sleep(time.Second * 5)
+						os.Exit(0)
+					case QRPollExpired:
+						logger.Warn("二维码已失效，重新生成二维码")
+						goto regenerate
+					case QRPollWaiting:
+						// 等待扫码，继续轮询
+					case QRPollScanned:
+						// 已扫码，等待确认，继续轮询
+					default:
+						logger.Errorf("扫码异常状态: code=%d message=%s", CheckResp.Data.Code, CheckResp.Data.Message)
+						goto regenerate
 					}
-					cookies, err := GetCookies(CheckResp.Data.Url)
-					if err != nil {
-						logger.Errorf("解析Cookies失败 - %v", err)
-						continue
-					}
-					config.GlobalConfig.Set("bilibili.SESSDATA", cookies.SESSDATA)
-					config.GlobalConfig.Set("bilibili.bili_jct", cookies.BILI_JCT)
-					if err := config.GlobalConfig.WriteConfig(); err != nil {
-						logger.Errorf("保存配置文件失败 - %v", err)
-						continue
-					}
-					SetVerify(cookies.SESSDATA, cookies.BILI_JCT)
-					FreshSelfInfo()
-					logger.Info("B站扫码登陆成功，请重启DDBOT-WSa")
-					logger.Info("正在退出...")
-					time.Sleep(time.Second * 5)
-					os.Exit(0)
 				}
+			regenerate:
 			}
 		}()
 	}
@@ -270,9 +301,13 @@ func FreshSelfInfo() {
 		logger.Errorf("获取个人信息失败 - %v，b站功能可能无法使用", err)
 	} else {
 		if navResp.GetCode() != 0 {
+			if isBilibiliLoginInvalidResponse(navResp.GetCode(), navResp.GetMessage()) {
+				notifyBilibiliLoginExpired(bilibiliLoginSourceSelf)
+			}
 			logger.Errorf("获取个人信息失败 - %v %v", navResp.GetCode(), navResp.GetMessage())
 		} else {
 			if navResp.GetData().GetIsLogin() {
+				markBilibiliLoginRecovered(bilibiliLoginSourceSelf)
 				logger.Infof("B站启动成功，当前使用账号：UID:%v %v LV%v %v",
 					navResp.GetData().GetMid(),
 					navResp.GetData().GetVipLabel().GetText(),
@@ -285,6 +320,7 @@ func FreshSelfInfo() {
 				accountUid.Store(navResp.GetData().GetMid())
 				return
 			} else {
+				notifyBilibiliLoginExpired(bilibiliLoginSourceSelf)
 				logger.Errorf("账号未登陆")
 			}
 		}

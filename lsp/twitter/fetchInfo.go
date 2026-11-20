@@ -5,10 +5,8 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,8 +18,6 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/cnxysoft/DDBOT-WSa/proxy_pool"
-	"github.com/cnxysoft/DDBOT-WSa/requests"
 )
 
 type UserProfile struct {
@@ -39,19 +35,26 @@ type UserProfile struct {
 }
 
 type Tweet struct {
-	ID         string       `json:"id"`
-	Content    string       `json:"content"`
-	CreatedAt  time.Time    `json:"created_at"`
-	Likes      int64        `json:"likes"`
-	Retweets   int64        `json:"retweets"`
-	Pinned     bool         `json:"pinned"`
-	Replies    int64        `json:"replies"`
-	Media      []*Media     `json:"media"`
-	IsRetweet  bool         `json:"is_retweet"`
-	OrgUser    *UserProfile `json:"org_user"`
-	Url        string       `json:"url"`
-	MirrorHost string       `json:"mirror_url"`
-	QuoteTweet *Tweet       `json:"quote_tweet"`
+	ID              string       `json:"id"`
+	Content         string       `json:"content"`
+	TranslatedText  string       `json:"translated_text,omitempty"`  // 翻译后的文本
+	TranslationLang string       `json:"translation_lang,omitempty"` // 翻译源语言
+	CreatedAt       time.Time    `json:"created_at"`
+	Likes           int64        `json:"likes"`
+	Retweets        int64        `json:"retweets"`
+	Pinned          bool         `json:"pinned"`
+	Replies         int64        `json:"replies"`
+	Media           []*Media     `json:"media"`
+	IsRetweet       bool         `json:"is_retweet"`
+	OrgUser         *UserProfile `json:"org_user"`     // 原作者（转发时）或本人（原创时）
+	RetweetUser     *UserProfile `json:"retweet_user"` // 转发者（仅转发时有值）
+	Url             string       `json:"url"`
+	MirrorHost      string       `json:"mirror_url"`
+	QuoteTweet      *Tweet       `json:"quote_tweet"`
+
+	// translationCh 异步预翻译结果通道（不参与序列化）。
+	// fetch 阶段启动预翻译时初始化，推送阶段通过 WaitTranslation 读取。
+	translationCh chan *TranslationResult `json:"-"`
 }
 
 type Media struct {
@@ -61,9 +64,10 @@ type Media struct {
 
 type AnubisChallenge struct {
 	Rules struct {
-		Algorithm  string `json:"algorithm"`
-		Difficulty int    `json:"difficulty"`
-		ReportAs   int    `json:"report_as"`
+		Algorithm  string   `json:"algorithm"`
+		Difficulty int      `json:"difficulty"`
+		ReportAs   int      `json:"report_as"`
+		Extensions []string `json:"extensions"`
 	} `json:"rules"`
 	Challenge any `json:"challenge"`
 }
@@ -85,11 +89,18 @@ type Challenges struct {
 }
 
 type AnubisResult struct {
-	Hash  string
-	Nonce int
-	Time  int
-	Host  string
-	Id    string
+	Hash       string
+	Nonce      int
+	Time       int
+	Host       string
+	Id         string
+	Algorithm  string
+	RandomData string
+	Difficulty int
+	Extensions []string
+	TargetURL  string
+	BasePrefix string
+	Version    string
 }
 
 func (t *Tweet) RtType() int {
@@ -121,7 +132,10 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	parsedURL, _ := url.Parse(Url)
+	parsedURL, err := url.Parse(Url)
+	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") {
+		return nil, nil, nil, errors.New("无效的 Twitter 镜像页面地址")
+	}
 
 	title := doc.Find("title").Text()
 	if title == "Just a moment..." {
@@ -132,43 +146,9 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			return nil, nil, nil, errors.New(message)
 		}
 		return nil, nil, nil, errors.New("Twitter has been Error.")
-	} else if strings.HasPrefix(title, "正在确认你是不是机器人！") {
-		challengeJson := doc.Find("script[id='anubis_challenge']").Text()
-		challenge := new(AnubisChallenge)
-		var challengeTarget string
-		var challengeSub *AnubisChallengeSub
-		err = json.Unmarshal([]byte(challengeJson), &challenge)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		switch challenge.Challenge.(type) {
-		case string:
-			challengeTarget = challenge.Challenge.(string)
-		case map[string]interface{}:
-			marshal, err := json.Marshal(challenge.Challenge)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			err = json.Unmarshal(marshal, &challengeSub)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			challengeTarget = challengeSub.RandomData
-		}
-		nonce, hash := ComputePoW(challengeTarget, challenge.Rules.Difficulty, challenge.Rules.Algorithm)
-		result := &Challenges{
-			Type: "anubis",
-			Anubis: &AnubisResult{
-				Hash:  hash,
-				Nonce: nonce,
-				Time:  rand.Intn(100),
-				Host:  parsedURL.Hostname(),
-			},
-		}
-		if challengeSub != nil {
-			result.Anubis.Id = challengeSub.Id
-		}
-		return nil, nil, result, nil
+	} else if doc.Find("script#anubis_challenge").Length() > 0 {
+		challenge, err := parseAnubisChallenge(doc, parsedURL)
+		return nil, nil, challenge, err
 	} else if strings.HasPrefix(title, "Verifying your browser") {
 		// 获取挑战js
 		var fixedPrefix, cookieName, valuePrefix string
@@ -223,6 +203,9 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 	doc.Find("meta[property='og:title']").Each(func(i int, s *goquery.Selection) {
 		title := s.AttrOr("content", "")
 		subTitle := strings.LastIndex(title, " (")
+		if subTitle < 0 {
+			return
+		}
 		parts := []string{
 			title[:subTitle],
 			title[subTitle:],
@@ -234,6 +217,10 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			}
 		}
 	})
+	if profile.ScreenName == "" {
+		profile.ScreenName = strings.TrimPrefix(strings.TrimSpace(doc.Find(".profile-card-username").First().Text()), "@")
+		profile.Name = strings.TrimSpace(doc.Find(".profile-card-fullname").First().Text())
+	}
 
 	// 解析用户说明
 	doc.Find("meta[property='og:description']").Each(func(i int, s *goquery.Selection) {
@@ -282,13 +269,18 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 
 		// 解析基础信息
 		tweet.ID = ExtractTweetID(item.Find(".tweet-link").AttrOr("href", ""))
-		tweet.Content = strings.TrimSpace(item.Find(".tweet-content").Text())
+		if tweet.ID == "" {
+			return
+		}
+		tweet.Content = mirrorText(item.Find(".tweet-content").First())
 
 		// 解析时间
 		timeStr := item.Find(".tweet-date a").AttrOr("title", "")
 		// 原格式：Mon Jan 2 15:04:05 -0700 MST 2006 的变体
 		if parsedTime, err := time.Parse("Jan 2, 2006 · 3:04 PM MST", timeStr); err == nil {
 			tweet.CreatedAt = parsedTime
+		} else {
+			tweet.CreatedAt, _ = ParseSnowflakeTimestamp(tweet.ID)
 		}
 
 		// 解析互动数据
@@ -309,45 +301,7 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 			}
 		})
 
-		// 解析图片
-		item.Find(".tweet-body > .attachments .attachment img").Each(func(i int, img *goquery.Selection) {
-			if src := img.AttrOr("src", ""); src != "" {
-				tweet.Media = append(tweet.Media, &Media{
-					Type: "image",
-					Url:  src,
-				})
-			}
-		})
-
-		// 解析GIF
-		item.Find(".tweet-body > .attachments .gif source").Each(func(i int, gif *goquery.Selection) {
-			if src := gif.AttrOr("src", ""); src != "" {
-				tweet.Media = append(tweet.Media, &Media{
-					Type: "gif",
-					Url:  src,
-				})
-			}
-		})
-
-		// 解析视频
-		item.Find(".tweet-body > .attachments .gallery-video source").Each(func(i int, video *goquery.Selection) {
-			if src := video.AttrOr("src", ""); src != "" {
-				tweet.Media = append(tweet.Media, &Media{
-					Type: "video",
-					Url:  src,
-				})
-			}
-		})
-
-		// 解析视频(m3u8)
-		item.Find(".tweet-body > .attachments .gallery-video video").Each(func(i int, video *goquery.Selection) {
-			if dataUrl := video.AttrOr("data-url", ""); dataUrl != "" {
-				tweet.Media = append(tweet.Media, &Media{
-					Type: "video(m3u8)",
-					Url:  dataUrl,
-				})
-			}
-		})
+		tweet.Media = parseMirrorMedia(item.Find(".tweet-body > .attachments"))
 
 		// 判断是否置顶
 		tweet.Pinned = item.Find(".pinned").Length() > 0
@@ -355,22 +309,9 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 		// 判断是否转推
 		tweet.IsRetweet = item.Find(".retweet-header").Length() > 0
 		if tweet.IsRetweet {
-			// 解析被转推用户基本信息
-			var reProfile UserProfile
-			item.Find(".fullname-and-username a").Each(func(i int, s *goquery.Selection) {
-				if i == 0 {
-					reProfile.Name = strings.TrimSpace(s.Text())
-				} else {
-					reProfile.ScreenName = strings.Trim(s.Text(), "@)")
-					reProfile.Website = XUrl + "/" +
-						strings.Trim(item.Find(".timeline-item .username").
-							AttrOr("title", ""), "@")
-				}
-			})
-			// 添加原推主
-			tweet.OrgUser = &reProfile
+			tweet.OrgUser = mirrorAuthor(item.Find(".tweet-header").First())
 			// 添加URL
-			tweet.Url = XUrl + strings.TrimRight(item.Find(".tweet-link").AttrOr("href", ""), "#m")
+			tweet.Url = mirrorTweetURL(item.Find(".tweet-link").AttrOr("href", ""))
 		} else {
 			// 添加URL
 			tweet.Url = XUrl + "/" + profile.ScreenName + "/status/" + tweet.ID
@@ -382,70 +323,22 @@ func ParseResp(htmlContent []byte, Url string) (*UserProfile, []*Tweet, *Challen
 				MirrorHost: parsedURL.Hostname(),
 			}
 			// 解析推文ID
-			QuoteTweet.ID = ExtractTweetID(item.Find(".quote-link").AttrOr("href", ""))
+			QuoteTweet.ID = ExtractTweetID(s.Find(".quote-link").AttrOr("href", ""))
 			// 解析时间
 			timeStr := s.Find(".tweet-date a").AttrOr("title", "")
 			// 原格式：Mon Jan 2 15:04:05 -0700 MST 2006 的变体
 			if parsedTime, err := time.Parse("Jan 2, 2006 · 3:04 PM MST", timeStr); err == nil {
 				QuoteTweet.CreatedAt = parsedTime
+			} else {
+				QuoteTweet.CreatedAt, _ = ParseSnowflakeTimestamp(QuoteTweet.ID)
 			}
 
 			// 解析用户基本信息
-			var QuoteUser UserProfile
-			s.Find(".fullname-and-username a").Each(func(i int, s *goquery.Selection) {
-				if i == 0 {
-					QuoteUser.Name = strings.TrimSpace(s.Text())
-				} else {
-					QuoteUser.ScreenName = strings.Trim(s.Text(), "@)")
-					QuoteUser.Website = XUrl + "/" +
-						strings.Trim(item.Find(".timeline-item .username").
-							AttrOr("title", ""), "@")
-				}
-			})
-			// 添加原推主
-			QuoteTweet.OrgUser = &QuoteUser
+			QuoteTweet.OrgUser = mirrorAuthor(s.Find(".fullname-and-username").First())
 			// 解析内容
-			QuoteTweet.Content = strings.TrimSpace(s.Find(".quote-text").Text())
+			QuoteTweet.Content = mirrorText(s.Find(".quote-text"))
 
-			// 解析图片
-			s.Find(".attachment img").Each(func(i int, img *goquery.Selection) {
-				if src := img.AttrOr("src", ""); src != "" {
-					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
-						Type: "image",
-						Url:  src,
-					})
-				}
-			})
-
-			// 解析GIF
-			s.Find(".attachment .gif source").Each(func(i int, gif *goquery.Selection) {
-				if src := gif.AttrOr("src", ""); src != "" {
-					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
-						Type: "gif",
-						Url:  src,
-					})
-				}
-			})
-
-			// 解析视频
-			s.Find(".gallery-video source").Each(func(i int, video *goquery.Selection) {
-				if src := video.AttrOr("src", ""); src != "" {
-					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
-						Type: "video",
-						Url:  src,
-					})
-				}
-			})
-
-			// 解析视频(m3u8)
-			s.Find(".gallery-video video").Each(func(i int, video *goquery.Selection) {
-				if dataUrl := video.AttrOr("data-url", ""); dataUrl != "" {
-					QuoteTweet.Media = append(QuoteTweet.Media, &Media{
-						Type: "video(m3u8)",
-						Url:  dataUrl,
-					})
-				}
-			})
+			QuoteTweet.Media = parseMirrorMedia(s.Find(".quote-media-container"))
 			tweet.QuoteTweet = QuoteTweet
 		})
 		if tweet.QuoteTweet != nil && tweet.OrgUser == nil {
@@ -531,28 +424,6 @@ func checkNibbles(hash [32]byte, difficulty int) bool {
 	}
 
 	return false
-}
-
-func FreshCookie(anubis *AnubisResult) {
-	opts := []requests.Option{
-		requests.RequestAutoHostOption(),
-		requests.ProxyOption(proxy_pool.PreferOversea),
-		requests.AddUAOption(UserAgent),
-		requests.RetryOption(3),
-		requests.WithCookieJar(Cookie),
-		requests.HeaderOption("accept-language", "zh-CN,zh;q=0.9"),
-	}
-	var addAnubisId string
-	if anubis.Id != "" {
-		addAnubisId = "id=" + anubis.Id + "&"
-	}
-	path := fmt.Sprintf("https://%s/.within.website/x/cmd/anubis/api/pass-challenge?"+
-		"%sresponse=%s&nonce=%d&redir=https://%s/&elapsedTime=%d", anubis.Host, addAnubisId, anubis.Hash, anubis.Nonce, url.QueryEscape(anubis.Host), anubis.Time)
-	var resp bytes.Buffer
-	err := requests.Get(path, nil, &resp, opts...)
-	if err != nil {
-		logger.Errorf("twitter: fresh %s cookie error %v", anubis.Host, err)
-	}
 }
 
 // extractScripts collects inline <script> contents from a goquery document.

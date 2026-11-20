@@ -221,65 +221,17 @@ func ImageSuffix(name string) bool {
 	return false
 }
 
+// MergeImages is the legacy single-page grid API used by picm/picmx.
+// Gallery processing uses ComposeImages so large collections can return pages.
 func MergeImages(images [][]byte) ([]byte, error) {
-	if len(images) == 0 {
-		return nil, errors.New("no image given")
-	}
-
-	// 1440可以被2 3 4 5 6整除
-	const ColumnSize = 1440
-	var columns int
-	for columns = 2; columns < 6 && columns*columns < len(images); columns++ {
-	}
-	var subImageSize = ColumnSize / columns
-
-	var rows = (len(images)-1)/columns + 1
-	for _, img := range images {
-		if len(img) == 0 {
-			return nil, errors.New("empty image exists")
-		}
-	}
-	var bg = image.NewNRGBA(image.Rect(0, 0, ColumnSize, subImageSize*rows))
-	draw.Draw(bg, bg.Bounds(), image.White, image.Point{}, draw.Src)
-	for i, imgBytes := range images {
-		cfg, _, err := image.DecodeConfig(bytes.NewReader(imgBytes))
-		if err != nil {
-			return nil, fmt.Errorf("DecodeConfig failed %v", err)
-		}
-		var minSize = cfg.Width
-		if minSize > cfg.Height {
-			minSize = cfg.Height
-		}
-
-		var Dx int
-
-		if cfg.Width > cfg.Height {
-			Dx = (cfg.Width - minSize) / 2
-		}
-		if Dx < 0 {
-			Dx = 0
-		}
-
-		img, _, err := image.Decode(bytes.NewReader(imgBytes))
-		if err != nil {
-			return nil, fmt.Errorf("Decode failed %v", err)
-		}
-		if cfg.Width == cfg.Height {
-			img = resize.Resize(uint(subImageSize), uint(subImageSize), img, resize.Lanczos3)
-		} else {
-			img = resize.Resize(uint(subImageSize), uint(subImageSize), SubImage(img, image.Rect(Dx, 0, minSize+Dx, minSize)), resize.Lanczos3)
-		}
-		si := i / columns
-		sj := i % columns
-		draw.Draw(bg, img.Bounds().Add(image.Point{X: sj * subImageSize, Y: si * subImageSize}), img, image.Point{}, draw.Src)
-	}
-	var result = new(bytes.Buffer)
-	err := jpeg.Encode(result, bg, &jpeg.Options{Quality: 100})
+	pages, err := ComposeImages(images, ImageMergeOptions{Layout: ImageLayoutGrid})
 	if err != nil {
 		return nil, err
 	}
-	resBytes := result.Bytes()
-	return resBytes, nil
+	if len(pages) != 1 {
+		return nil, fmt.Errorf("grid requires %d pages; use ComposeImages", len(pages))
+	}
+	return pages[0], nil
 }
 
 func SubImage(img image.Image, r image.Rectangle) image.Image {

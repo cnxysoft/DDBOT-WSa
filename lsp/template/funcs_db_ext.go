@@ -168,6 +168,35 @@ func existData(key string, opts ...[]localdb.OptionFunc) bool {
 	return GetTemplateSC().Exist(localdb.ExtDbCustomKey(Keys...), opt...)
 }
 
+// ZAdd adds a member to a sorted set.
+// setName: sorted set 名称（如 "AtMsgList"、"ReserveList"）
+// member: 成员标识
+// score: 分数/排序值（支持 float64、string、int 等类型，内部自动转换）
+func ZAdd(setName string, member string, score interface{}) error {
+	return GetTemplateSC().ZAdd(setName, member, toFloat64(score))
+}
+
+// ZRangeByScore returns members within a score range.
+// setName: sorted set 名称
+// min/max: 分数范围（支持 float64、string、int 等类型，内部自动转换）
+// Returns a list of maps with "member" and "score" keys.
+func ZRangeByScore(setName string, min, max interface{}) []map[string]interface{} {
+	var result []map[string]interface{}
+	GetTemplateSC().ZRangeByScore(setName, toFloat64(min), toFloat64(max), func(member string, score float64) bool {
+		result = append(result, map[string]interface{}{
+			"member": member,
+			"score":  score,
+		})
+		return true
+	})
+	return result
+}
+
+// ZRem removes members from a sorted set.
+func ZRem(setName string, members ...string) error {
+	return GetTemplateSC().ZRem(setName, members...)
+}
+
 func getOptions(opt []interface{}, param ...interface{}) []localdb.OptionFunc {
 	var opts []localdb.OptionFunc
 	for _, iopt := range opt {

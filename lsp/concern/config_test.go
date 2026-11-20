@@ -260,6 +260,67 @@ func TestGroupConcernConfig_Validate(t *testing.T) {
 	assert.NotNil(t, g.Validate())
 }
 
+func TestGroupConcernFilterConfig_ValidateTextConflict(t *testing.T) {
+	textRule := func(words ...string) string {
+		return (&GroupConcernFilterConfigByText{Text: words}).ToString()
+	}
+
+	// text 与 not_text 含相同关键词：必然全部拦截，应报错
+	var g GroupConcernConfig
+	g.GetGroupConcernFilter().SetRule(FilterTypeText, textRule("原神"))
+	g.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("原神", "旅人纪行"))
+	err := g.Validate()
+	assert.NotNil(t, err)
+	assert.ErrorIs(t, err, ErrFilterRuleConflict)
+
+	// not_text 词是 text 词的子串：包含 text 词的消息必然也含 not_text 词，应报错
+	g.GetGroupConcernFilter().SetRule(FilterTypeText, textRule("原神星"))
+	g.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("原神"))
+	err = g.Validate()
+	assert.NotNil(t, err)
+	assert.ErrorIs(t, err, ErrFilterRuleConflict)
+
+	// 无交集：正常配置，应通过
+	g.GetGroupConcernFilter().SetRule(FilterTypeText, textRule("原神"))
+	g.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("旅人纪行"))
+	assert.Nil(t, g.Validate())
+
+	// not_text 词是 text 词的超串：不含 not_text 词的 text 消息仍可通过，应通过
+	g.GetGroupConcernFilter().SetRule(FilterTypeText, textRule("原神"))
+	g.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("原神星"))
+	assert.Nil(t, g.Validate())
+
+	// text 规则内任一关键词未被覆盖即可放行，应通过
+	g.GetGroupConcernFilter().SetRule(FilterTypeText, textRule("原神", "星穹铁道"))
+	g.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("原神"))
+	assert.Nil(t, g.Validate())
+
+	// 仅 not_text：无矛盾，应通过
+	var onlyDeny GroupConcernConfig
+	onlyDeny.GetGroupConcernFilter().SetRule(FilterTypeNotText, textRule("原神"))
+	assert.Nil(t, onlyDeny.Validate())
+
+	// 非法的规则配置 JSON：应报错
+	var broken GroupConcernConfig
+	broken.GetGroupConcernFilter().SetRule(FilterTypeText, "wrong")
+	assert.NotNil(t, broken.Validate())
+
+	// 空数组、null、空字符串和纯空白都会让规则永久放行或永久拦截，应拒绝。
+	for _, ruleType := range []string{FilterTypeText, FilterTypeNotText} {
+		for _, config := range []string{
+			`{"text":[]}`,
+			`{"text":null}`,
+			`{"text":[""]}`,
+			`{"text":["   "]}`,
+		} {
+			var empty GroupConcernConfig
+			empty.GetGroupConcernFilter().SetRule(ruleType, config)
+			assert.ErrorIs(t, empty.Validate(), ErrFilterKeywordEmpty,
+				"ruleType=%s config=%s", ruleType, config)
+		}
+	}
+}
+
 type testInfo struct {
 	isLive        bool
 	living        bool

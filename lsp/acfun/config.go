@@ -1,7 +1,7 @@
 package acfun
 
 import (
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"strconv"
@@ -67,8 +67,8 @@ func (g *GroupConcernConfig) NotifyBeforeCallback(inotify concern.Notify) {
 	}
 }
 
-func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *message.GroupMessage) {
-	if inotify.Type() != News || msg == nil || msg.Id == -1 {
+func (g *GroupConcernConfig) NotifyAfterCallback(inotify concern.Notify, msg *adapter.GroupMessage) {
+	if inotify.Type() != News || msg == nil || msg.ID == -1 {
 		return
 	}
 	notify := inotify.(*ConcernNewsNotify)

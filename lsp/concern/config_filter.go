@@ -3,6 +3,8 @@ package concern
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 const (
@@ -157,4 +159,64 @@ func (g *GroupConcernFilterConfig) GetFilterByText() (*GroupConcernFilterConfigB
 	}
 	// 存在规则但无文本过滤规则，按照旧语义返回类型不匹配错误
 	return nil, errors.New("filter type mismatched")
+}
+
+// ValidateTextConflict 检查 text 与 not_text 规则之间是否存在必然拦截全部推送的矛盾配置。
+// FilterHook 对多条规则取 AND（每条都必须通过）、规则内关键词取 OR，
+// 因此只要某条 text 规则的每个关键词都被某个 not_text 关键词覆盖
+// （not_text 词是 text 词的子串，完全相同是特例），
+// 则任何消息都不可能同时通过这两条规则，推送会被全部拦截。
+// 返回 nil 表示无矛盾；返回非 nil 时应拒绝本次配置改动。
+func (g *GroupConcernFilterConfig) ValidateTextConflict() error {
+	var allowRules [][]string // 每条 text 规则的关键词（规则内 OR）
+	var denyWords []string    // 全部 not_text 关键词
+	for _, r := range g.RulesNormalized() {
+		if r.Type != FilterTypeText && r.Type != FilterTypeNotText {
+			continue
+		}
+		textFilter, err := r.GetFilterByText()
+		if err != nil {
+			return fmt.Errorf("解析过滤规则失败: %v", err)
+		}
+		if textFilter == nil || len(textFilter.Text) == 0 {
+			return ErrFilterKeywordEmpty
+		}
+		for _, keyword := range textFilter.Text {
+			if strings.TrimSpace(keyword) == "" {
+				return ErrFilterKeywordEmpty
+			}
+		}
+		if r.Type == FilterTypeText {
+			allowRules = append(allowRules, textFilter.Text)
+		} else {
+			denyWords = append(denyWords, textFilter.Text...)
+		}
+	}
+	if len(denyWords) == 0 {
+		return nil
+	}
+	for _, allows := range allowRules {
+		if len(allows) == 0 {
+			continue
+		}
+		allDenied := true
+		for _, a := range allows {
+			covered := false
+			for _, d := range denyWords {
+				if d != "" && strings.Contains(a, d) {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				allDenied = false
+				break
+			}
+		}
+		if allDenied {
+			return fmt.Errorf("%w：text 关键词 %v 均被 not_text 覆盖，将导致所有推送被过滤",
+				ErrFilterRuleConflict, allows)
+		}
+	}
+	return nil
 }

@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/cnxysoft/DDBOT-WSa/admin"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -23,18 +25,22 @@ import (
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 
 	_ "github.com/cnxysoft/DDBOT-WSa/logging"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitcasting"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/twitch"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/weibo"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/xhh"
+	_ "github.com/cnxysoft/DDBOT-WSa/lsp/xhs"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/youtube"
 	_ "github.com/cnxysoft/DDBOT-WSa/msg-marker"
 )
 
-// SetUpLog 使用默认的日志格式配置，会写入到logs文件夹内，日志会保留七天
+// SetUpLog 使用默认的日志格式配置，会写入到 logs 文件夹内，日志会保留七天
 func SetUpLog() {
 	writer, err := rotatelogs.New(
 		path.Join("logs", "%Y-%m-%d.log"),
@@ -53,8 +59,11 @@ func SetUpLog() {
 	}
 	logrus.SetOutput(writer)
 	logrus.SetFormatter(formatter)
+	// 内存日志桥（admin SSE 推送用），尽早安装以覆盖启动早期日志
+	admin.InstallLogHook()
 	logrus.AddHook(lfshook.NewHook(
 		lfshook.WriterMap{
+			logrus.TraceLevel: os.Stdout,
 			logrus.DebugLevel: os.Stdout,
 			logrus.InfoLevel:  os.Stdout,
 			logrus.WarnLevel:  os.Stderr,
@@ -66,44 +75,58 @@ func SetUpLog() {
 	))
 }
 
-// Run 启动bot，这个函数会阻塞直到收到退出信号
-func Run() {
-	if fi, err := os.Stat("device.json"); err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("警告：没有检测到device.json，正在生成，如果是第一次运行，可忽略")
-			bot.GenRandomDevice()
-		} else {
-			warn.Warn(fmt.Sprintf("检查device.json文件失败 - %v", err))
-			os.Exit(1)
+// configFileInSearchPath 在 viper 的搜索路径里查找现有配置文件，规则逐条对齐 viper：
+//   - 先 "." 后 "./config"（viper 的 AddConfigPath 顺序，CWD 优先）；
+//   - 每个目录里按 viper.SupportedExts 试扩展名（json/toml/yaml/yml/... 都算）；
+//   - 目录不算配置（viper 的 exists 用 !IsDir 判定）；
+//   - Init 设了 SetConfigType("yaml")，所以无扩展名的 application 也算。
+//
+// 返回相对路径，以及是否找到。少认一种形态，首次运行就会在 CWD 生成一份示例配置，
+// 而 viper 优先读 CWD —— 用户真正写的那份被静默顶掉。
+func configFileInSearchPath() (string, bool) {
+	for _, dir := range []string{".", "config"} {
+		for _, ext := range viper.SupportedExts {
+			p := filepath.Join(dir, "application."+ext)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				return p, true
+			}
 		}
-	} else {
-		if fi.IsDir() {
-			warn.Warn("检测到device.json，但目标是一个文件夹！请手动确认并删除该文件夹！")
-			os.Exit(1)
-		} else {
-			fmt.Println("检测到device.json，使用存在的device.json")
+		p := filepath.Join(dir, "application")
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p, true
 		}
 	}
+	return "", false
+}
 
+// Run 启动 bot，这个函数会阻塞直到收到退出信号
+func Run() {
 	if fi, err := os.Stat("application.yaml"); err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("警告：没有检测到配置文件application.yaml，正在生成，如果是第一次运行，可忽略")
-			if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0755); err != nil {
-				warn.Warn(fmt.Sprintf("application.yaml生成失败 - %v", err))
-				os.Exit(1)
+			// 与 viper 的搜索路径一致（config.Init 依次找 "." 和 "./config"，CWD 优先）：
+			// ./config/ 下已有配置时绝不能生成 CWD 这份示例，否则 viper 优先读 CWD，
+			// 用户真正写的那份会被静默顶掉。
+			if alt, ok := configFileInSearchPath(); ok && alt != "application.yaml" {
+				fmt.Printf("检测到 %s，使用该配置\n", alt)
 			} else {
-				fmt.Println("最小配置application.yaml已生成，请按需修改，如需高级配置请查看帮助文档")
+				fmt.Println("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
+				if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0600); err != nil {
+					warn.Warn(fmt.Sprintf("application.yaml 生成失败 - %v", err))
+					os.Exit(1)
+				} else {
+					fmt.Println("最小配置 application.yaml 已生成，请按需修改，如需高级配置请查看帮助文档")
+				}
 			}
 		} else {
-			warn.Warn(fmt.Sprintf("检查application.yaml文件失败 - %v", err))
+			warn.Warn(fmt.Sprintf("检查 application.yaml 文件失败 - %v", err))
 			os.Exit(1)
 		}
 	} else {
 		if fi.IsDir() {
-			warn.Warn("检测到application.yaml，但目标是一个文件夹！请手动确认并删除该文件夹！")
+			warn.Warn("检测到 application.yaml，但目标是一个文件夹！请手动确认并删除该文件夹！")
 			os.Exit(1)
 		} else {
-			fmt.Println("检测到application.yaml，使用存在的application.yaml")
+			fmt.Println("检测到 application.yaml，使用存在的 application.yaml")
 		}
 	}
 
@@ -117,16 +140,20 @@ func Run() {
 		warn.Warn(fmt.Sprintf("读取配置文件失败！请检查配置文件格式是否正确 - %v", err))
 		os.Exit(1)
 	}
+	// 启动时按行校对一遍配置格式。全角冒号、同层等价键这类问题不会让 YAML 解析失败，
+	// 但会让对应的键静默读不到，所以只警告不中断。
+	cfg.CheckConfigFormatFile(cfg.ConfigFilePath())
+
 	config.GlobalConfig.WatchConfig()
 
-	// 根据配置启用EXT数据库
+	// 根据配置启用 EXT 数据库
 	if cfg.GetExtDbEnable() {
 		err = template.InitTemplateDB(cfg.GetExtDbPath())
 		if err != nil {
 			if err == localdb.ErrLockNotHold {
-				warn.Warn("tryLock数据库失败：您可能重复启动了这个BOT！\n如果您确认没有重复启动，请删除.lsp_ext.db.lock文件并重新运行。")
+				warn.Warn("tryLock 数据库失败：您可能重复启动了这个 BOT！\n如果您确认没有重复启动，请删除.lsp_ext.db.lock 文件并重新运行。")
 			} else {
-				warn.Warn("无法正常初始化数据库！请检查.ext.db文件权限是否正确，如无问题则为数据库文件损坏，请阅读文档获得帮助。")
+				warn.Warn("无法正常初始化数据库！请检查.ext.db 文件权限是否正确，如无问题则为数据库文件损坏，请阅读文档获得帮助。")
 			}
 			return
 		}
@@ -142,8 +169,7 @@ func Run() {
 	// 初始化 Modules
 	bot.StartService()
 
-	// 登录 跳过登录
-	//bot.Login()
+	_, _ = admin.Start(&bot.Instance.Online, nil)
 
 	// 刷新好友列表，群列表
 	//以后刷新
@@ -159,42 +185,74 @@ func Run() {
 
 var exampleConfig = func() string {
 	s := `
-### 注意，填写时请把井号及后面的内容删除，并且冒号后需要加一个空格
+### 注意：填写时请把井号及后面的内容删除；键值之间的冒号必须是半角「:」，且冒号后加一个空格。
+### 写成全角「：」时 YAML 不把它当分隔符，该配置项会静默失效（自定义命令前缀最容易踩）。
 bot:
+  commandPrefix: "/"     # 命令前缀，默认 "/"
   onJoinGroup: 
-    rename: "【bot】"   # BOT进群后自动改名，默认改名为“【bot】”，如果留空则不自动改名
-  sendFailureReminder: # 失败提醒: 发送失败达到一定次数后触发notify.bot.send_failed.tmpl模板
-    enable: false      # 是否启用失败提醒
-    times: 3           # 失败次数阈值
-  offlineQueue:   # 离线缓存: BOT离线时暂存要发送的消息，上线后重新发送（期间不能重启DDBOT）
+    rename: "【bot】"   # BOT 进群后自动改名，默认改名为"【bot】"，如果留空则不自动改名
+  offlineQueue:   # 离线缓存：BOT 离线时暂存要发送的消息，上线后重新发送（期间不能重启 DDBOT）
     enable: false # 是否启用离线缓存
     expire: 30m   # 离线消息有效期
+  onDisconnected: # 断线后的动作，可选 "exit"（退出程序）或留空（仅记录日志）
 
-# 初次运行时将不使用b站帐号方便进行测试
-# 如果不使用b站帐号，则推荐订阅数不要超过5个，否则推送延迟将上升
-# b站相关的功能推荐配置一个b站账号，建议使用小号
-# bot将使用您b站帐号的以下功能：
+# 代理配置：X / YouTube / 翻译等海外请求需要海外代理
+# 可选类型：
+#   systemProxy: 自动检测系统代理（Windows 注册表 / Linux 环境变量 / GNOME 系统代理），默认值
+#   localProxyPool: 手动配置代理池（下方的 localProxyPool 段）
+#   pyProxyPool: Python 代理池（下方的 pyProxyPool 段）
+#   off: 不使用代理
+proxy:
+  type: systemProxy
+
+# 本地代理池配置（仅当 proxy.type = localProxyPool 时生效）
+localProxyPool:
+  oversea:          # 海外代理（用于 X、YouTube 等）
+    - "http://127.0.0.1:7890"
+    - "socks5://127.0.0.1:1080"
+  mainland:         # 国内代理（用于 B站、微博等）
+    - "http://127.0.0.1:8080"
+
+# Python 代理池配置（仅当 proxy.type = pyProxyPool 时生效）
+pyProxyPool:
+  host: "http://127.0.0.1:8000"
+
+# 图片池配置（用于色图等命令）
+imagePool:
+  type: loliconPool    # 可选：loliconPool / localPool / off
+loliconPool:
+  apikey:          # LOLICON API Key（可选）
+  cacheMin: 0      # 缓存图片最小数量
+  cacheMax: 20     # 缓存图片最大数量
+  proxy:           # LOLICON 请求代理（可选）
+localPool:
+  imageDir: "./images"  # 本地图池图片目录
+
+# 初次运行时将不使用 b 站帐号方便进行测试
+# 如果不使用 b 站帐号，则推荐订阅数不要超过 5 个，否则推送延迟将上升
+# b 站相关的功能推荐配置一个 b 站账号，建议使用小号
+# bot 将使用您 b 站帐号的以下功能：
 # 关注用户 / 取消关注用户 / 查看关注列表
-# 请注意，订阅一个账号后，此处使用的b站账号将自动关注该账号
+# 请注意，订阅一个账号后，此处使用的 b 站账号将自动关注该账号
 bilibili:
-  SESSDATA: # 你的b站cookie
-  bili_jct: # 你的b站cookie
-  qrlogin: true # 是否启用二维码登录（Cookies失效时只需要清空SESSDATA和bili_jct重启即可再次登录）
-  interval: 25s # 直播状态和动态检测间隔，过快可能导致ip被暂时封禁
-  imageMergeMode: "auto" # 设置图片合并模式，支持 "auto" / "only9" / "off"
-                         # auto 为默认策略，存在比较刷屏的图片时会合并
-                         # only9 表示仅当恰好是9张图片的时候合并
-                         # off 表示不合并
+  SESSDATA: # 你的 b 站 cookie
+  bili_jct: # 你的 b 站 cookie
+  qrlogin: true # 是否启用二维码登录（Cookies 失效时只需要清空 SESSDATA 和 bili_jct 重启即可再次登录）
+  interval: 25s # 直播状态和动态检测间隔，过快可能导致 ip 被暂时封禁
+  imageMergeMode: "auto" # 兼容旧配置；新配置使用 imageMerge.mode
+                          # auto 为默认策略，存在比较刷屏的图片时会合并
+                          # only9 表示仅当恰好是 9 张图片的时候合并
+                          # off 表示不合并
   hiddenSub: false    # 是否使用悄悄关注，默认不使用
-  unsub: false        # 是否自动取消关注，默认不取消，如果您的b站账号有多个bot同时使用，取消可能导致推送丢失
-  minFollowerCap: 0        # 设置订阅的b站用户需要满足至少有多少个粉丝，默认为0，设为-1表示无限制
-  disableSub: false        # 禁止ddbot去b站关注帐号，这意味着只能订阅帐号已关注的用户，或者在b站手动关注
-  onlyOnlineNotify: false  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+  unsub: false        # 是否自动取消关注，默认不取消，如果您的 b 站账号有多个 bot 同时使用，取消可能导致推送丢失
+  minFollowerCap: 0        # 设置订阅的 b 站用户需要满足至少有多少个粉丝，默认为 0，设为 -1 表示无限制
+  disableSub: false        # 禁止 ddbot 去 b 站关注帐号，这意味着只能订阅帐号已关注的用户，或者在 b 站手动关注
+  onlyOnlineNotify: false  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
   autoParsePosts: false    # 自动解析专栏，将发送专栏动态改为发送专栏内容
   secAnalysis: false        # 是否开启动态二次解析，默认关闭
 
-# A站相关的功能推荐配置一个b站账号，建议使用小号
-# bot将使用您A站帐号的以下功能（订阅动态时）：
+# A 站相关的功能推荐配置一个 b 站账号，建议使用小号
+# bot 将使用您 A 站帐号的以下功能（订阅动态时）：
 # 关注用户 / 取消关注用户 / 查看关注列表
 # 请注意，订阅一个账号后，此处使用的 A 站账号将自动关注该账号
 # authKey 和 acPassToken 用于 ACFUN API 认证，与 account/password 不同
@@ -207,6 +265,7 @@ acfun:
   unsub: false
   interval: 25s
   onlyOnlineNotify: false
+  disableSub: false   # 禁止 A 站自动关注账号
 
 # Twitter 推送支持两种模式：
 # 1. mirror 模式（默认）：使用 nitter 镜像获取推文，无需账号
@@ -214,21 +273,35 @@ acfun:
 # 注意：api 模式需要真实 Twitter 账号 cookie，第三方镜像可能有额外校验
 
 # mirror 模式配置
-# 支持使用多个 nitter 镜像，默认使用官方镜像（第三方镜像可能有额外校验）
-# 使用 lightbrd 镜像请自行先访问 https://lightbrd.com/进行 cookies 的获取
-# 填入你访问网站时提交的 user_agent，可在浏览器中查看
-# 填入你访问网站后得到的 cf_clearance，可在浏览器中查看
+# 镜像按列表顺序尝试，优先复用上次成功的实例；验证失败或网络错误时自动切换。
+# 失败实例会冷却 30 秒至 15 分钟，成功后重置；支持 Anubis fast/slow/hashx、css-load、Poast 和 click 验证。
+# NitterTS 的视频/GIF/引用媒体也已兼容；xitter 与 NitterTS 可用性波动，暂不列入默认列表。
+# RSS 缺少视频播放地址等模板字段，暂不作为完整推送后端。
 twitter:
-  mode: mirror  # 模式选择：mirror（默认）或 api
+  mode: mirror  # mirror（默认）无需账号；使用账号 Cookie 时可改为 api
+  apiFetchMode: per_user       # API 查询方式：home_timeline 或 per_user
   baseUrl:     # mirror 模式下的 nitter 镜像列表
-    - "https://nitter.net/"
-    - "https://nitter.privacyredirect.com/"
     - "https://nitter.tiekoetter.com/"
-    - "https://nitter.poast.org/"
+    - "https://nitter.mizuki.st/"
+    - "https://nitter.ip6arpa.uk/"
     - "https://nitter.catsarch.com/"
+    - "https://nitter.jaydenha.uk/"
+    - "https://nitter.click/"
+  # 可选备用："https://nitter.xitter.cc/"、"https://nitterts.pages.dev/"；加入 baseUrl 列表即可尝试
   interval: 30s  # 查询间隔，过快可能导致 ip 被暂时封禁
   userAgent:      # 浏览器 User-Agent
   unsub: false    # 是否自动取消关注（当取消订阅时）
+  retweetFullText: false  # 转发推文是否显示原推文完整内容，false 显示截断摘要，true 显示完整文本
+
+  # 自动翻译配置
+  translate:
+    enabled: false   # 是否启用推文自动翻译（优先 X 官方 API，失败回退 Google）
+    minInterval: 5s  # 两次翻译请求的最小间隔，建议不要过小
+    targetLang: zh   # 翻译目标语言，默认 zh
+    batchWait: 15s   # 推送渲染时等待单条预翻译的兜底时长，默认 = minInterval + 10s
+
+  # queryId 缓存刷新间隔（api 模式，自动从 sw.js 提取 queryId 后生效）
+  queryIdRefreshInterval: 168h
 
   # api 模式配置（mode: api 时生效）
   # 以下字段用于 Twitter API 认证，需要真实账号的 cookies
@@ -241,10 +314,11 @@ twitter:
   ct0:          # Twitter ct0 cookie
   bearerToken:  # Twitter Bearer Token
   queryId:      # Twitter 搜索 API queryId
-  screenName:   # Twitter 账号 screen_name（可选）
+  userTweetsQueryId:  # UserTweets API queryId（可选，默认自动获取）
+  screenName:   # Twitter 账号 screen_name（可选） 
 
 # 抖音直播推送（测试）
-# 需要手动访问www.douyin.com并填入__ac_signature和__ac_nonce、sessionId共三个cookies和你的浏览器UA
+# 需要手动访问 www.douyin.com 并填入__ac_signature 和__ac_nonce、sessionId 共三个 cookies 和你的浏览器 UA
 douyin:
   acSignature: 
   acNonce: 
@@ -253,16 +327,59 @@ douyin:
   interval: 30s
   onlyOnlineNotify: false
 
-# weibo 推送暂时需要设置Cookie才会启动。
+# weibo 推送暂时需要设置 Cookie 才会启动。
 weibo:
-  onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
-  mode: guest             # weibo运行模式，可选 guest / login
-  interval: 30s           # weibo访客模式下Cookie刷新间隔
-  sub: # 登录weibo.com后取得对应名称的Cookie填入此处。
-  qrlogin: true           # 是否启用二维码登录（Cookies失效时重启后可再次登录）
+  onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+  mode: guest             # weibo 运行模式，可选 guest / login / api
+                          # guest: 访客模式，自动生成临时 Cookie
+                          # login: 登录模式，需要配置 sub 或启用 qrlogin/autorefresh
+                          # api: API 模式，从外部 API 自动获取 Cookie（推荐，但当出现api获取到的sub无法使用时请尝试使用login模式并开启autorefresh）
+  interval: 30s           # weibo 访客模式下 Cookie 刷新间隔
+  sub: # 登录 weibo.com 后取得对应名称的 Cookie 填入此处（mode: login 时可选）。
+  qrlogin: true           # 是否启用二维码登录（Cookies 失效时重启后可再次登录，仅 mode: login 时有效）
+  autorefresh: false      # 是否启用 SUB 自动刷新（mode: login/api 时有效）
+                          # 启用后：1) 启动时若 sub 为空则从 API 获取初始化（仅内存）
+                          #      2) 每小时检查 SUB 是否变化，不同则自动替换（仅内存）
+                          #      3) 只使用 SUB + XSRF-TOKEN，丢弃其他可能无效的字段
+                          #      4) 需要配合 cookieRefreshAPI 使用
+                          # 注意：不会修改配置文件中的 weibo.sub，每次重启重新获取
+  
+  # API 模式配置（mode: api 时使用）
+  # API 模式直接从外部 API 获取微博数据，无需 Cookie
+  # API 返回的数据格式需与微博移动端 API 兼容
+  apiModeBaseURL: "http://127.0.0.1:5000"  # API 模式基础地址，完整 URL 为 {baseURL}/api/Weibo/GetMobileCards?uid=uid
+
+  # Cookie 告警通知配置（告警发送对象通过 /config weibo_alert 指定）
+  disableCookieAlert: true  # 设为 true 可关闭 Cookie/SUB 失效告警通知
 
 youtube:
-  onlyOnlineNotify: true  # 是否不推送Bot离线期间的动态和直播，默认为false表示需要推送，设置为true表示不推送
+  onlyOnlineNotify: true  # 是否不推送 Bot 离线期间的动态和直播，默认为 false 表示需要推送，设置为 true 表示不推送
+
+# 斗鱼直播推送
+douyu:
+  interval: 60s           # 轮询间隔，默认60秒
+
+# 虎牙直播推送
+huya:
+  interval: 60s           # 轮询间隔，默认60秒
+
+# 小红书直播推送
+# 需要配置 cookies 才能获取用户房间信息
+xhs:
+  cookies:  # 支持完整 cookie 字典
+    a1: ""   # 小红书 a1 cookie（必需）
+    web_session: ""  # 可选
+    webId: ""  # 可选
+  interval: 15s  # 轮询间隔
+  onlyOnlineNotify: false
+
+# Twitch 直播推送
+# 需要在 https://dev.twitch.tv/console/apps 注册应用获取 clientId 和 clientSecret
+twitch:
+  clientId:               # Twitch 应用的 Client ID
+  clientSecret:           # Twitch 应用的 Client Secret
+  interval: 30s          # 轮询间隔，建议不要太短避免风控
+  onlyOnlineNotify: false # 是否不推送Bot离线期间的直播，默认为false表示需要推送
 
 # TwitCasting 直播推送
 # 需要在 TwitCasting 开发者后台注册应用获取 clientId 和 clientSecret
@@ -275,10 +392,24 @@ twitcasting:
     created: false       # 是否显示开播时间
     image: false         # 是否显示直播封面
 
+# 小黑盒 动态推送
+heybox:
+  x_xhh_tokenid:              # 可选，未配置时自动生成
+  interval: 30s               # 轮询间隔，默认30秒
+  onlyOnlineNotify: false     # 是否只推送上线后的动态
+
 concern:
   emitInterval: 5s
 
-template:      # 是否启用模板功能，true为启用，false为禁用，默认为禁用
+# 所有站点的通知图片合并；inherit 保留站点设置与原有默认行为。
+# 每个站点都可在自身配置段添加 imageMerge: {mode: always, layout: long}。
+imageMerge:
+  mode: inherit   # inherit / off / auto / only9 / always；显式值覆盖站点
+  layout: inherit # inherit / grid（九宫格）/ long（纵向长图）；显式值覆盖站点
+  maxWidth: 0     # 0 继承；最终默认 1440；高级配置最大 29999，非零值覆盖站点
+  maxHeight: 0    # 0 继承；最终默认 16000；可按需调至 28000，最大 29999
+
+template:      # 是否启用模板功能，true 为启用，false 为禁用，默认为禁用
   enable: true # 需要了解模板请看模板文档
   
 autoreply: # 自定义命令自动回复，自定义命令通过模板发送消息，且不支持任何参数，需要同时启用模板功能
@@ -287,29 +418,96 @@ autoreply: # 自定义命令自动回复，自定义命令通过模板发送消�
   private:
     command: [ ]
 
-# 重定义命令前缀，优先级高于bot.commandPrefix
-# 如果有多个，可填写多项，prefix支持留空，可搭配自定义命令使用
-# 例如下面的配置为：<Q命令1> <命令2> </help>
+# 重定义命令前缀，优先级高于 bot.commandPrefix
+# 如果有多个，可填写多项，prefix 支持留空，可搭配自定义命令使用
+# 例如下面的配置为：<Q 命令 1> <命令 2> </help>
 customCommandPrefix:
   签到: ""
   
+# 通知配置
+notify:
+  parallel: 1     # 并行推送数量，默认 1
+
+# 调度配置
+dispatch:
+  largeNotifyLimit: 50  # 大通知阈值，超过后改为分段推送
+
+# 定时任务配置
+cronjob: []       # 定时任务列表，格式见下面注释
+  # 示例:
+  # - cron: "0 9 * * *"      # 每天 9 点
+  #   templateName: "xxx"    # 使用的模板名
+  #   target:
+  #     group: [123456789]   # 推送到的群
+  #     private: [987654321] # 推送到的私聊用户
+
+# 调试白名单：仅在以下群/QQ 上开启调试日志与调试命令
+debug:
+  group: []       # 调试群列表
+  uin: []         # 调试 QQ 列表
+
+# 消息标记（收到重复/相似消息时合并提醒），默认禁用
+message-marker:
+  disable: false  # 设为 true 禁用消息标记
+
 # 日志等级，可选值：trace / debug / info / warn / error
 logLevel: info
 
-# ws模式支持ws-server（正向）和ws-reverse（反向）
+# FFmpeg 原生日志等级；热更新，同时受上面的全局 logLevel 过滤
+# quiet / panic / fatal / error / warning / info / verbose / debug / trace
+# verbose、debug 对应 DD debug；trace 对应 DD trace；panic/fatal 只记错误，不退出 DD
+ffmpeg:
+  logLevel: warning
+
+# QQ 消息日志，记录收发的 QQ 消息，输出到 qq-logs 文件夹
+# enable: true 启用，false 禁用（默认启用）
+qq-logs:
+  enable: true
+
+# 适配器选择：决定 DDBOT 用什么协议连 IM。取值三选一，默认 onebot-v11。
+#   onebot-v11 —— OneBot 11 兼容实现端（LLOneBot / NapCat / Lagrange / go-cqhttp 等），配下面的 websocket 段
+#   satori     —— Satori 协议实现端，地址同样取 websocket.ws-server / websocket.ws-reverse
+#   qqofficial —— QQ 官方开放平台机器人（bot.q.qq.com），配置见下面的 qqofficial 段
+# 注意：填了不认识的取值**不会让进程起不来**，而是打一条醒目 Warn 后回落到 onebot-v11 继续启动
+#       （adapter/config.go 的 resolveAdapterType）。这是既定行为：adapter.mode 是手写配置，
+#       拼错就应该能起来、能看见告警、能收发消息，而不是整个进程退出让人猜。
+adapter:
+  mode: onebot-v11
+
+# 只在 adapter.mode: qqofficial 时生效：QQ 开放平台机器人凭据
+# AppID / AppSecret 到 https://q.qq.com/ 的机器人管理端获取（沙箱与正式环境各一套，别混用）
+# AppSecret 等同凭据：别外泄、别提交到仓库；管理员面板的配置接口可以覆盖写入，但读取一律脱敏
+qqofficial:
+  app-id:                  # 必填：机器人 AppID
+  app-secret:              # 必填：机器人 AppSecret
+  mode: websocket          # 仅支持 websocket（webhook 尚未实现，填了会在启动时报错退出）
+  intents: 0               # 事件订阅位掩码，0 = 用默认（群与单聊事件组 1<<25）
+  qrlogin: true            # 面板「扫码登录」入口开关；缺省视为开（本平台扫码是主要绑定方式）
+  # shard-id: 0            # 分片号，未分片不用填
+  # shard-count: 1         # 分片总数，未分片不用填
+  # api-base-url: https://api.bot.qq.com     # 业务接口域名；WebSocket 网关地址运行时自动获取，无需配置
+  # http-timeout: 10s      # 单次 HTTP 请求超时
+  # token-refresh-ahead: 60s # access_token 到期前多久开始刷新
+  # start-timeout: 20s     # 启动等待首个 READY 的上限
+  # state-file:                             # 状态落盘路径（openid 映射与群清单）。留空 = 工作目录下 .qqofficial-state-<app-id>.json，按机器人自动分开。
+  #                                         # 注意：一旦在这里显式填了路径，就不再自动迁移旧版 .qqofficial-state.json。
+
+# ws 模式支持 ws-server（正向）和 ws-reverse（反向）
 # token 是服务端设置的 Access Token
-# ws-server 默认监听全部请求，如需限制请修改为指定ip:端口
-# ws-reverse 需要配合反向ws服务器使用，默认为LLOneBot地址
+# ws-server 默认只监听本机回环地址 127.0.0.1:15630；
+#   未配置 token 时仅允许监听回环地址，若改为 0.0.0.0 或其他网卡/公网地址则必须配置 token
+# ws-reverse 需要配合反向 ws 服务器使用，默认为 LLOneBot 地址
 websocket:
   mode: ws-server
   token:
-  ws-server: 0.0.0.0:15630
+  ws-server: 127.0.0.1:15630
   ws-reverse: ws://localhost:3001
-
-# 延迟加载好友、群组、群员信息
-reloadDelay:
-  enable: true # 是否启用数据延迟加载
-  time: 3s # 延迟时间，默认为3秒
+# Web 管理面板：浏览器里完成初始化、管理订阅与权限、改配置、编辑模板、实时看日志
+# 默认关闭；enable 为 false 时启动日志里会有一行提示告诉你怎么打开
+admin:
+  enable: true
+  addr: "127.0.0.1:15631"   # 监听地址；想从其它机器/手机访问改成 0.0.0.0:15631，并务必设置 token
+  token: ""                 # 访问密码；留空时第一次打开面板会进入初始化向导设置（仅限本机访问）
 
 # 自定义数据库设置
 # 启用后才会生成自定义数据库文件，并持久化保存
@@ -320,16 +518,14 @@ extDb:
 
 # Telegram 推送设置
 # 启用后，可在 Telegram 中进行所有操作（命令与 QQ 一致）
+# Telegram 请求走全局代理池（proxy.type = systemProxy 时自动使用系统代理），无需单独配置
 telegram:
-  enable: false            # 是否启用Telegram
+  enable: false            # 是否启用 Telegram
   token: ""                # Telegram Bot Token
-  proxy:
-    enable: false         # 是否启用代理（http/https/socks5/socks5h）
-    url: ""               # 代理地址，例如 http://127.0.0.1:7890 或 socks5h://127.0.0.1:1080
   endpoint: ""            # 可选：自定义 Telegram API Endpoint，留空使用默认
 
 `
-	// win上用记事本打开不会正确换行
+	// win 上用记事本打开不会正确换行
 	if runtime.GOOS == "windows" {
 		s = strings.ReplaceAll(s, "\n", "\r\n")
 	}

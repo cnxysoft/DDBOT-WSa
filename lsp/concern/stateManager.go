@@ -117,6 +117,12 @@ func (c *StateManager) getGroupConcernConfig(groupCode int64, id interface{}) (c
 	if concernConfig == nil {
 		concernConfig = new(GroupConcernConfig)
 	}
+	if err := concernConfig.GetGroupConcernFilter().ValidateTextConflict(); err != nil {
+		c.Logger().WithFields(localutils.GroupLogFields(groupCode)).
+			WithFields(logrus.Fields{"id": id, "error": err}).
+			Error("历史关键词过滤配置无效，本次加载已禁用全部过滤规则")
+		concernConfig.GetGroupConcernFilter().Clear()
+	}
 	return
 }
 
@@ -518,6 +524,11 @@ func (c *StateManager) EmitQueueFresher(doFresh func(p concern_type.Type, id int
 			case emitItem, received := <-c.emitChan:
 				if !received {
 					return
+				}
+				// WebUI 平台级开关：停用的平台完全停止轮询（不请求 API、不产生事件）。
+				// emitQueue 为环形遍历，条目保留在队列中，恢复开关后自动继续轮询。
+				if cfg.IsPlatformDisabled(c.name) {
+					continue
 				}
 				id := emitItem.Id
 				if ok := c.checkFresh(id, true); !ok {

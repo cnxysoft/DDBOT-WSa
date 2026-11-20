@@ -2,13 +2,14 @@ package bilibili
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
+	"testing"
+	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/buntdb"
-	"testing"
-	"time"
 )
 
 func initStateManager(t *testing.T) *StateManager {
@@ -327,16 +328,17 @@ func TestStateManager_GetNotifyMsgReplyInfo(t *testing.T) {
 
 	c := initStateManager(t)
 
-	msg := &message.GroupMessage{
-		Id:        1,
+	msg := &adapter.GroupMessage{
+		ID:        1,
 		GroupCode: test.G1,
-		Sender: &message.Sender{
-			Uin: test.ID1,
+		Sender: &adapter.SenderInfo{
+			UserID: test.ID1,
+			Uin:    test.ID1,
 		},
 		Time: 30,
-		Elements: []message.IMessageElement{
-			message.NewText("qwe"),
-			message.NewText("asd"),
+		Elements: []adapter.IMessageElement{
+			&adapter.TextSegment{Content: "qwe"},
+			&adapter.TextSegment{Content: "asd"},
 		},
 	}
 

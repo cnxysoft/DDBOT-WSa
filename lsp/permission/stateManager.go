@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/client"
 	"github.com/Sora233/MiraiGo-Template/utils"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	localutils "github.com/cnxysoft/DDBOT-WSa/utils"
@@ -215,7 +214,7 @@ func (c *StateManager) CheckGroupAdministrator(groupCode int64, caller int64) bo
 		log.Errorf("nil member info")
 		return false
 	}
-	return groupMemberInfo.Permission == client.Administrator || groupMemberInfo.Permission == client.Owner
+	return groupMemberInfo.IsAdminOrOwner()
 	//return true
 }
 
@@ -248,6 +247,35 @@ func (c *StateManager) CheckGroupAdministrator(groupCode int64, caller int64) bo
 
 func (c *StateManager) CheckGroupCommandPermission(groupCode int64, caller int64, command string) bool {
 	return c.CheckRole(caller, Admin) || c.Exist(c.PermissionKey(groupCode, caller, command))
+}
+
+// ListBlockList 返回当前黑名单中的 caller 列表（带 TTL 的条目到期后由数据库自动清除）。
+// 库中无任何黑名单条目时（索引不存在）返回空列表而非报错。
+func (c *StateManager) ListBlockList() []int64 {
+	var result []int64
+	err := c.RCoverTx(func(tx *buntdb.Tx) error {
+		if err := tx.Ascend(c.BlockListKey(), func(key, value string) bool {
+			splits := strings.Split(key, ":")
+			if len(splits) < 2 {
+				return true
+			}
+			i, err := strconv.ParseInt(splits[1], 0, 64)
+			if err != nil {
+				logger.WithField("Key", key).Errorf("Parse BlockListKey error %v", err)
+			} else {
+				result = append(result, i)
+			}
+			return true
+		}); err != nil && !localdb.IsNotFound(err) {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		result = nil
+		logger.Errorf("ListBlockList error %v", err)
+	}
+	return result
 }
 
 func (c *StateManager) GrantRole(target int64, role RoleType) error {
@@ -396,29 +424,29 @@ func (c *StateManager) RemoveAllByGroupCode(groupCode int64) ([]string, error) {
 }
 
 func (c *StateManager) FreshIndex() {
-    // Build indices for the namespace this StateManager is configured with
-    for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey} {
-        c.CreatePatternIndex(pattern, nil)
-    }
-    for _, group := range localutils.GetBot().GetGroupList() {
-        c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
-        c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
-    }
+	// Build indices for the namespace this StateManager is configured with
+	for _, pattern := range []localdb.KeyPatternFunc{c.PermissionKey, c.GroupPermissionKey, c.GroupEnabledKey, c.BlockListKey} {
+		c.CreatePatternIndex(pattern, nil)
+	}
+	for _, group := range localutils.GetBot().GetGroupList() {
+		c.CreatePatternIndex(c.GroupPermissionKey, []interface{}{group.Code})
+		c.CreatePatternIndex(c.GroupEnabledKey, []interface{}{group.Code})
+	}
 }
 
 func NewStateManager() *StateManager {
-    sm := &StateManager{
-        KeySet: NewKeySet(),
-    }
-    sm.FreshIndex()
-    return sm
+	sm := &StateManager{
+		KeySet: NewKeySet(),
+	}
+	sm.FreshIndex()
+	return sm
 }
 
 // NewTgStateManager returns a StateManager whose keys are in the TG namespace
 func NewTgStateManager() *StateManager {
-    sm := &StateManager{
-        KeySet: NewKeySet().WithNamespace("tg"),
-    }
-    sm.FreshIndex()
-    return sm
+	sm := &StateManager{
+		KeySet: NewKeySet().WithNamespace("tg"),
+	}
+	sm.FreshIndex()
+	return sm
 }

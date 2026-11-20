@@ -3,6 +3,7 @@ package acfun
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/requests"
@@ -69,7 +70,13 @@ func GetAttentionList() ([]*Follow, error) {
 	var followList []*Follow
 	page := 1
 
+	// 分页保护上限：API 异常持续返回相同 pcursor 时避免无限请求阻塞 SyncSub
+	const maxPage = 200
+
 	for {
+		if page > maxPage {
+			return nil, fmt.Errorf("获取关注列表失败：超过最大分页数 %d", maxPage)
+		}
 		resp, err := GetFollows(page)
 		if err != nil {
 			logger.WithField("FuncName", utils.FuncName()).WithField("UserId", username).Errorf("获取关注列表失败：%v", err)

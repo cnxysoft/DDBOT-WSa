@@ -2,11 +2,11 @@ package lsp
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	lsptelegram "github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
@@ -16,14 +16,28 @@ import (
 )
 
 func (l *Lsp) ConcernNotify() {
+	l.wg.Add(1)
+	defer l.wg.Done()
+	for {
+		if !l.consumeConcernNotify() {
+			return
+		}
+		// panic 后在同一 goroutine 内退避重启：
+		// 1) 避免 recover 中 go spawn 导致的 WaitGroup Add/Done 竞态
+		// 2) 持续性 panic 源不会变成无间隔热循环
+		time.Sleep(time.Second)
+	}
+}
+
+// consumeConcernNotify 执行一轮通知消费循环，返回 false 表示通道已关闭（正常退出），
+// 返回 true 表示发生 panic（由调用方决定是否重启）。
+func (l *Lsp) consumeConcernNotify() (panicked bool) {
 	defer func() {
 		if err := recover(); err != nil {
 			logger.WithField("stack", string(debug.Stack())).Errorf("concern notify recoverd %v", err)
-			go l.ConcernNotify()
+			panicked = true
 		}
 	}()
-	l.wg.Add(1)
-	defer l.wg.Done()
 	for {
 		select {
 		case _inotify, ok := <-l.concernNotify:
@@ -36,6 +50,20 @@ func (l *Lsp) ConcernNotify() {
 			var inotify = _inotify
 			target := mmsg.NewGroupTarget(inotify.GetGroupCode())
 			nLogger := inotify.Logger()
+
+			// WebUI 平台级开关：停用的平台不推送（轮询与订阅数据保留，恢复开关后继续）
+			if cfg.IsPlatformDisabled(inotify.Site()) {
+				nLogger.Info("平台已在 WebUI 停用，跳过本次推送")
+				publishPush(PushEntry{
+					Site:      inotify.Site(),
+					Type:      inotify.Type().String(),
+					GroupCode: inotify.GetGroupCode(),
+					Target:    formatPushTarget(inotify),
+					Summary:   "平台已在 WebUI 停用，跳过推送",
+					Status:    PushStatusSkipped,
+				})
+				continue
+			}
 
 			if l.LspStateManager.IsMuted(inotify.GetGroupCode(), utils.GetBot().GetUin()) &&
 				!l.PermissionStateManager.CheckGroupAdministrator(inotify.GetGroupCode(), utils.GetBot().GetUin()) {
@@ -95,7 +123,7 @@ func (l *Lsp) ConcernNotify() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			if err := l.msgLimit.Acquire(ctx, 1); err != nil {
 				cancel()
-				nLogger.WithField("Content", msgstringer.MsgToString(m.Elements())).
+				nLogger.WithField("Content", msgstringer.AdapterMsgToString(m.Elements())).
 					Errorf("BOT负载过高，推送已积压超过一分钟，将舍弃本次推送。")
 				continue
 			}
@@ -115,38 +143,54 @@ func (l *Lsp) ConcernNotify() {
 				if inotify.GetGroupCode() < 0 {
 					lsptelegram.SendToChat(inotify.GetGroupCode(), m)
 					cfg.NotifyAfterCallback(inotify, nil)
+					publishPush(PushEntry{
+						Site:      inotify.Site(),
+						Type:      inotify.Type().String(),
+						GroupCode: inotify.GetGroupCode(),
+						Target:    formatPushTarget(inotify),
+						Summary:   summarizePushMsg(m),
+						Status:    PushStatusSent,
+					})
 					return
 				}
 
-				msgs := l.GM(l.SendMsg(m, target))
+				msgs := l.AGM(l.SendMsg(m, target))
 				if len(msgs) > 0 {
 					cfg.NotifyAfterCallback(inotify, msgs[0])
 				}
+				publishPush(PushEntry{
+					Site:      inotify.Site(),
+					Type:      inotify.Type().String(),
+					GroupCode: inotify.GetGroupCode(),
+					Target:    formatPushTarget(inotify),
+					Summary:   summarizePushMsg(m),
+					Status:    pushStatusFromMsgs(msgs),
+				})
 
 				if atBeforeHook.Pass {
 					var atIdsOnce bool
 					for _, msg := range msgs {
-						if msg.Id == -1 {
+						if msg.ID == -1 {
 							// 检查有没有@全体成员
-							e := utils.MessageFilter(msg.Elements, func(element message.IMessageElement) bool {
-								return element.Type() == message.At && element.(*message.AtElement).Target == 0
-							})
+							e := utils.AdapterMessageFilter(msg.Elements, isAtAllElement)
 							if len(e) == 0 {
 								continue
 							}
 							// 2022/09/24 现在@全员不会再作为单独一条消息
 							// 有@全体成员的消息应该去掉之后重试
-							secondM := mmsg.NewMSGFromGroupMessage(msg)
-							secondM.Drop(func(e message.IMessageElement, _ int) bool {
-								return e.Type() == message.At && e.(*message.AtElement).Target == 0
+							secondM := mmsg.NewMSGFromGroupMessage(&adapter.GroupMessage{Elements: msg.Elements})
+							secondM.Drop(func(e adapter.IMessageElement, _ int) bool {
+								return isAtAllElement(e)
 							})
 
-							secondRes := l.GM(l.SendMsg(secondM, target))
-							// secondRes一定是一条
+							secondRes := l.AGM(l.SendMsg(secondM, target))
 							if len(secondRes) != 1 {
-								panic(fmt.Sprintf("INTERNAL: len(secondRes) is %v", len(secondRes)))
+								// 预期去掉@全员后应恰好一条结果；异常时记录并跳过，不以 panic 作控制流
+								nLogger.WithField("len", len(secondRes)).
+									Errorf("INTERNAL: unexpected len(secondRes), skip at-all retry")
+								continue
 							}
-							if secondRes[0].Id == -1 {
+							if secondRes[0].ID == -1 {
 								// 去掉@全员还是发送失败
 								continue
 							}
@@ -174,6 +218,11 @@ func (l *Lsp) ConcernNotify() {
 
 func (l *Lsp) NotifyMessage(inotify concern.Notify) *mmsg.MSG {
 	return inotify.ToMessage()
+}
+
+func isAtAllElement(element adapter.IMessageElement) bool {
+	at, ok := element.(*adapter.AtSegment)
+	return ok && at.Target == 0
 }
 
 func newAtAllMsg(m *mmsg.MSG) *mmsg.MSG {

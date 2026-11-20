@@ -1,19 +1,20 @@
 package utils
 
 import (
+	"encoding/base64"
 	"errors"
-	"github.com/Mrs4s/MiraiGo/message"
-	"github.com/Sora233/MiraiGo-Template/bot"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/samber/lo"
 )
 
-func MessageFilter(msg []message.IMessageElement, filter func(message.IMessageElement) bool) []message.IMessageElement {
-	return lo.Filter(msg, func(e message.IMessageElement, _ int) bool {
+func AdapterMessageFilter(msg []adapter.IMessageElement, filter func(adapter.IMessageElement) bool) []adapter.IMessageElement {
+	return lo.Filter(msg, func(e adapter.IMessageElement, _ int) bool {
 		return filter(e)
 	})
 }
 
-func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*message.ImageElement, error) {
+func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*adapter.ImageSegment, error) {
 	img, err := ImageGet(url)
 	if err != nil {
 		return nil, err
@@ -21,7 +22,7 @@ func UploadGroupImageByUrl(groupCode int64, url string, isNorm bool) (*message.I
 	return UploadGroupImage(groupCode, img, isNorm)
 }
 
-func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.ImageElement, err error) {
+func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *adapter.ImageSegment, err error) {
 	if isNorm {
 		img, err = ImageNormSize(img)
 		if err != nil {
@@ -31,14 +32,13 @@ func UploadGroupImage(groupCode int64, img []byte, isNorm bool) (image *message.
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourceGroup, PrimaryID: groupCode}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	base64Data := base64.StdEncoding.EncodeToString(img)
+	return &adapter.ImageSegment{
+		File: "base64://" + base64Data,
+	}, nil
 }
 
-func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageElement, error) {
+func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*adapter.ImageSegment, error) {
 	var err error
 	if isNorm {
 		img, err = ImageNormSize(img)
@@ -49,16 +49,13 @@ func UploadPrivateImage(uin int64, img []byte, isNorm bool) (*message.ImageEleme
 	if !GetBot().IsOnline() {
 		return nil, errors.New("bot offline")
 	}
-	e, err := bot.Instance.UploadImage(message.Source{SourceType: message.SourcePrivate, PrimaryID: uin}, img)
-	if err != nil {
-		return nil, err
-	}
-	return e.(*message.ImageElement), nil
+	base64Data := base64.StdEncoding.EncodeToString(img)
+	return &adapter.ImageSegment{
+		File: "base64://" + base64Data,
+	}, nil
 }
 
-const (
-	internalMsgTypeGroup = "group"
-)
+const internalMsgTypeGroup = "group"
 
 type internalMsg struct {
 	Type          string `json:"type"`
@@ -66,7 +63,7 @@ type internalMsg struct {
 	ElementString string `json:"element_string"`
 }
 
-func SerializationGroupMsg(m *message.GroupMessage) (string, error) {
+func SerializationAdapterGroupMsg(m *adapter.GroupMessage) (string, error) {
 	elems := m.Elements
 	m.Elements = nil
 
@@ -79,7 +76,7 @@ func SerializationGroupMsg(m *message.GroupMessage) (string, error) {
 		return "", err
 	}
 
-	elemString, err := SerializationElement(elems)
+	elemString, err := SerializationAdapterElement(elems)
 	if err != nil {
 		return "", err
 	}
@@ -93,19 +90,19 @@ func SerializationGroupMsg(m *message.GroupMessage) (string, error) {
 	return json.MarshalToString(imsg)
 }
 
-func DeserializationGroupMsg(r string) (*message.GroupMessage, error) {
+func DeserializationAdapterGroupMsg(r string) (*adapter.GroupMessage, error) {
 	var imsg *internalMsg
 	err := json.UnmarshalFromString(r, &imsg)
 	if err != nil {
 		return nil, err
 	}
 
-	var m *message.GroupMessage
+	var m *adapter.GroupMessage
 	err = json.UnmarshalFromString(imsg.MsgInfo, &m)
 	if err != nil {
 		return nil, err
 	}
-	elems, err := DeserializationElement(imsg.ElementString)
+	elems, err := DeserializationAdapterElement(imsg.ElementString)
 	if err != nil {
 		return nil, err
 	}
@@ -119,37 +116,22 @@ type internalElem struct {
 }
 
 const (
-	internalTypeText        = "text"
-	internalTypeGroupImage  = "group_image"
-	internalTypeFriendImage = "friend_image"
-	internalTypeImage       = "image"
+	internalTypeText  = "text"
+	internalTypeImage = "image"
 )
 
-// SerializationElement 序列化消息，只支持图片，文字
-func SerializationElement(e []message.IMessageElement) (string, error) {
+func SerializationAdapterElement(e []adapter.IMessageElement) (string, error) {
 	var tmp []*internalElem
 
 	for _, elem := range e {
 		switch o := elem.(type) {
-		case *message.TextElement:
+		case *adapter.TextSegment:
 			b, _ := json.Marshal(o)
 			tmp = append(tmp, &internalElem{
 				Type:    internalTypeText,
 				Content: string(b),
 			})
-		case *message.GroupImageElement:
-			b, _ := json.Marshal(o)
-			tmp = append(tmp, &internalElem{
-				Type:    internalTypeGroupImage,
-				Content: string(b),
-			})
-		case *message.FriendImageElement:
-			b, _ := json.Marshal(o)
-			tmp = append(tmp, &internalElem{
-				Type:    internalTypeFriendImage,
-				Content: string(b),
-			})
-		case *message.ImageElement:
+		case *adapter.ImageSegment:
 			b, _ := json.Marshal(o)
 			tmp = append(tmp, &internalElem{
 				Type:    internalTypeImage,
@@ -159,40 +141,26 @@ func SerializationElement(e []message.IMessageElement) (string, error) {
 			panic("unsupported element type")
 		}
 	}
-	s, err := json.MarshalToString(tmp)
-	return s, err
+	return json.MarshalToString(tmp)
 }
 
-// DeserializationElement 反序列化消息，只支持图片，文字
-func DeserializationElement(r string) ([]message.IMessageElement, error) {
+func DeserializationAdapterElement(r string) ([]adapter.IMessageElement, error) {
 	var tmp []*internalElem
 	err := json.Unmarshal([]byte(r), &tmp)
 	if err != nil {
 		return nil, err
 	}
-	var result []message.IMessageElement
+	var result []adapter.IMessageElement
 	for _, e := range tmp {
 		switch e.Type {
-		case internalTypeGroupImage:
-			var elem *message.GroupImageElement
-			json.UnmarshalFromString(e.Content, &elem)
-			if elem != nil {
-				result = append(result, elem)
-			}
 		case internalTypeText:
-			var elem *message.TextElement
-			json.UnmarshalFromString(e.Content, &elem)
-			if elem != nil {
-				result = append(result, elem)
-			}
-		case internalTypeFriendImage:
-			var elem *message.FriendImageElement
+			var elem *adapter.TextSegment
 			json.UnmarshalFromString(e.Content, &elem)
 			if elem != nil {
 				result = append(result, elem)
 			}
 		case internalTypeImage:
-			var elem *message.ImageElement
+			var elem *adapter.ImageSegment
 			json.UnmarshalFromString(e.Content, &elem)
 			if elem != nil {
 				result = append(result, elem)

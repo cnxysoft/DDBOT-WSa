@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -240,7 +240,7 @@ type CacheCard struct {
 	GroupCode int64
 	once      sync.Once
 	msgCache  *mmsg.MSG
-	orgMsg    *message.GroupMessage
+	orgMsg    *adapter.GroupMessage
 }
 
 func (c *CacheCard) GetMSG() *mmsg.MSG {

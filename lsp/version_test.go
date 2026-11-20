@@ -2,10 +2,12 @@ package lsp
 
 import (
 	"bytes"
-	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestCompareVersion(t *testing.T) {
@@ -32,10 +34,33 @@ func TestCompareVersion(t *testing.T) {
 }
 
 func TestCheckUpdate(t *testing.T) {
-	var w = new(bytes.Buffer)
-	logrus.SetOutput(w)
-	Tags = "v0.0.1"
-	CheckUpdate()
-	fmt.Println(w.String())
-	assert.Contains(t, w.String(), "更新检测完成")
+	oldTags, oldOutput, oldLevel := Tags, logrus.StandardLogger().Out, logrus.GetLevel()
+	t.Cleanup(func() {
+		Tags = oldTags
+		logrus.SetOutput(oldOutput)
+		logrus.SetLevel(oldLevel)
+	})
+	for _, tc := range []struct {
+		name, current, response, wantTag, wantLog string
+	}{
+		{"update", "v0.0.1", `{"tag_name":"v0.0.2"}`, "v0.0.2", "更新检测完成"},
+		{"current", "v0.0.2", `{"tag_name":"v0.0.2"}`, "", "当前为DDBOT最新版本"},
+		{"api error", "v0.0.1", `{"message":"rate limit exceeded"}`, "", "更新检测失败"},
+		{"invalid response", "v0.0.1", `{}`, "", "更新检测失败"},
+		{"development", "UNKNOWN", `{}`, "", "跳过更新检测"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer server.Close()
+			var logs bytes.Buffer
+			logrus.SetOutput(&logs)
+			logrus.SetLevel(logrus.DebugLevel)
+			Tags = tc.current
+			assert.Equal(t, tc.wantTag, checkUpdate(server.URL))
+			assert.Contains(t, logs.String(), tc.wantLog)
+		})
+	}
 }

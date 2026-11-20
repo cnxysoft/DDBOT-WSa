@@ -2,12 +2,14 @@ package acfun
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	"testing"
-	"time"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewConcern(t *testing.T) {
@@ -124,6 +126,8 @@ func TestNewConcern(t *testing.T) {
 }
 
 func TestNewConcern2(t *testing.T) {
+	const testId int64 = 1
+	useHTTPFixture(t, LiveUrl(testId), livePageFixture)
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
 
@@ -132,20 +136,16 @@ func TestNewConcern2(t *testing.T) {
 	assert.Nil(t, c.Start())
 	defer c.Stop()
 
-	timeup := time.After(time.Second * 5)
-
-	const testId int64 = 1
-
 	info, err := c.Add(nil, test.G1, testId, Live)
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, info)
 	assert.EqualValues(t, "admin", info.GetName())
 	assert.EqualValues(t, testId, info.GetUid())
 
 	info, err = c.Remove(nil, test.G1, testId, Live)
-	assert.Nil(t, err)
+	require.NoError(t, err)
+	require.NotNil(t, info)
 	assert.EqualValues(t, "admin", info.GetName())
 	assert.EqualValues(t, testId, info.GetUid())
-
-	<-timeup
 
 }

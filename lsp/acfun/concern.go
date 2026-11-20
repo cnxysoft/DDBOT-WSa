@@ -56,8 +56,8 @@ func (c *Concern) Start() error {
 	Init()
 	c.UseNotifyGeneratorFunc(c.notifyGenerator())
 	c.UseFreshFunc(c.fresh())
+	c.wg.Add(1)
 	go func() {
-		c.wg.Add(1)
 		defer c.wg.Done()
 		c.SyncSub()
 		tick := time.Tick(time.Hour)
@@ -219,6 +219,11 @@ func (c *Concern) fresh() concern.FreshFunc {
 			case <-t.C:
 			case <-ctx.Done():
 				return
+			}
+			if cfg.IsPlatformDisabled(Site) {
+				logger.Debug("平台已在 WebUI 停用，跳过本轮轮询")
+				t.Reset(interval)
+				continue
 			}
 			var start = time.Now()
 			var errGroup errgroup.Group

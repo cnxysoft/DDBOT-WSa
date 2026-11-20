@@ -2,13 +2,16 @@ package bilibili
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
+	"strconv"
+	"testing"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
+	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
 	"github.com/stretchr/testify/assert"
-	"strconv"
-	"testing"
 )
 
 func newLiveInfo(uid int64, living bool, liveStatusChanged bool, liveTitleChanged bool) *ConcernLiveNotify {
@@ -345,6 +348,121 @@ func TestGroupConcernConfig_NotifyBeforeCallback(t *testing.T) {
 	g.NotifyBeforeCallback(live)
 }
 
+func newFilteredCompactVideo(c *Concern, groupCode int64, bvid, action string) (*ConcernNewsNotify, *GroupConcernConfig) {
+	notify := newNewsInfo(test.UID1, DynamicDescType_WithVideo)[0]
+	notify.GroupCode = groupCode
+	notify.concern = c
+	notify.Card.Desc.Bvid = bvid
+	notify.Card.Desc.UserProfile = &Card_Desc_UserProfile{
+		Info: &Card_Desc_UserProfile_Info{Uname: "投稿用户"},
+	}
+	notify.Card.Display = &Card_Display{
+		UsrActionTxt: action,
+		AddOnCardInfo: []*Card_Display_AddOnCardInfo{
+			{AddOnCardShowType: AddOnCardShowType_match},
+		},
+	}
+
+	baseConfig := new(concern.GroupConcernConfig)
+	baseConfig.GetGroupConcernFilter().SetRule(
+		concern.FilterTypeNotText,
+		(&concern.GroupConcernFilterConfigByText{Text: []string{"never-match"}}).ToString(),
+	)
+	return notify, NewGroupConcernConfig(baseConfig, c)
+}
+
+func TestGroupConcernConfig_CompactHitAfterFilterCache(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+	template.InitTemplateLoader()
+
+	c := initConcern(t)
+	notify, g := newFilteredCompactVideo(c, test.G1, test.BVID1, "联合投稿了视频")
+
+	assert.Nil(t, c.SetGroupCompactMarkIfNotExist(test.G1, test.BVID1))
+	assert.NoError(t, c.SetNotifyMsg(test.BVID1, &adapter.GroupMessage{
+		ID:        1,
+		GroupCode: test.G1,
+		Elements: []adapter.IMessageElement{
+			&adapter.TextSegment{Content: "原消息"},
+		},
+	}))
+	assert.True(t, g.FilterHook(notify).Pass)
+	fullMessage := notify.Card.msgCache
+	assert.NotNil(t, fullMessage)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	g.NotifyBeforeCallback(notify)
+	assert.True(t, notify.shouldCompact)
+	compactMessage := notify.ToMessage()
+	assert.False(t, notify.Card.compactMiss)
+	assert.NotSame(t, fullMessage, notify.Card.msgCache)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	content := msgstringer.AdapterMsgToString(compactMessage.Elements())
+	assert.Contains(t, content, "投稿用户联合投稿了视频：")
+	assert.NotContains(t, content, "投稿用户转发了的视频：")
+}
+
+func TestGroupConcernConfig_CompactMissAfterFilterCache(t *testing.T) {
+	test.InitBuntdb(t)
+	defer test.CloseBuntdb(t)
+	template.InitTemplateLoader()
+
+	c := initConcern(t)
+	notify, g := newFilteredCompactVideo(c, test.G1, test.BVID1, "发布了动态")
+
+	assert.Nil(t, c.SetGroupCompactMarkIfNotExist(test.G1, test.BVID1))
+	assert.True(t, g.FilterHook(notify).Pass)
+	fullMessage := notify.Card.msgCache
+	assert.NotNil(t, fullMessage)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	g.NotifyBeforeCallback(notify)
+	assert.True(t, notify.shouldCompact)
+	compactMessage := notify.ToMessage()
+	assert.True(t, notify.Card.compactMiss)
+	assert.NotSame(t, fullMessage, notify.Card.msgCache)
+	assert.Len(t, notify.Card.dynamic.Addons, 1)
+
+	content := msgstringer.AdapterMsgToString(compactMessage.Elements())
+	assert.Contains(t, content, "投稿用户发布了动态视频：")
+	assert.NotContains(t, content, "转发了的动态")
+}
+
+func TestCompactMissTemplateSuppressesCommonFooter(t *testing.T) {
+	template.InitTemplateLoader()
+
+	var dynamic DynamicInfo
+	dynamic.Type = DynamicDescType_WithVideo
+	dynamic.User.Name = "联合投稿用户"
+	dynamic.Video.Action = "联合投稿了视频"
+	dynamic.DynamicUrl = "https://t.bilibili.com/test"
+
+	addon := Addon{Type: AddOnCardShowType(1)}
+	addon.Goods.Name = "不应出现的附加卡片"
+	dynamic.Addons = []Addon{addon}
+	dynamic.Detail.Reserve.Title = "不应出现的预约"
+	dynamic.Detail.Vote = &VoteInfo{Title: "不应出现的投票"}
+
+	msg, err := template.LoadAndExec("notify.group.bilibili.news.tmpl", map[string]interface{}{
+		"dynamic":      dynamic,
+		"msg":          nil,
+		"compact_miss": true,
+		"group_code":   test.G1,
+		"parse_post":   false,
+		"dynamic_raw":  nil,
+	})
+	assert.NoError(t, err)
+	content := msgstringer.AdapterMsgToString(msg.Elements())
+	assert.Contains(t, content, "联合投稿用户联合投稿了视频")
+	assert.Contains(t, content, dynamic.DynamicUrl)
+	assert.NotContains(t, content, "转发了的动态")
+	assert.NotContains(t, content, addon.Goods.Name)
+	assert.NotContains(t, content, dynamic.Detail.Reserve.Title)
+	assert.NotContains(t, content, dynamic.Detail.Vote.Title)
+}
+
 func TestGroupConcernConfig_NotifyAfterCallback(t *testing.T) {
 	test.InitBuntdb(t)
 	defer test.CloseBuntdb(t)
@@ -356,11 +474,11 @@ func TestGroupConcernConfig_NotifyAfterCallback(t *testing.T) {
 
 	var notify = newNewsInfo(test.UID1, DynamicDescType_WithOrigin)[0]
 	notify.compactKey = test.BVID1
-	var msg = &message.GroupMessage{
-		Id:        1,
+	var msg = &adapter.GroupMessage{
+		ID:        1,
 		GroupCode: test.G1,
-		Elements: []message.IMessageElement{
-			message.NewText("asd"),
+		Elements: []adapter.IMessageElement{
+			&adapter.TextSegment{Content: "asd"},
 		},
 	}
 	var g = new(GroupConcernConfig)

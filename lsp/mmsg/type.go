@@ -1,11 +1,9 @@
 package mmsg
 
-import (
-	"github.com/Mrs4s/MiraiGo/message"
-)
+import "github.com/cnxysoft/DDBOT-WSa/adapter"
 
 const (
-	ImageBytes message.ElementType = 10000 + iota
+	ImageBytes adapter.ElementType = 10000 + iota
 	Typed
 	Cut
 	At
@@ -16,5 +14,5 @@ const (
 )
 
 type CustomElement interface {
-	PackToElement(target Target) message.IMessageElement
+	PackToElement(target Target) adapter.IMessageElement
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/Sora233/MiraiGo-Template/config"
 	"github.com/Sora233/MiraiGo-Template/utils"
+	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/mattn/go-colorable"
 )
 
@@ -55,7 +56,7 @@ var (
 )
 
 // RunQRLogin downloads a QR code, waits for scan, exchanges ALT for cookies, and returns SUB.
-// It also saves the QR image to outputDir/weibo_debug.png and SUB to outputDir/weibo_sub.txt.
+// It also saves the QR image to outputDir/weibo_debug.png.
 func RunQRLogin(opt QRLoginOption) (string, error) {
 	if opt.OutputDir == "" {
 		opt.OutputDir = "."
@@ -150,6 +151,201 @@ func fetchQRCode(client *http.Client, opt QRLoginOption) (string, error) {
 	return qrResp.Data.Qrid, nil
 }
 
+// QRLoginResult 扫码登录结果
+type QRLoginResult struct {
+	QRCodeImage    []byte // 二维码图片数据
+	Scanned        bool   // 已扫码，正在完成登录（中间态；此条 Sub 为空）
+	Sub            string // 登录成功后的 SUB
+	Error          error  // 错误信息
+	RuntimeLoaded  bool   // 运行时 Cookie 是否已加载到内存
+	PersistSuccess bool   // 配置文件是否持久化成功
+	PersistError   error  // 持久化错误信息（若 PersistSuccess 为 false）
+}
+
+// RunQRLoginForQQ 为 QQ 扫码登录优化的版本
+// 返回一个 channel，用户可以通过它获取二维码图片和登录结果
+// timeout 为扫码超时时间，默认 5 分钟
+func RunQRLoginForQQ(timeout time.Duration) (<-chan QRLoginResult, error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: 15 * time.Second,
+	}
+
+	// 获取二维码
+	qrid, qrImage, err := fetchQRCodeWithImage(client)
+	if err != nil {
+		return nil, fmt.Errorf("获取二维码失败: %v", err)
+	}
+
+	resultChan := make(chan QRLoginResult, 1)
+
+	// 先发送二维码图片
+	resultChan <- QRLoginResult{QRCodeImage: qrImage}
+
+	// 启动异步扫码等待
+	go func() {
+		defer close(resultChan)
+
+		// 等待扫码
+		rawCheck, err := pollQRCodeWithTimeout(client, qrid, timeout)
+		if err != nil {
+			resultChan <- QRLoginResult{Error: err}
+			return
+		}
+
+		// 先回一条中间态：扫码成功之后的「完成登录」要打外部接口换 Cookie，
+		// 网络不好时会卡几十秒，中间态能让调用方（Web 面板 / 私聊命令）知道进度，
+		// 而不是一直停在「请扫码」上。
+		resultChan <- QRLoginResult{Scanned: true}
+
+		// 完成登录
+		sub, err := finalizeLogin(client, rawCheck, ".")
+		if err != nil {
+			resultChan <- QRLoginResult{Error: err}
+			return
+		}
+
+		// 分别处理运行时加载和配置持久化
+		result := QRLoginResult{Sub: sub}
+
+		// 先更新运行时 SUB：后面刷新 Cookie 时模式判断要用到它
+		setRuntimeSUB(sub)
+
+		// 1. 配置持久化：写回 application.yaml。
+		//    放在加载 Cookie 之前——SUB 先落盘，后面无论成败，下次启动/刷新都能
+		//    按 login 模式走，不会退化成访客流程。
+		if err := WriteBackConfig(sub); err != nil {
+			qrLogger.Warnf("SUB 已获取，但写入配置失败: %v", err)
+			result.PersistError = err
+			result.PersistSuccess = false
+		} else {
+			qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
+			result.PersistSuccess = true
+		}
+
+		// 2. 运行时加载：加载 Cookie 到内存
+		if err := freshCookieOpt(sub); err != nil {
+			qrLogger.Warnf("SUB 已获取，但加载 Cookie 到内存失败: %v", err)
+			result.RuntimeLoaded = false
+		} else {
+			result.RuntimeLoaded = true
+		}
+
+		resultChan <- result
+	}()
+
+	return resultChan, nil
+}
+
+// fetchQRCodeWithImage 获取二维码图片并返回图片数据
+func fetchQRCodeWithImage(client *http.Client) (string, []byte, error) {
+	cb := fmt.Sprintf("STK_%d", time.Now().UnixMilli())
+	params := url.Values{}
+	params.Set("entry", "miniblog")
+	params.Set("size", "180")
+	params.Set("callback", cb)
+
+	reqURL := qrImageURL + "?" + params.Encode()
+	req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
+	req.Header.Set("User-Agent", defaultUA)
+	req.Header.Set("Referer", defaultRefer)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	m := jsonpRegex.FindStringSubmatch(string(body))
+	if len(m) < 2 {
+		return "", nil, fmt.Errorf("unexpected response: %s", string(body))
+	}
+	var qrResp qrImageResp
+	if err := json.Unmarshal([]byte(m[1]), &qrResp); err != nil {
+		return "", nil, err
+	}
+	if qrResp.Retcode != 20000000 {
+		return "", nil, fmt.Errorf("qr image retcode=%d msg=%s", qrResp.Retcode, qrResp.Msg)
+	}
+	imageURL := qrResp.Data.Image
+	if !strings.HasPrefix(imageURL, "http") {
+		imageURL = "https:" + imageURL
+	}
+
+	// 下载图片
+	imgReq, _ := http.NewRequest(http.MethodGet, imageURL, nil)
+	imgReq.Header.Set("User-Agent", defaultUA)
+	imgReq.Header.Set("Referer", defaultRefer)
+	imgResp, err := client.Do(imgReq)
+	if err != nil {
+		return "", nil, err
+	}
+	defer imgResp.Body.Close()
+	imgData, _ := io.ReadAll(imgResp.Body)
+
+	return qrResp.Data.Qrid, imgData, nil
+}
+
+// pollQRCodeWithTimeout 带超时的扫码轮询
+func pollQRCodeWithTimeout(client *http.Client, qrid string, timeout time.Duration) (*qrCheckResp, error) {
+	params := url.Values{}
+	params.Set("entry", "miniblog")
+	params.Set("source", "miniblog")
+	params.Set("url", qrLoginTarget)
+	params.Set("qrid", qrid)
+	params.Set("disp", "popup")
+	params.Set("rid", "")
+	params.Set("ver", "20250520")
+
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		reqURL := qrCheckURL + "?" + params.Encode()
+		req, _ := http.NewRequest(http.MethodGet, reqURL, nil)
+		req.Header.Set("User-Agent", defaultUA)
+		req.Header.Set("Referer", defaultRefer)
+		resp, err := client.Do(req)
+		if err != nil {
+			qrLogger.Debugf("轮询异常: %v", err)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		var c qrCheckResp
+		if err := json.Unmarshal(body, &c); err != nil {
+			qrLogger.Debugf("轮询解析失败: %v - %s", err, string(body))
+			continue
+		}
+
+		if rid, ok := c.Data["rid"].(string); ok && rid != "" {
+			params.Set("rid", rid)
+		}
+
+		switch c.Retcode {
+		case 20000000:
+			qrLogger.Info("扫码成功，等待登录完成")
+			return &c, nil
+		case 50114002:
+			// 静音轮询，避免刷屏
+		case 50114001:
+			// 静音轮询，避免刷屏
+		case 50114004:
+			return nil, fmt.Errorf("二维码已过期，请重试")
+		default:
+			qrLogger.Debugf("轮询状态: ret=%d msg=%s", c.Retcode, c.Msg)
+		}
+	}
+
+	return nil, fmt.Errorf("扫码超时（%v），请重试", timeout)
+}
+
 func pollQRCode(client *http.Client, qrid string) (*qrCheckResp, error) {
 	params := url.Values{}
 	params.Set("entry", "miniblog")
@@ -204,7 +400,8 @@ func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (str
 	if alt == "" {
 		return "", fmt.Errorf("未能从响应中提取ALT/ticket")
 	}
-	qrLogger.Infof("提取到票据 ALT: %s", alt)
+	// 脱敏记录，避免完整 ALT/ticket 泄露登录凭据
+	qrLogger.Infof("提取到票据 ALT: %s", maskSub(alt))
 
 	params := url.Values{}
 	params.Set("entry", "miniblog")
@@ -225,20 +422,14 @@ func finalizeLogin(client *http.Client, raw *qrCheckResp, outputDir string) (str
 		return "", err
 	}
 	resp.Body.Close()
-	qrLogger.Infof("登录完成，跳转: %s", resp.Request.URL.String())
+	// 跳转 URL 可能携带 alt/ticket 参数，脱敏后记录
+	qrLogger.Infof("登录完成，跳转: %s", sanitizeLoginURL(resp.Request.URL))
 
 	sub := pickSUB(client, resp.Request.URL)
 	if sub == "" {
 		return "", fmt.Errorf("未找到SUB cookie")
 	}
-	subPath := filepath.Join(outputDir, "weibo_sub.txt")
-	_ = os.WriteFile(subPath, []byte(sub), 0o644)
-	qrLogger.Infof("SUB 已保存到: %s", subPath)
-	if err := writeBackConfig(sub); err != nil {
-		qrLogger.Warnf("SUB 已获取，但写回配置失败: %v (请手动写入 application.yaml weibo.sub)", err)
-	} else {
-		qrLogger.Infof("已写入配置 weibo.sub 并保存到 application.yaml")
-	}
+	qrLogger.Infof("SUB 已获取")
 	return sub, nil
 }
 
@@ -257,6 +448,22 @@ func extractALT(raw *qrCheckResp) string {
 		return m[1]
 	}
 	return ""
+}
+
+// sanitizeLoginURL 脱敏登录跳转 URL，隐藏 alt/ticket 等敏感参数，避免日志泄露登录凭据
+func sanitizeLoginURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	clone := *u
+	q := clone.Query()
+	for _, key := range []string{"alt", "ticket"} {
+		if q.Get(key) != "" {
+			q.Set(key, "***")
+		}
+	}
+	clone.RawQuery = q.Encode()
+	return clone.String()
 }
 
 func pickSUB(client *http.Client, u *url.URL) string {
@@ -312,71 +519,37 @@ func printQRCode(imgData []byte) {
 	_, _ = colorable.NewColorableStdout().Write(buf)
 }
 
-// writeBackConfig writes SUB into application.yaml, touching only weibo.sub.
-func writeBackConfig(sub string) error {
-	cfgFile := config.GlobalConfig.ConfigFileUsed()
-	if cfgFile == "" {
-		cfgFile = "application.yaml"
-	}
-	data, err := os.ReadFile(cfgFile)
-	if err != nil {
+// WriteBackConfig writes SUB into application.yaml, touching only weibo.sub.
+// Uses global config write lock and atomic rename to prevent corruption.
+func WriteBackConfig(sub string) error {
+	cfgFile := cfg.ConfigFilePath()
+	// 使用全局配置写锁，防止与其他写操作并发
+	cfg.GetConfigWriteMutex().Lock()
+	defer cfg.GetConfigWriteMutex().Unlock()
+
+	// 标记正在写入，暂停热重载
+	cfg.MarkConfigWriteStart()
+	defer cfg.MarkConfigWriteEnd()
+
+	if err := writeBackConfigToPath(sub, cfgFile); err != nil {
 		return err
 	}
 
-	content := string(data)
-	lines := strings.Split(content, "\n")
+	// 同步到内存里的 viper。GetWeiboMode() 是看配置里有没有 weibo.sub 来判断
+	// guest/login 的，只写文件的话（热重载这会儿正被 MarkConfigWrite 挡着）
+	// 它会一直认为 SUB 是空的 —— 表现就是「扫码登录成功了，但还在跑访客 Cookie」。
+	config.GlobalConfig.Set("weibo.sub", sub)
+	return nil
+}
 
-	// Line-by-line rewrite to avoid touching其他块
-	var out []string
-	inWeibo := false
-	indentWeibo := ""
-	inserted := false
-
-	for i, line := range lines {
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "weibo:") && !inWeibo {
-			inWeibo = true
-			indentWeibo = line[:strings.Index(line, "weibo:")]
-			out = append(out, line)
-			continue
-		}
-
-		if inWeibo {
-			// 退出 weibo 块：遇到非缩进行或空缩进变化
-			if len(trim) > 0 && !strings.HasPrefix(line, indentWeibo+" ") {
-				// 退出前若未插入sub则补一行
-				if !inserted {
-					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-					inserted = true
-				}
-				inWeibo = false
-			} else {
-				// 在 weibo 块内
-				subLineRe := regexp.MustCompile(`^\s*sub:\s*`)
-				if subLineRe.MatchString(line) {
-					out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-					inserted = true
-					continue
-				}
-			}
-		}
-		out = append(out, line)
-
-		// 最后一行且在weibo块且未插入
-		if i == len(lines)-1 && inWeibo && !inserted {
-			out = append(out, fmt.Sprintf("%s  sub: \"%s\"", indentWeibo, sub))
-			inserted = true
-		}
-	}
-
-	if !inserted {
-		// 未找到 weibo 块，追加新块
-		if len(out) > 0 && out[len(out)-1] != "" {
-			out = append(out, "")
-		}
-		out = append(out, "weibo:")
-		out = append(out, fmt.Sprintf("  sub: \"%s\"", sub))
-	}
-
-	return os.WriteFile(cfgFile, []byte(strings.Join(out, "\n")), 0o644)
+// writeBackConfigToPath writes SUB into the config file at cfgPath using atomic rename.
+// It touches only the weibo.sub field and preserves all other content and file permissions.
+// writeBackConfigToPath 把 SUB 写进 weibo.sub。
+//
+// 直接复用 lsp/cfg 的实现。两份写回逻辑各写各的必然漂移：cfg 那份修了缩进、键名
+// 大小写、CRLF、引号键、行内注释，微博这份没跟上 —— 段头匹配还只看字符串前缀、
+// 不看缩进，于是面板保存后按字母序排出来的 platform.weibo 被当成段头，SUB 写进了
+// platform.weibo，顶层 weibo 段永远是空的（登录成功，重启后却仍跑访客模式）。
+func writeBackConfigToPath(sub string, cfgPath string) error {
+	return cfg.WriteConfigKeyValueToPath("weibo.sub", sub, cfgPath)
 }

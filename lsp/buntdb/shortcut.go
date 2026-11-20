@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// extDbSortedSetIndexPrefix sorted set 索引前缀
+// 每个 setName 独立索引，索引名为 ss:{setName}，key 模式为 ss:{setName}:*
+const extDbSortedSetIndexPrefix = "ss"
+
 // ShortCut 包含了许多数据库的读写helper，只需嵌入即可使用，如果不想嵌入，也可以通过包名调用
 // 支持绑定到特定的数据库实例，实现数据库解耦
 type ShortCut struct{
@@ -363,6 +367,20 @@ func (s *ShortCut) CreatePatternIndex(patternFunc KeyPatternFunc, suffix []inter
 	})
 }
 
+// CreateSortedSetIndex 创建指定 setName 的 sorted set 索引
+// 索引名为 ss:{setName}，使用 IndexFloat 支持数值范围查询
+// key 格式为 ss:{setName}:{member}，value 为 score 的字符串表示
+func (s *ShortCut) CreateSortedSetIndex(setName string) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	return s.RWCoverTx(func(tx *buntdb.Tx) error {
+		err := tx.CreateIndex(indexName, indexName+":*", buntdb.IndexFloat)
+		if err == buntdb.ErrIndexExists {
+			err = nil
+		}
+		return err
+	})
+}
+
 // RemoveByPrefixAndIndex 遍历每个index，如果一个key满足任意prefix，则删掉
 func (s *ShortCut) RemoveByPrefixAndIndex(prefixKey []string, indexKey []string) ([]string, error) {
 	var deletedKey []string
@@ -513,4 +531,130 @@ func RemoveByPrefixAndIndex(prefixKey []string, indexKey []string) ([]string, er
 
 func CreatePatternIndex(patternFunc KeyPatternFunc, suffix []interface{}, less ...func(a, b string) bool) error {
 	return shortCut.CreatePatternIndex(patternFunc, suffix, less...)
+}
+
+// ZAdd 添加成员到有序集合
+// 索引名为 ss:{setName}，key 格式为 ss:{setName}:{member}，value 为 score 的字符串表示
+// 索引会在写入时自动创建（惰性创建）
+func (s *ShortCut) ZAdd(setName string, member string, score float64) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	indexKey := indexName + ":" + member
+	// 惰性创建索引
+	s.CreateSortedSetIndex(setName)
+	return s.RWCoverTx(func(tx *buntdb.Tx) error {
+		_, _, err := tx.Set(indexKey, strconv.FormatFloat(score, 'f', 6, 64), nil)
+		return err
+	})
+}
+
+// ZRangeByScore 根据分数范围获取成员
+// 使用 IndexFloat 直接按 score 数值范围查询，无需在 Go 层过滤
+// 注意：buntdb 索引在某些情况下可能丢失，会自动重建
+func (s *ShortCut) ZRangeByScore(setName string, min, max float64, handler func(member string, score float64) bool) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	// 确保索引存在
+	s.ensureSortedSetIndex(setName)
+	return s.RCoverTx(func(tx *buntdb.Tx) error {
+		return tx.AscendRange(indexName,
+			strconv.FormatFloat(min, 'f', 6, 64),
+			strconv.FormatFloat(max, 'f', 6, 64),
+			func(key, value string) bool {
+				// key 格式: ss:{setName}:{member}
+				member := key[len(indexName)+1:]
+				score, _ := strconv.ParseFloat(value, 64)
+				return handler(member, score)
+			})
+	})
+}
+
+// ensureSortedSetIndex 确保索引存在，如果不存在则创建
+// 如果索引丢失会重建
+func (s *ShortCut) ensureSortedSetIndex(setName string) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	// 先尝试创建索引（如果已存在会忽略错误）
+	s.CreateSortedSetIndex(setName)
+	// 验证索引是否工作：如果没有数据就不需要验证
+	var hasData bool
+	s.RCoverTx(func(tx *buntdb.Tx) error {
+		tx.Ascend(indexName, func(key, value string) bool {
+			hasData = true
+			return false // 找到一个就够了，停止遍历
+		})
+		return nil
+	})
+	// 如果有数据但索引不工作，需要重建
+	if hasData {
+		// 检查索引是否能被 AscendRange 使用
+		var indexWorks bool
+		s.RCoverTx(func(tx *buntdb.Tx) error {
+			tx.AscendRange(indexName, "-inf", "+inf", func(key, value string) bool {
+				indexWorks = true
+				return false
+			})
+			return nil
+		})
+		if !indexWorks {
+			// 索引丢失，重新创建
+			s.rebuildSortedSetIndex(setName)
+		}
+	}
+	return nil
+}
+
+// rebuildSortedSetIndex 重建 sorted set 的索引
+// 通过遍历所有以 ss:{setName}: 开头的 key 来重建索引
+func (s *ShortCut) rebuildSortedSetIndex(setName string) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	// 收集所有需要重建的 key
+	var keys []string
+	s.RCoverTx(func(tx *buntdb.Tx) error {
+		tx.Ascend("", func(key, value string) bool {
+			if strings.HasPrefix(key, indexName+":") {
+				keys = append(keys, key)
+			}
+			return true
+		})
+		return nil
+	})
+	if len(keys) == 0 {
+		return nil
+	}
+	// 重建索引：通过重新 Set 这些 key
+	return s.RWCoverTx(func(tx *buntdb.Tx) error {
+		for _, key := range keys {
+			val, err := tx.Get(key)
+			if err != nil {
+				continue
+			}
+			tx.Set(key, val, nil)
+		}
+		return nil
+	})
+}
+
+// ZRem 从有序集合移除成员
+func (s *ShortCut) ZRem(setName string, members ...string) error {
+	indexName := extDbSortedSetIndexPrefix + ":" + setName
+	return s.RWCoverTx(func(tx *buntdb.Tx) error {
+		for _, member := range members {
+			indexKey := indexName + ":" + member
+			tx.Delete(indexKey)
+		}
+		return nil
+	})
+}
+
+// ZAdd 添加成员到有序集合（全局函数）
+func ZAdd(setName string, member string, score float64) error {
+	return shortCut.ZAdd(setName, member, score)
+}
+
+// ZRangeByScore 根据分数范围获取成员（全局函数）
+func ZRangeByScore(setName string, min, max float64, handler func(member string, score float64) bool) error {
+	return shortCut.ZRangeByScore(setName, min, max, handler)
+}
+
+// ZRem 从有序集合移除成员（全局函数）
+func ZRem(setName string, members ...string) error {
+	return shortCut.ZRem(setName, members...)
 }

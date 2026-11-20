@@ -2,7 +2,7 @@ package template
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/internal/test"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/utils/msgstringer"
@@ -36,7 +36,7 @@ func TestLoadTemplate(t *testing.T) {
 	var m = mmsg.NewMSG()
 	err := tmpl.Execute(m, nil)
 	assert.Nil(t, err)
-	assert.Contains(t, msgstringer.MsgToString(m.Elements()), "DDBOT")
+	assert.Contains(t, msgstringer.AdapterMsgToString(m.Elements()), "DDBOT")
 
 	data := map[string]interface{}{
 		"command": map[string]string{
@@ -48,19 +48,19 @@ func TestLoadTemplate(t *testing.T) {
 	m = mmsg.NewMSG()
 	m, err = LoadAndExec("command.private.help.tmpl", data)
 	assert.Nil(t, err)
-	assert.Contains(t, msgstringer.MsgToString(m.Elements()), "755612788")
+	assert.Contains(t, msgstringer.AdapterMsgToString(m.Elements()), "755612788")
 
 	m = mmsg.NewMSG()
 	tmpl = LoadTemplate("command.private.help.tmpl")
 	err = tmpl.ExecuteTemplate(m, "command.private.help.tmpl", data)
 	assert.Nil(t, err)
-	assert.Contains(t, msgstringer.MsgToString(m.Elements()), "755612788")
+	assert.Contains(t, msgstringer.AdapterMsgToString(m.Elements()), "755612788")
 
 	m = mmsg.NewMSG()
 	tmpl = LoadTemplate("trigger.group.member_in.tmpl")
 	err = tmpl.ExecuteTemplate(m, "trigger.group.member_in.tmpl", nil)
 	assert.Nil(t, err)
-	assert.Empty(t, msgstringer.MsgToString(m.Elements()))
+	assert.Empty(t, msgstringer.AdapterMsgToString(m.Elements()))
 	assert.Empty(t, m.ToMessage(mmsg.NewGroupTarget(test.G1)))
 }
 
@@ -97,7 +97,7 @@ func TestTemplate(t *testing.T) {
 		var m = mmsg.NewMSG()
 		var tmpl = Must(New(fmt.Sprintf("test-%v", idx)).Parse(templates[idx]))
 		assert.Nil(t, tmpl.Execute(m, data[idx]))
-		assert.EqualValues(t, expected[idx], msgstringer.MsgToString(m.Elements()), "%v mismatched", idx)
+		assert.EqualValues(t, expected[idx], msgstringer.AdapterMsgToString(m.Elements()), "%v mismatched", idx)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestInt64(t *testing.T) {
 	err := tmpl.Execute(m, map[string]interface{}{"target": target})
 	assert.Nil(t, err)
 	assert.Len(t, m.Elements(), 1)
-	assert.EqualValues(t, m.Elements()[0].(*message.TextElement).Content, "asd")
+	assert.EqualValues(t, m.Elements()[0].(*adapter.TextSegment).Content, "asd")
 }
 
 func TestCompareStringAndInt(t *testing.T) {
@@ -144,7 +144,7 @@ func TestCompareStringAndInt(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Len(t, m.Elements(), 1)
-	assert.EqualValues(t, "asdasd", m.Elements()[0].(*message.TextElement).Content)
+	assert.EqualValues(t, "asdasd", m.Elements()[0].(*adapter.TextSegment).Content)
 
 	m = mmsg.NewMSG()
 	template = `{{- if eq .target "123456" -}}asd{{- end -}}`
@@ -155,7 +155,7 @@ func TestCompareStringAndInt(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Len(t, m.Elements(), 1)
-	assert.EqualValues(t, "asdasd", m.Elements()[0].(*message.TextElement).Content)
+	assert.EqualValues(t, "asdasd", m.Elements()[0].(*adapter.TextSegment).Content)
 
 	m = mmsg.NewMSG()
 	template = `{{- if eq .target 123456 -}}asd{{- end -}}`
@@ -176,7 +176,7 @@ func TestCompareStringAndInt(t *testing.T) {
 	tmpl = Must(New("test-compare-string-and-int-1").Parse(template))
 	err = tmpl.Execute(m, map[string]interface{}{"target": "200"})
 	assert.Nil(t, err)
-	assert.EqualValues(t, "1234", m.Elements()[0].(*message.TextElement).Content)
+	assert.EqualValues(t, "1234", m.Elements()[0].(*adapter.TextSegment).Content)
 }
 
 func TestTemplateFuncs(t *testing.T) {
@@ -346,7 +346,7 @@ func TestAbort(t *testing.T) {
 
 	s, err = runTemplate(`{{- abort (pic "invalid") -}}`, nil)
 	assert.Nil(t, err)
-	assert.EqualValues(t, "[图片]", s)
+	assert.EqualValues(t, "", s)
 }
 
 func TestFin(t *testing.T) {
@@ -371,5 +371,5 @@ func runTemplate(template string, data map[string]interface{}) (string, error) {
 	var m = mmsg.NewMSG()
 	var tmpl = Must(New("").Parse(template))
 	var err = tmpl.Execute(m, data)
-	return msgstringer.MsgToString(m.Elements()), err
+	return msgstringer.AdapterMsgToString(m.Elements()), err
 }

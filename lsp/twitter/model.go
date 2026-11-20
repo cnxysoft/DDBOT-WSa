@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mrs4s/MiraiGo/message"
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/concern_type"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/mmsg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/template"
@@ -58,7 +58,7 @@ func (e *NewsInfo) GetMSG(n *ConcernNewsNotify) (m *mmsg.MSG) {
 		e.dynamic = n.buildTwitterDynamic()
 		return
 	})
-	var msg *message.GroupMessage
+	var msg *adapter.GroupMessage
 	if n.shouldCompact {
 		// 先推送了转发，才推送原文
 		// 这种直接放弃，避免二次推送

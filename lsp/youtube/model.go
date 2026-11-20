@@ -30,18 +30,21 @@ const (
 // VideoInfo may be a video or a live, depend on the VideoType
 type VideoInfo struct {
 	UserInfo
-	Cover          string      `json:"cover"`
-	VideoId        string      `json:"video_id"`
-	VideoTitle     string      `json:"video_title"`
-	VideoType      VideoType   `json:"video_type"`
-	VideoStatus    VideoStatus `json:"video_status"`
-	VideoTimestamp int64       `json:"video_timestamp"`
-	GroupCode      int64       `json:"group_code"`
+	Cover            string      `json:"cover"`
+	VideoId          string      `json:"video_id"`
+	VideoTitle       string      `json:"video_title"`
+	VideoType        VideoType   `json:"video_type"`
+	VideoStatus      VideoStatus `json:"video_status"`
+	VideoTimestamp   int64       `json:"video_timestamp"`
+	PublishTimestamp int64       `json:"publish_timestamp"`
+	DurationSeconds  int64       `json:"duration_seconds"`
+	GroupCode        int64       `json:"group_code"`
 
 	once              sync.Once
 	msgCache          *mmsg.MSG
 	liveStatusChanged bool
 	liveTitleChanged  bool
+	HeaderSummary     bool `json:"header_summary,omitempty"`
 }
 
 func (v *VideoInfo) TitleChanged() bool {
@@ -112,19 +115,43 @@ func (v *VideoInfo) IsVideo() bool {
 	return v.VideoType == VideoType_Video
 }
 
+func (v *VideoInfo) IsShorts() bool {
+	if v == nil {
+		return false
+	}
+	return v.VideoType == VideoType_Shorts
+}
+
+func (v *VideoInfo) EffectiveTimestamp() int64 {
+	if v == nil {
+		return 0
+	}
+	if v.IsVideo() && v.PublishTimestamp != 0 {
+		return v.PublishTimestamp
+	}
+	if v.VideoTimestamp != 0 {
+		return v.VideoTimestamp
+	}
+	return v.PublishTimestamp
+}
+
 func (v *VideoInfo) GetMSG() *mmsg.MSG {
 	v.once.Do(func() {
 		var tmplName string
 		var data = map[string]interface{}{
-			"uid":        v.ChannelId,
-			"name":       v.ChannelName,
-			"title":      v.VideoTitle,
-			"cover":      v.Cover,
-			"url":        VideoViewUrl(v.VideoId),
-			"timestamp":  v.VideoTimestamp,
-			"living":     v.IsLiving(),
-			"waiting":    v.IsWaiting(),
-			"group_code": v.GroupCode,
+			"uid":               v.ChannelId,
+			"name":              v.ChannelName,
+			"title":             v.VideoTitle,
+			"cover":             v.Cover,
+			"url":               VideoViewUrl(v.VideoId),
+			"timestamp":         v.EffectiveTimestamp(),
+			"video_timestamp":   v.VideoTimestamp,
+			"publish_timestamp": v.PublishTimestamp,
+			"duration_seconds":  v.DurationSeconds,
+			"living":            v.IsLiving(),
+			"waiting":           v.IsWaiting(),
+			"is_shorts":         v.IsShorts(),
+			"group_code":        v.GroupCode,
 		}
 		if v.IsLive() {
 			tmplName = "notify.group.youtube.live.tmpl"

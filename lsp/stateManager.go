@@ -2,13 +2,12 @@ package lsp
 
 import (
 	"fmt"
-	"github.com/Mrs4s/MiraiGo/client"
-	"github.com/Mrs4s/MiraiGo/message"
-	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
-	"github.com/cnxysoft/DDBOT-WSa/utils"
-	"github.com/tidwall/buntdb"
 	"strings"
 	"time"
+
+	"github.com/cnxysoft/DDBOT-WSa/adapter"
+	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
+	"github.com/tidwall/buntdb"
 )
 
 type KeySet struct{}
@@ -38,27 +37,28 @@ type StateManager struct {
 	KeySet
 }
 
-func (s *StateManager) SaveMessageImageUrl(groupCode int64, messageID int32, msgs []message.IMessageElement) error {
-	imgs := utils.MessageFilter(msgs, func(e message.IMessageElement) bool {
-		return e.Type() == message.Image
-	})
+func (s *StateManager) SaveMessageImageUrl(groupCode int64, messageID int32, msgs []adapter.IMessageElement) error {
 	var urls []string
-	for _, img := range imgs {
-		switch i := img.(type) {
-		case *message.GroupImageElement:
-			if i.Url != "" {
-				urls = append(urls, i.Url)
-			}
-		case *message.FriendImageElement:
-			if i.Url != "" {
-				urls = append(urls, i.Url)
-			}
+	for _, msg := range msgs {
+		url := messageImageURL(msg)
+		if url != "" {
+			urls = append(urls, url)
 		}
 	}
 	if len(urls) == 0 {
 		return nil
 	}
 	return s.Set(s.GroupMessageImageKey(groupCode, messageID), strings.Join(urls, " "), localdb.SetExpireOpt(time.Hour*8))
+}
+
+func messageImageURL(msg adapter.IMessageElement) string {
+	if e, ok := msg.(*adapter.ImageSegment); ok {
+		if e.Url != "" {
+			return e.Url
+		}
+		return e.File
+	}
+	return ""
 }
 
 func (s *StateManager) GetMessageImageUrl(groupCode int64, messageID int32) []string {
@@ -154,21 +154,21 @@ func (s *StateManager) GetCurrentMode() Mode {
 	return result
 }
 
-func (s *StateManager) SaveGroupInvitedRequest(request *client.GroupInvitedRequest) error {
+func (s *StateManager) SaveGroupInvitedRequest(request *adapter.GroupInvitedRequest) error {
 	return s.saveRequest(request.RequestId, request, s.GroupInvitedKey)
 }
 
-func (s *StateManager) SaveNewFriendRequest(request *client.NewFriendRequest) error {
+func (s *StateManager) SaveNewFriendRequest(request *adapter.NewFriendRequest) error {
 	return s.saveRequest(request.RequestId, request, s.NewFriendRequestKey)
 }
 
-func (s *StateManager) ListNewFriendRequest() (results []*client.NewFriendRequest, err error) {
+func (s *StateManager) ListNewFriendRequest() (results []*adapter.NewFriendRequest, err error) {
 	err = s.RCoverTx(func(tx *buntdb.Tx) error {
 		var (
 			iterErr, err error
 		)
 		err = tx.Ascend(s.NewFriendRequestKey(), func(key, value string) bool {
-			var item = new(client.NewFriendRequest)
+			var item = new(adapter.NewFriendRequest)
 			iterErr = s.GetJson(key, &item)
 			if iterErr == nil {
 				results = append(results, item)
@@ -187,13 +187,13 @@ func (s *StateManager) ListNewFriendRequest() (results []*client.NewFriendReques
 	return
 }
 
-func (s *StateManager) ListGroupInvitedRequest() (results []*client.GroupInvitedRequest, err error) {
+func (s *StateManager) ListGroupInvitedRequest() (results []*adapter.GroupInvitedRequest, err error) {
 	err = s.RCoverTx(func(tx *buntdb.Tx) error {
 		var (
 			iterErr, err error
 		)
 		err = tx.Ascend(s.GroupInvitedKey(), func(key, value string) bool {
-			var item = new(client.GroupInvitedRequest)
+			var item = new(adapter.GroupInvitedRequest)
 			iterErr = s.GetJson(key, &item)
 			if iterErr == nil {
 				results = append(results, item)
@@ -222,12 +222,12 @@ func (s *StateManager) DeleteGroupInvitedRequest(requestId int64) (err error) {
 	return
 }
 
-func (s *StateManager) GetNewFriendRequest(requestId int64) (result *client.NewFriendRequest, err error) {
+func (s *StateManager) GetNewFriendRequest(requestId int64) (result *adapter.NewFriendRequest, err error) {
 	err = s.getRequest(requestId, &result, s.NewFriendRequestKey)
 	return
 }
 
-func (s *StateManager) GetGroupInvitedRequest(requestId int64) (result *client.GroupInvitedRequest, err error) {
+func (s *StateManager) GetGroupInvitedRequest(requestId int64) (result *adapter.GroupInvitedRequest, err error) {
 	err = s.getRequest(requestId, &result, s.GroupInvitedKey)
 	return
 }

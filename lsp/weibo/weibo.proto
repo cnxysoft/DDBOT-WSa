@@ -141,3 +141,223 @@ message Card {
   PageInfo page_info = 15;
   MixMediaInfo mix_media_info = 16;
 }
+
+// WeiboMobileProfileResponse 用于解析移动端 /api/Weibo/GetMobileProfile 返回的用户资料
+message WeiboMobileProfileResponse {
+  int32 ok = 1;
+  message Data {
+    int32 isStarStyle = 1;
+    WeiboMobileUserInfo userInfo = 2;
+    string fans_scheme = 3;
+    string follow_scheme = 4;
+    TabsInfo tabsInfo = 5;
+    string avatar_scheme = 6;
+    string profile_ext = 7;
+    string scheme = 8;
+    int32 showAppTips = 9;
+  }
+  Data data = 2;
+}
+
+// WeiboMobileUserInfo 移动端用户资料完整字段
+message WeiboMobileUserInfo {
+  int64 id = 1;
+  string screen_name = 2;
+  string profile_image_url = 3;
+  string profile_url = 4;
+  bool close_blue_v = 5;
+  string description = 6;
+  bool follow_me = 7;
+  bool following = 8;
+  int32 follow_count = 9;
+  string followers_count = 10;         // 字符串类型，如 "56"
+  string cover_image_phone = 11;
+  string avatar_hd = 12;
+  Badge badge = 13;
+  int32 statuses_count = 14;
+  bool verified = 15;
+  int32 verified_type = 16;
+  string gender = 17;                   // "m" 或 "f"
+  int32 mbtype = 18;
+  int32 svip = 19;
+  int32 urank = 20;
+  int32 mbrank = 21;
+  string followers_count_str = 22;
+  string verified_reason = 23;
+  bool like = 24;
+  bool like_me = 25;
+  bool special_follow = 26;
+  string user_token = 27;
+}
+
+// Badge 用户徽章信息
+message Badge {
+  int32 unread_pool = 1;
+  int32 unread_pool_ext = 2;
+  int32 user_name_certificate = 3;
+  int32 pc_new = 4;
+  int32 gaokao_2024 = 5;
+  int32 gaokao_2025 = 6;
+  int32 hpg_2025 = 7;
+  int32 lzly_2026 = 8;
+}
+
+// TabsInfo 标签页配置
+message TabsInfo {
+  int32 selectedTab = 1;
+  repeated Tab tabs = 2;
+}
+
+// Tab 单个标签页
+message Tab {
+  int32 id = 1;
+  string tabKey = 2;
+  int32 must_show = 3;
+  int32 hidden = 4;
+  string title = 5;
+  string tab_type = 6;
+  string containerid = 7;
+  // 以下为可选字段，仅部分 tab 包含
+  string apipath = 8;
+  string headSubTitleText = 9;
+  int32 new_select_menu = 10;
+  string gender = 11;
+  TabParams params = 12;
+  string url = 13;
+  repeated FilterGroup filter_group = 14;
+  FilterGroupInfo filter_group_info = 15;
+}
+
+// TabParams tab 参数
+message TabParams {
+  int32 new_select_menu = 1;
+  string gender = 2;
+}
+
+// FilterGroup 过滤器组
+message FilterGroup {
+  string name = 1;
+  string containerid = 2;
+  string title = 3;
+  string scheme = 4;
+}
+
+// FilterGroupInfo 过滤器组信息
+message FilterGroupInfo {
+  string title = 1;
+  string icon = 2;
+  string icon_name = 3;
+  string icon_scheme = 4;
+}
+
+// WeiboMobileCardsResponse 用于解析移动端 /api/Weibo/GetMobileCards 返回的微博列表
+message WeiboMobileCardsResponse {
+  int32 ok = 1;
+  message Data {
+    CardlistInfo cardlistInfo = 1;
+    repeated MobileCard cards = 2;
+  }
+  Data data = 2;
+}
+
+// CardlistInfo 卡片列表元信息
+message CardlistInfo {
+  string containerid = 1;
+  int32 v_p = 2;
+  int32 show_style = 3;
+  int32 total = 4;
+  int32 autoLoadMoreIndex = 5;
+  int64 since_id = 6;
+}
+
+// MobileCard 移动端卡片结构（支持 card_type=9 嵌 mblog）
+message MobileCard {
+  int32 card_type = 1;
+  int32 show_type = 2;
+  // 以下为可选字段，部分卡片类型使用
+  int32 card_style = 3;
+  int32 display_arrow = 4;
+  bool skip_group_title = 5;
+  repeated MobileCard card_group = 6;
+  // card_type=9 时使用
+  MobileMblog mblog = 7;
+  string profile_type_id = 8;
+  string itemid = 9;
+  string scheme = 10;
+}
+
+// MobileMblog 移动端微博完整结构
+message MobileMblog {
+  Card.Visible visible = 1;
+  string created_at = 2;
+  string id = 3;              // 字符串类型
+  string mid = 4;
+  bool can_edit = 5;
+  string text = 6;
+  int32 textLength = 7;
+  string source = 8;
+  bool favorited = 9;
+  repeated string pic_ids = 10;
+  string thumbnail_pic = 11;
+  string bmiddle_pic = 12;
+  string original_pic = 13;
+  bool is_paid = 14;
+  int32 mblog_vip_type = 15;
+  WeiboMobileUserInfo user = 16;
+  MobileMblog retweeted_status = 17;
+  int32 reposts_count = 18;
+  int32 comments_count = 19;
+  int32 reprint_cmt_count = 20;
+  int32 attitudes_count = 21;
+  int32 mixed_count = 22;
+  int32 pending_approval_count = 23;
+  bool isLongText = 24;
+  bool liked = 25;
+  int32 like_attitude_type = 26;
+  int32 show_mlevel = 27;
+  google.protobuf.Value darwin_tags = 28;
+  bool ad_marked = 29;
+  int32 mblogtype = 30;
+  string item_category = 31;
+  string rid = 32;
+  string cardid = 33;
+  string raw_text = 34;
+  string bid = 35;
+  // 动态扩展字段，使用 Struct 接收未知字段
+  int32 readable_title = 36;
+  int32 extern_safe = 37;
+  string analysis_extra = 38;
+  int32 mblog_menu_new_style = 39;
+  int32 detail_bottom_bar = 40;
+  int32 content_auth = 41;
+  int64 safe_tags = 42;
+  bool is_show_mixed = 43;
+  int32 repost_type = 44;
+  int32 pic_num = 45;
+  int32 mlevel = 46;
+  string region_name = 47;
+  int32 region_opt = 48;
+  int64 reads_count = 49;
+  // page_info 扩展
+  google.protobuf.Value page_info = 50;
+  // number_display_strategy 扩展
+  google.protobuf.Value number_display_strategy = 51;
+  // comment_manage_info 扩展
+  google.protobuf.Value comment_manage_info = 52;
+  // edit_config 扩展
+  google.protobuf.Value edit_config = 53;
+  // pics 扩展（移动端多图结构不同）
+  google.protobuf.Value pics = 54;
+  // topic_id
+  string topic_id = 55;
+  bool sync_mblog = 56;
+  bool is_imported_topic = 57;
+  string comment_guide_ext = 58;
+  // actionlog 扩展
+  google.protobuf.Value actionlog = 59;
+  // pic 使用 Struct 处理移动端多图
+  map<string, Card.PicInfo> pic_infos = 60;
+  string mblogid = 61;
+  string short_text = 62;
+  int32 text_template = 63;
+}
