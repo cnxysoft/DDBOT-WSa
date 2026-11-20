@@ -2699,6 +2699,13 @@ document.addEventListener('DOMContentLoaded', () => {
   checkSetupThenStart();
 });
 
+// 登录页提示随初始化状态切换：已初始化看默认文案，未初始化且当前来源不能初始化时
+// 明确告诉用户去哪里完成，别让它对着登录框猜一个不存在的密码。
+function setLoginHint(text) {
+  const el = document.getElementById('login-hint');
+  if (el) el.textContent = text;
+}
+
 async function checkSetupThenStart() {
   if (adminNavigation) return;
   const session = authSession();
@@ -2713,6 +2720,9 @@ async function checkSetupThenStart() {
       setupQQ.appId = st.qqAppId || '';
       showSetup();
       return;
+    }
+    if (st && st.initialized === false) {
+      setLoginHint('还没有设置 admin.token：请在运行 bot 的机器上打开 http://127.0.0.1:15631 完成初始化');
     }
   } catch { /* 探测失败按常规流程走 */ }
   if (adminNavigation) return;

@@ -39,6 +39,7 @@ const (
 // 这里**不返回 AppSecret**，只返回「是否已配置」的布尔值。
 type SetupStatus struct {
 	Needed      bool   `json:"needed"`                // true = admin.token 未设置，需要初始化
+	Initialized bool   `json:"initialized"`           // true = admin.token 已设置；非回环来源据此提示去本机初始化
 	AdapterMode string `json:"adapterMode,omitempty"` // 当前 adapter.mode；空 = 未配置（按 onebot-v11）
 	QQAppID     string `json:"qqAppId,omitempty"`     // 已绑定的 QQ 官方机器人 AppID（非密钥）
 	QQSecretSet bool   `json:"qqSecretSet,omitempty"` // QQ AppSecret 是否已配置
@@ -159,7 +160,13 @@ func firstNonEmpty(values ...string) string {
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// 使用与 guardSetup 相同的来源限制，避免向远端响应机器人信息。
-	status := SetupStatus{Needed: s.getToken() == "" && isLoopbackAddr(r.RemoteAddr) && isLoopbackHost(r.Host) && sameOriginRequest(r)}
+	// Initialized 只报告「有没有设置管理密码」这一位，不含任何凭据；
+	// 非回环来源据此提示去本机完成初始化，而不是对着登录框猜密码。
+	token := s.getToken()
+	status := SetupStatus{
+		Needed:      token == "" && isLoopbackAddr(r.RemoteAddr) && isLoopbackHost(r.Host) && sameOriginRequest(r),
+		Initialized: token != "",
+	}
 	// 额外的接入方式 / AppID 只回给本机：面板暴露在局域网时，匿名请求
 	// 仍然只需要知道「要不要初始化」，不该顺带读到机器人的 AppID。
 	if status.Needed {
