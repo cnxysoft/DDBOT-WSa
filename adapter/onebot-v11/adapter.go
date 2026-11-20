@@ -151,7 +151,7 @@ func (a *OneBotAdapter) Start() error {
 		return fmt.Errorf("failed to start ws client: %v", err)
 	}
 
-	logger.Infof("OneBot v11 adapter started in %s mode", wsMode)
+	logger.Infof("OneBot v11 适配器已启动（%s 模式）", wsMode)
 	return nil
 }
 

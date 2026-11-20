@@ -270,12 +270,12 @@ func init() {
 func Init() {
 	adapterType := adapter.GetAdapterType()
 
-	logger.Infof("Initializing bot with adapter: %s", adapterType)
+	logger.Infof("正在初始化 bot，适配器：%s", adapterType)
 
 	build := adapterBuilder(config.GlobalConfig.Snapshot())
 	initial, err := build()
 	if err != nil || initial == nil {
-		logger.Fatalf("Failed to create adapter: %s", adapterType)
+		logger.Fatalf("创建适配器失败：%s", adapterType)
 	}
 	adapterInstance := adapter.NewReloadableAdapter(initial, build)
 
@@ -325,7 +325,7 @@ func Init() {
 		if adapterType == adapter.AdapterTypeQQOfficial {
 			logger.Error("QQ 官方连接未就绪；WebUI 仍可用于绑定或修复同一机器人的凭据")
 		} else {
-			logger.Fatalf("Failed to start %s adapter: %v", adapterType, err)
+			logger.Fatalf("启动适配器 %s 失败：%v", adapterType, err)
 		}
 	}
 
@@ -365,7 +365,7 @@ func Init() {
 			case <-ticker.C:
 				nowOnline := messenger.IsConnected()
 				if nowOnline && !wasOnline {
-					logger.Info("Bot reconnected, publishing bot_online event")
+					logger.Info("bot 已重连，发布 bot_online 事件")
 					eventbus.BusObj.Publish("bot_online", true)
 				}
 				wasOnline = nowOnline
@@ -373,11 +373,11 @@ func Init() {
 		}
 	}()
 
-	logger.Infof("%s adapter initialized", adapterType)
+	logger.Infof("适配器 %s 已初始化", adapterType)
 }
 
 func botOnline() {
-	logger.Infof("Bot online: %d", Instance.Uin.Load())
+	logger.Infof("bot 已上线：%d", Instance.Uin.Load())
 	Instance.Online.Store(true)
 	// 发布 bot_online 事件，通知所有订阅模块（weibo/bilibili/acfun 等）
 	eventbus.BusObj.Publish("bot_online", true)
@@ -386,21 +386,21 @@ func botOnline() {
 func refreshList() {
 	err := Instance.ReloadFriendList()
 	if err != nil {
-		logger.WithError(err).Error("unable to load friends list")
+		logger.WithError(err).Error("无法加载好友列表")
 	}
-	logger.Infof("load %d friends", len(Instance.GetFriendList()))
+	logger.Infof("已加载 %d 个好友", len(Instance.GetFriendList()))
 
 	err = Instance.ReloadGroupList()
 	if err != nil {
-		logger.WithError(err).Error("unable to load groups list")
+		logger.WithError(err).Error("无法加载群列表")
 	}
 	groupSnapshot := Instance.GetGroupList()
-	logger.Infof("load %d groups", len(groupSnapshot))
+	logger.Infof("已加载 %d 个群", len(groupSnapshot))
 
 	for _, group := range groupSnapshot {
 		members, err := Instance.GetGroupMembersByID(group.Code)
 		if err != nil {
-			logger.WithError(err).Errorf("unable to load group members for %d", group.Code)
+			logger.WithError(err).Errorf("无法加载群 %d 的成员", group.Code)
 			continue
 		}
 		logger.Debugf("群[%d]加载成员[%d]个", group.Code, len(members))
@@ -413,39 +413,39 @@ func RefreshList() {
 }
 
 func StartService() {
-	logger.Infof("StartService called, Instance=%p", Instance)
+	logger.Infof("调用 StartService，Instance=%p", Instance)
 	if Instance.start.Load() {
 		return
 	}
 
 	Instance.start.Store(true)
 
-	logger.Infof("initializing modules ...")
+	logger.Infof("正在初始化模块 ...")
 	for _, mi := range modules {
 		mi.Instance.Init()
 	}
 	for _, mi := range modules {
 		mi.Instance.PostInit()
 	}
-	logger.Info("all modules initialized")
+	logger.Info("所有模块初始化完成")
 
-	logger.Info("registering modules serve functions ...")
-	logger.Infof("Modules registered: %v", getModuleNames())
+	logger.Info("正在注册模块服务函数 ...")
+	logger.Infof("已注册模块：%v", getModuleNames())
 	for _, mi := range modules {
-		logger.Infof("Calling Serve for module: %s, bot=%p", mi.ID, Instance)
+		logger.Infof("调用模块 Serve：%s, bot=%p", mi.ID, Instance)
 		mi.Instance.Serve(Instance)
 	}
-	logger.Info("all modules serve functions registered")
+	logger.Info("所有模块服务函数注册完成")
 
-	logger.Info("starting modules tasks ...")
+	logger.Info("正在启动模块任务 ...")
 	for _, mi := range modules {
 		go mi.Instance.Start(Instance)
 	}
-	logger.Info("tasks running")
+	logger.Info("模块任务运行中")
 }
 
 func Stop() {
-	logger.Warn("stopping ...")
+	logger.Warn("正在停止 ...")
 	if reconnectStop != nil {
 		close(reconnectStop)
 	}
@@ -468,7 +468,7 @@ func Stop() {
 	modulesMu.Lock()
 	modules = make(map[string]ModuleInfo)
 	modulesMu.Unlock()
-	logger.Info("stopped")
+	logger.Info("已停止")
 
 	if Instance.Messenger != nil {
 		Instance.Messenger.Stop()
@@ -484,12 +484,12 @@ func getModuleNames() []string {
 }
 
 func (bot *Bot) DispatchGroupMessage(msg *adapter.GroupMessage) {
-	logger.Debugf("DispatchGroupMessage called: group=%d, user=%d, bot=%p, GroupMessageEvent=%p", msg.GroupCode, msg.Sender.UserID, bot, bot.GroupMessageEvent)
+	logger.Debugf("调用 DispatchGroupMessage：group=%d, user=%d, bot=%p, GroupMessageEvent=%p", msg.GroupCode, msg.Sender.UserID, bot, bot.GroupMessageEvent)
 	if bot.GroupMessageEvent != nil {
-		logger.Debugf("Dispatching to GroupMessageEvent")
+		logger.Debugf("分发到 GroupMessageEvent")
 		bot.GroupMessageEvent.Dispatch(msg)
 	} else {
-		logger.Warn("GroupMessageEvent is nil!")
+		logger.Warn("GroupMessageEvent 为 nil！")
 	}
 	if bot.SelfGroupMessageEvent != nil && msg.Sender.UserID == bot.GetSelfID() {
 		bot.SelfGroupMessageEvent.Dispatch(msg)

@@ -80,29 +80,6 @@ func TestAdminLogHook_Fire(t *testing.T) {
 	assert.Contains(t, snap[0].Time, "2026-09-24")
 }
 
-// TestParseLogrusLine 验证 key=value 日志行解析（含转义消息与非日志行）。
-func TestParseLogrusLine(t *testing.T) {
-	e, ok := parseLogrusLine(`time="2026-09-24T12:00:00+08:00" level="info" msg="订阅添加成功"`)
-	assert.True(t, ok)
-	assert.Equal(t, "2026-09-24T12:00:00+08:00", e.Time)
-	assert.Equal(t, "info", e.Level)
-	assert.Equal(t, "订阅添加成功", e.Message)
-
-	// msg 含转义引号（用变量拼接构造，避免源码中出现转义序列歧义）
-	bs := string(rune(92))
-	line := `time="t1" level="error" msg="failed: ` + bs + `"timeout` + bs + `" after 3s"`
-	e, ok = parseLogrusLine(line)
-	assert.True(t, ok)
-	// Unquote 后转义引号还原为普通引号
-	q := string(rune(34))
-	expected := "failed: " + q + "timeout" + q + " after 3s"
-	assert.Equal(t, expected, e.Message)
-
-	// 非日志行
-	_, ok = parseLogrusLine("some random line")
-	assert.False(t, ok)
-}
-
 // TestHandleLogsStream 验证 SSE 流：先回放存量，再推送增量，客户端断开后返回。
 func TestHandleLogsStream(t *testing.T) {
 	resetGlobalLogRing()

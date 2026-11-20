@@ -3,8 +3,6 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
-	"regexp"
-	"strconv"
 	"sync"
 	"time"
 
@@ -154,24 +152,6 @@ func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// logrusLineRe 匹配本项目日志格式（TextFormatter + ForceQuote）：
-// time="..." level="..." msg="..."。msg 为行尾字段，贪婪匹配后经 Unquote 还原转义。
-var logrusLineRe = regexp.MustCompile(`^time="(.*)" level="(.*)" msg="(.*)"$`)
-
-// parseLogrusLine 解析一行日志文件内容；解析失败返回 false（调用方按原样处理）。
-func parseLogrusLine(line string) (LogInfo, bool) {
-	m := logrusLineRe.FindStringSubmatch(line)
-	if m == nil {
-		return LogInfo{}, false
-	}
-	msg, err := unquoteLogValue(m[3])
-	if err != nil {
-		return LogInfo{}, false
-	}
-	return LogInfo{Time: m[1], Level: m[2], Message: msg}, true
-}
-
-// unquoteLogValue 还原 logrus %q 转义的字段值（处理 \" 等转义）。
-func unquoteLogValue(s string) (string, error) {
-	return strconv.Unquote("\"" + s + "\"")
-}
+// 注：这里原先有一组 parseLogrusLine / logrusLineRe，用来解析日志文件的 logfmt 文本行。
+// 实时日志走的是 adminLogHook 直接读 logrus.Entry 字段，从不解析文本，这组函数实际无人调用；
+// 而它注释里写死的格式又会误导人以为控制台/文件格式不能改，故删除。

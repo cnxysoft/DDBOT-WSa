@@ -267,7 +267,7 @@ func (m *Messenger) registerEventHandlers() {
 		if event.MetaEventType == "lifecycle" {
 			m.Uin.Store(event.SelfID)
 			wasOnline := m.Online.Swap(true)
-			messengerLogger.Infof("Bot online: %d", m.Uin.Load())
+			messengerLogger.Infof("bot 已上线：%d", m.Uin.Load())
 			// 重连（lifecycle 事件）时同样刷新离线队列，避免心跳未翻转导致缓存消息滞留
 			if !wasOnline && getOfflineQueueEnable() {
 				go m.flushOfflineQueue()
@@ -275,7 +275,7 @@ func (m *Messenger) registerEventHandlers() {
 			// Lifecycle事件触发时立即刷新好友、群组、群员信息
 			go func() {
 				if err := m.RefreshList(); err != nil {
-					messengerLogger.WithError(err).Error("refresh list failed")
+					messengerLogger.WithError(err).Error("刷新列表失败")
 				}
 			}()
 		} else if event.MetaEventType == "heartbeat" {
@@ -283,12 +283,12 @@ func (m *Messenger) registerEventHandlers() {
 				wasOnline := m.Online.Load()
 				m.Online.Store(status)
 				if !wasOnline && status {
-					messengerLogger.Info("Bot online")
+					messengerLogger.Info("bot 已上线")
 					if getOfflineQueueEnable() {
 						go m.flushOfflineQueue()
 					}
 				} else if wasOnline && !status {
-					messengerLogger.Warn("Bot offline")
+					messengerLogger.Warn("bot 已离线")
 				}
 			}
 		}
@@ -352,7 +352,7 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 
 	// 空分片时返回明确错误，避免返回零值 SendResp{RetMSG:nil} 导致调用方解引用 panic
 	if len(chunks) == 0 {
-		messengerLogger.Warnf("Send group message: 消息无可构建分片，跳过发送 (group=%d)", groupCode)
+		messengerLogger.Warnf("群消息发送：无可构建的分片，跳过 (group=%d)", groupCode)
 		return SendResp{RetMSG: &GroupMessage{ID: -1}, Error: errors.New("no message chunks to send")}
 	}
 
@@ -369,7 +369,7 @@ func (m *Messenger) SendGroupMessage(groupCode int64, msg *SendingMessage, newst
 		msgID, err := m.Adapter.SendGroupMessage(groupCode, messages)
 		m.groupSendCount.Add(1)
 		if err != nil {
-			messengerLogger.Errorf("Send group message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+			messengerLogger.Errorf("群消息发送失败（分片 %d/%d）：%v", i+1, len(chunks), err)
 			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("群消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
 			} else if errors.Is(err, ErrRequestRejected) {
@@ -435,7 +435,7 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 
 	// 空分片时返回明确错误，避免发送无内容的假成功结果
 	if len(chunks) == 0 {
-		messengerLogger.Warnf("Send private message: 消息无可构建分片，跳过发送 (target=%d)", target)
+		messengerLogger.Warnf("私聊消息发送：无可构建的分片，跳过 (target=%d)", target)
 		return PrivateSendResp{
 			RetMSG: &PrivateMessage{ID: -1, UserID: target, Self: m.Uin.Load(), Elements: msg.Elements},
 			Error:  errors.New("no message chunks to send"),
@@ -456,7 +456,7 @@ func (m *Messenger) SendPrivateMessage(target int64, msg *SendingMessage, newstr
 		msgID, err := m.Adapter.SendPrivateMessage(target, messages)
 		m.privateSendCount.Add(1)
 		if err != nil {
-			messengerLogger.Errorf("Send private message failed (chunk %d/%d): %v", i+1, len(chunks), err)
+			messengerLogger.Errorf("私聊消息发送失败（分片 %d/%d）：%v", i+1, len(chunks), err)
 			if errors.Is(err, ErrRequestResultUnknown) {
 				messengerLogger.Warnf("私聊消息发送结果未知，跳过自动重试以避免重复消息 (chunk %d/%d)", i+1, len(chunks))
 			} else if errors.Is(err, ErrRequestRejected) {
@@ -859,7 +859,7 @@ func parseChunkToElements(chunk []MessageSegment) []IMessageElement {
 				} else if n, err := strconv.ParseInt(qq, 10, 64); err == nil {
 					target = n
 				} else {
-					messengerLogger.Warnf("parse at target failed: %v, treating as @everyone", err)
+					messengerLogger.Warnf("解析 @ 目标失败：%v，按 @全体成员 处理", err)
 					target = 0
 				}
 			}
@@ -872,7 +872,7 @@ func parseChunkToElements(chunk []MessageSegment) []IMessageElement {
 				if parsedId, err := strconv.ParseInt(id, 10, 64); err == nil {
 					faceId = parsedId
 				} else {
-					messengerLogger.Warnf("parse face id failed: %v, using 0", err)
+					messengerLogger.Warnf("解析表情 id 失败：%v，使用 0", err)
 				}
 			}
 			elements = append(elements, &FaceSegment{Index: int32(faceId)})
@@ -892,7 +892,7 @@ func parseChunkToElements(chunk []MessageSegment) []IMessageElement {
 			if parsedId, err := strconv.ParseInt(id, 10, 64); err == nil {
 				replySeq = parsedId
 			} else {
-				messengerLogger.Warnf("parse reply seq failed: %v, using 0", err)
+				messengerLogger.Warnf("解析回复 seq 失败：%v，使用 0", err)
 			}
 			elements = append(elements, &ReplySegment{ReplySeq: int32(replySeq)})
 		case "json":
@@ -998,7 +998,7 @@ func (m *Messenger) ReloadGroupList() error {
 		})
 	}
 
-	messengerLogger.Infof("Reloaded %d groups", len(m.GroupList))
+	messengerLogger.Infof("已重新加载 %d 个群", len(m.GroupList))
 	return nil
 }
 
@@ -1343,14 +1343,14 @@ func (m *Messenger) reloadLists() error {
 	var listErr error
 
 	if err := m.ReloadFriendList(); err != nil {
-		messengerLogger.WithError(err).Error("unable to load friends list")
+		messengerLogger.WithError(err).Error("无法加载好友列表")
 		listErr = err
 	} else {
 		messengerLogger.Infof("已加载 %d 个好友", len(m.GetFriendListSnapshot()))
 	}
 
 	if err := m.ReloadGroupList(); err != nil {
-		messengerLogger.WithError(err).Error("unable to load groups list")
+		messengerLogger.WithError(err).Error("无法加载群列表")
 		if listErr == nil {
 			listErr = err
 		}

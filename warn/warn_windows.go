@@ -5,8 +5,11 @@ package warn
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 	"unsafe"
+
+	"github.com/cnxysoft/DDBOT-WSa/logging/style"
 )
 
 var (
@@ -39,10 +42,12 @@ func boxW(hwnd uintptr, caption, title string, flags uint) int {
 	return int(ret)
 }
 
+// Warn 在日志尚未就位的极早期阶段输出一条阻断性提示。
+// 双击 exe 启动时控制台会随进程一起关掉，这种场景改用系统弹窗，否则用户什么都看不到。
 func Warn(content string) {
 	if runningByDoubleClick() {
 		_ = boxW(0, content, "警告", 0x00000030|0x00000000)
-	} else {
-		fmt.Println(content)
+		return
 	}
+	fmt.Fprint(os.Stderr, alertText(content, style.Terminal(os.Stderr)))
 }

@@ -34,7 +34,7 @@ func WriteLogToPath(p string) {
 		rotatelogs.WithRotationTime(24*time.Hour),
 	)
 	if err != nil {
-		logrus.WithError(err).Error("unable to write logs")
+		logrus.WithError(err).Error("无法写入日志")
 		return
 	}
 	logrus.AddHook(lfshook.NewHook(writer, &logrus.JSONFormatter{}))

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cnxysoft/DDBOT-WSa/admin"
+	"github.com/cnxysoft/DDBOT-WSa/logging"
 	localdb "github.com/cnxysoft/DDBOT-WSa/lsp/buntdb"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/cfg"
 	"github.com/cnxysoft/DDBOT-WSa/lsp/telegram"
@@ -25,11 +26,9 @@ import (
 	"github.com/cnxysoft/DDBOT-WSa/lsp"
 	"github.com/cnxysoft/DDBOT-WSa/warn"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 
-	_ "github.com/cnxysoft/DDBOT-WSa/logging"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/acfun"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/douyu"
 	_ "github.com/cnxysoft/DDBOT-WSa/lsp/huya"
@@ -50,31 +49,23 @@ func SetUpLog() {
 		rotatelogs.WithRotationTime(24*time.Hour),
 	)
 	if err != nil {
-		logrus.WithError(err).Error("unable to write logs")
+		logrus.WithError(err).Error("无法写入日志")
 		return
 	}
-	formatter := &logrus.TextFormatter{
+	// 文件保持 logfmt（time="..." level="..." msg="..."）：好 grep、好贴进 issue，
+	// 改它会让既有的查看习惯和脚本失效。控制台另走一套人读格式，见 logging.InstallConsole。
+	fileFormatter := &logrus.TextFormatter{
 		FullTimestamp:    true,
 		PadLevelText:     true,
 		QuoteEmptyFields: true,
 		ForceQuote:       true,
 	}
 	logrus.SetOutput(writer)
-	logrus.SetFormatter(formatter)
+	logrus.SetFormatter(fileFormatter)
 	// 内存日志桥（admin SSE 推送用），尽早安装以覆盖启动早期日志
 	admin.InstallLogHook()
-	logrus.AddHook(lfshook.NewHook(
-		lfshook.WriterMap{
-			logrus.TraceLevel: os.Stdout,
-			logrus.DebugLevel: os.Stdout,
-			logrus.InfoLevel:  os.Stdout,
-			logrus.WarnLevel:  os.Stderr,
-			logrus.ErrorLevel: os.Stderr,
-			logrus.FatalLevel: os.Stderr,
-			logrus.PanicLevel: os.Stderr,
-		},
-		formatter,
-	))
+	// 控制台：方括号分栏（[时间] [级别] [模块] 消息），按级别分流到 stdout/stderr
+	logging.InstallConsole(logrus.StandardLogger())
 }
 
 // configFileInSearchPath 在 viper 的搜索路径里查找现有配置文件，规则逐条对齐 viper：
@@ -109,14 +100,14 @@ func Run() {
 			// ./config/ 下已有配置时绝不能生成 CWD 这份示例，否则 viper 优先读 CWD，
 			// 用户真正写的那份会被静默顶掉。
 			if alt, ok := configFileInSearchPath(); ok && alt != "application.yaml" {
-				fmt.Printf("检测到 %s，使用该配置\n", alt)
+				logrus.WithField("module", "startup").Infof("检测到配置文件 %s，使用该配置", alt)
 			} else {
-				fmt.Println("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
+				logrus.WithField("module", "startup").Warn("警告：没有检测到配置文件 application.yaml，正在生成，如果是第一次运行，可忽略")
 				if err := ioutil.WriteFile("application.yaml", []byte(exampleConfig), 0600); err != nil {
 					warn.Warn(fmt.Sprintf("application.yaml 生成失败 - %v", err))
 					os.Exit(1)
 				} else {
-					fmt.Println("最小配置 application.yaml 已生成，请按需修改，如需高级配置请查看帮助文档")
+					logrus.WithField("module", "startup").Info("最小配置 application.yaml 已生成，请按需修改，如需高级配置请查看帮助文档")
 				}
 			}
 		} else {
@@ -128,7 +119,7 @@ func Run() {
 			warn.Warn("检测到 application.yaml，但目标是一个文件夹！请手动确认并删除该文件夹！")
 			os.Exit(1)
 		} else {
-			fmt.Println("检测到 application.yaml，使用存在的 application.yaml")
+			logrus.WithField("module", "startup").Info("检测到 application.yaml，使用存在的 application.yaml")
 		}
 	}
 
