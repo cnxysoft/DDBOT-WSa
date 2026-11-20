@@ -2,7 +2,6 @@ package logging
 
 import (
 	"io"
-	"os"
 	"path"
 	"sync"
 	"time"
@@ -17,28 +16,6 @@ import (
 
 	"github.com/Sora233/MiraiGo-Template/bot"
 )
-
-// levelWriter 根据日志级别将输出分流到 stdout 或 stderr
-type levelWriter struct {
-	stdout io.Writer
-	stderr io.Writer
-}
-
-func (w *levelWriter) Write(p []byte) (n int, err error) {
-	// logrus 在写入前会在消息前添加 "level=\"warn\" " 这样的前缀
-	// 通过检测前缀判断级别
-	if len(p) >= 7 && string(p[0:7]) == `level="` {
-		// 提取级别标识
-		rest := p[7:]
-		if len(rest) >= 4 {
-			level := string(rest[0:4])
-			if level == "warn" || level == "erro" || level == "fata" {
-				return w.stderr.Write(p)
-			}
-		}
-	}
-	return w.stdout.Write(p)
-}
 
 const moduleId = "ddbot.logging"
 
@@ -77,14 +54,14 @@ func (m *logging) Init() {
 			rotatelogs.WithRotationTime(24*time.Hour),
 		)
 		if err != nil {
-			logrus.WithError(err).Error("unable to write logs")
+			logrus.WithError(err).Error("无法写入日志")
 			return
 		}
-		// 使用 levelWriter 根据日志级别分流到 stdout/stderr，同时写入文件
-		lvWriter := &levelWriter{stdout: os.Stdout, stderr: os.Stderr}
-		qqLogger.SetOutput(io.MultiWriter(writer, lvWriter))
-		// 不再使用 lfshook，因为 SetOutput 的 MultiWriter 已经包含了文件写入
-		// lfshook 会导致同一日志被写入文件两次（MultiWriter 一份 + lfshook 一份）
+		// 文件：沿用 logrus 默认的 TextFormatter，内容与改造前一致
+		qqLogger.SetOutput(writer)
+		// 控制台：人读格式，warn 及以上走 stderr
+		// （原先用嗅探行首 level=" 的 levelWriter 做分流，但日志行永远以 time=" 开头，从未生效）
+		InstallConsole(qqLogger)
 	}
 	qqLogger.SetLevel(logrus.DebugLevel)
 	logger = qqLogger.WithField("module", moduleId)
