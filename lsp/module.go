@@ -1847,7 +1847,7 @@ var Instance = &Lsp{
 	msgLimit:               localutils.NewAdjustableLimit(3),
 	PermissionStateManager: permission.NewStateManager(),
 	LspStateManager:        NewStateManager(),
-	cron:                   cron.New(cron.WithLogger(cron.VerbosePrintfLogger(cronLog)), cron.WithChain(cron.Recover(cron.PrintfLogger(cronLog)))),
+	cron:                   cron.New(cron.WithLogger(cronLogger{log: cronLog}), cron.WithChain(cron.Recover(cron.PrintfLogger(cronLog)))),
 }
 
 func init() {

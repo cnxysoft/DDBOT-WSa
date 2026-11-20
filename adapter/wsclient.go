@@ -316,7 +316,7 @@ func (c *WSClient) startServer() error {
 		c.isConnected = true
 		c.reconnectCnt = 0
 		c.mu.Unlock()
-		wsLogger.Info("WebSocket client connected (ws-server mode)")
+		wsLogger.Info("WebSocket 客户端已连接（ws-server 模式）")
 		c.handleConnection(conn)
 	}
 	// 先发布 server 引用再启动监听 goroutine：goroutine 内使用局部变量 srv，
@@ -331,7 +331,7 @@ func (c *WSClient) startServer() error {
 	c.listener = listener
 	c.mu.Unlock()
 	go func() {
-		wsLogger.Infof("WebSocket server starting on ws://%s/", addr)
+		wsLogger.Infof("WebSocket 服务端已启动：ws://%s/", addr)
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
 			wsLogger.Errorf("WebSocket server error: %v", err)
 		}

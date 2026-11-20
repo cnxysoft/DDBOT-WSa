@@ -169,7 +169,7 @@ func pushRecordKey(t time.Time) string {
 
 func persistPushEntry(e lsp.PushEntry) {
 	if err := localdb.SetJson(pushRecordKey(e.Time), e, localdb.SetExpireOpt(pushRecordTTL)); err != nil {
-		logrus.WithError(err).Debug("push record persist failed") // 持久化失败不影响实时流
+		logrus.WithError(err).Debug("推送记录持久化失败") // 持久化失败不影响实时流
 	}
 }
 

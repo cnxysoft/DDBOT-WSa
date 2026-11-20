@@ -557,6 +557,6 @@ func Init() {
 
 	err := GlobalConfig.ReadInConfig()
 	if err != nil {
-		logrus.WithField("config", "GlobalConfig").WithError(err).Fatal("unable to read global config")
+		logrus.WithField("config", "GlobalConfig").WithError(err).Fatal("无法读取全局配置")
 	}
 }
